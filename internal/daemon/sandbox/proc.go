@@ -52,8 +52,10 @@ func (p *sandboxProc) resolveWorkDir(dir string) (string, error) {
 // buildEnv constructs a deterministic environment slice strictly from
 // Config.Env and Command.Env without ever inspecting os.Environ() or os.Getenv().
 func (p *sandboxProc) buildEnv(cmdEnv map[string]string, workDir string) ([]string, string) {
+	p.s.envMu.RLock()
 	merged := make(map[string]string, len(p.s.cfg.Env)+len(cmdEnv)+8)
 	maps.Copy(merged, p.s.cfg.Env)
+	p.s.envMu.RUnlock()
 	maps.Copy(merged, cmdEnv)
 	if _, ok := merged["PATH"]; !ok {
 		merged["PATH"] = defaultSafePath

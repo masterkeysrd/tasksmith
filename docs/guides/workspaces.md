@@ -156,6 +156,10 @@ TaskSmith isolates credentials per workspace and never mutates the host shell en
 
 Higher-priority `.env` files override variables set in lower tiers. If an environment variable is omitted across all `.env` files, TaskSmith falls back to `os.Getenv`.
 
+TaskSmith maintains two distinct environment views from these layers:
+- **Daemon Credential View (`Env()`)**: Includes all 5 tiers above and powers `ModelProvider` `auth.env` resolution and MCP `${VAR}` credential expansion inside the daemon.
+- **Subprocess Environment (`SubprocessEnv()`)**: Passed to `bash` commands and custom tool subprocesses (and updated live on workspace reload). It preserves the user's host shell environment (`GH_TOKEN`, `NPM_TOKEN`, `AWS_*`, `PATH`, etc.) and, in trusted workspaces, project `.env` layers (tiers 3–5), while excluding `$XDG_CONFIG_HOME/tasksmith/.env` (`~/.config/tasksmith/.env`), variables declared in configured `ModelProvider` `spec.auth.env` manifests, and the `TASKSMITH_*` internal namespace. In **Restricted Mode**, project `.env` layers (tiers 3–5) are omitted from both views.
+
 For detailed information on authentication schemes, provider manifests, and lazy credential validation, see the [Providers Reference](../reference/providers.md).
 
 > [!IMPORTANT]

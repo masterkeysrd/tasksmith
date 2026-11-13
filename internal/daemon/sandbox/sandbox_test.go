@@ -746,3 +746,52 @@ func TestNetPolicyEnforcement(t *testing.T) {
 		t.Fatalf("expected ErrSandboxClosed on closed sandbox ValidateURL, got %v", err)
 	}
 }
+
+func TestSandboxSetEnv(t *testing.T) {
+	ctx := context.Background()
+	workDir := t.TempDir()
+
+	initial := map[string]string{
+		"PATH":    os.Getenv("PATH"),
+		"INITIAL": "alpha",
+		"DROP_ME": "present",
+	}
+	sbx, err := New(Config{
+		WorkDir: workDir,
+		Env:     initial,
+	})
+	if err != nil {
+		t.Fatalf("New sandbox: %v", err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	updated := map[string]string{
+		"PATH":    os.Getenv("PATH"),
+		"INITIAL": "beta",
+		"ADDED":   "gamma",
+	}
+	sbx.SetEnv(updated)
+	updated["MUTATED"] = "ignored"
+
+	gotEnv := sbx.Env()
+	if gotEnv["INITIAL"] != "beta" || gotEnv["ADDED"] != "gamma" {
+		t.Fatalf("SetEnv did not update Env(): %v", gotEnv)
+	}
+	if _, ok := gotEnv["DROP_ME"]; ok {
+		t.Fatalf("SetEnv kept stale key DROP_ME: %v", gotEnv)
+	}
+	if _, ok := gotEnv["MUTATED"]; ok {
+		t.Fatalf("SetEnv did not clone caller map: %v", gotEnv)
+	}
+
+	res, err := sbx.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", `printf "%s|%s|%s" "$INITIAL" "$ADDED" "${DROP_ME:-missing}"`},
+	})
+	if err != nil {
+		t.Fatalf("Proc.Exec: %v", err)
+	}
+	if got := strings.TrimSpace(string(res.Stdout)); got != "beta|gamma|missing" {
+		t.Fatalf("Proc.Exec stdout = %q, want %q", got, "beta|gamma|missing")
+	}
+}

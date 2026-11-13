@@ -2190,3 +2190,185 @@ All-eager agent.
 		}
 	}
 }
+
+func TestSubprocessEnvProvenanceIsolation(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	userEnvPath, err := xdg.SubConfigDir(".env")
+	if err != nil {
+		t.Fatalf("xdg.SubConfigDir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(userEnvPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userDotEnv := "USER_GLOBAL_KEY=global-secret\nSENTRY_DSN=https://secret@sentry.example/1\nSHARED_OVERRIDE=from-user-dotenv\n"
+	if err := os.WriteFile(userEnvPath, []byte(userDotEnv), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	wsManifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: provenance-ws
+spec:
+  defaultAgent: main
+---
+Instructions.
+`
+	if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	providerManifest := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: acme
+spec:
+  type: openai
+  endpoint: https://api.acme.example
+  auth:
+    type: api-key
+    env: ACME_LLM_ACCESS
+  models:
+    - id: acme-1
+      name: acme-1
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "acme.provider.yaml"), []byte(providerManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mcpManifest := `apiVersion: warp/v1alpha1
+kind: MCP
+metadata:
+  name: github
+spec:
+  type: stdio
+  command: ["github-mcp"]
+  env:
+    GITHUB_PERSONAL_ACCESS_TOKEN: ${GH_TOKEN}
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "github.mcp.yaml"), []byte(mcpManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	projectDotEnv := "JWT_SECRET=test-fixture-jwt\nDATABASE_URL=postgres://localhost/app_test\nPROJECT_LLM_KEY=from-project-dotenv\n"
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(projectDotEnv), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	projectProvider := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: corp-llm
+spec:
+  type: anthropic
+  auth:
+    type: api-key
+    env: PROJECT_LLM_KEY
+  models:
+    - id: corp-1
+      name: corp-1
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "corp.provider.yaml"), []byte(projectProvider), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ACME_LLM_ACCESS", "llm-secret")
+	t.Setenv("GH_TOKEN", "ghp_developer_shell_token")
+	t.Setenv("NPM_TOKEN", "npm_developer_token")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "aws-dev-secret")
+	t.Setenv("SHARED_OVERRIDE", "from-host-shell")
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith")
+	t.Setenv("tasksmith_internal_flag", "1")
+	t.Setenv("PROJECT_BUILD_FLAG", "on")
+
+	ws, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	full := ws.Env()
+	for key, want := range map[string]string{
+		"ACME_LLM_ACCESS": "llm-secret",
+		"PROJECT_LLM_KEY": "from-project-dotenv",
+		"USER_GLOBAL_KEY": "global-secret",
+		"SENTRY_DSN":      "https://secret@sentry.example/1",
+		"SHARED_OVERRIDE": "from-user-dotenv",
+		"GH_TOKEN":        "ghp_developer_shell_token",
+		"JWT_SECRET":      "test-fixture-jwt",
+		"DATABASE_URL":    "postgres://localhost/app_test",
+		"NPM_TOKEN":       "npm_developer_token",
+	} {
+		if full[key] != want {
+			t.Errorf("Env()[%s] = %q, want %q", key, full[key], want)
+		}
+	}
+
+	sub := ws.SubprocessEnv()
+	for _, blocked := range []string{
+		"ACME_LLM_ACCESS",
+		"PROJECT_LLM_KEY",
+		"USER_GLOBAL_KEY",
+		"SENTRY_DSN",
+		"TASKSMITH_APPNAME",
+		"tasksmith_internal_flag",
+	} {
+		if got, ok := sub[blocked]; ok {
+			t.Errorf("SubprocessEnv leaked %s=%q", blocked, got)
+		}
+	}
+
+	// User shell and trusted project .env variables (including MCP placeholder
+	// sources like GH_TOKEN and test fixtures like JWT_SECRET) must stay intact.
+	for key, want := range map[string]string{
+		"GH_TOKEN":              "ghp_developer_shell_token",
+		"NPM_TOKEN":             "npm_developer_token",
+		"AWS_SECRET_ACCESS_KEY": "aws-dev-secret",
+		"SHARED_OVERRIDE":       "from-host-shell",
+		"JWT_SECRET":            "test-fixture-jwt",
+		"DATABASE_URL":          "postgres://localhost/app_test",
+		"PROJECT_BUILD_FLAG":    "on",
+	} {
+		if sub[key] != want {
+			t.Errorf("SubprocessEnv()[%s] = %q, want %q", key, sub[key], want)
+		}
+	}
+	if sub["PATH"] == "" {
+		t.Error("SubprocessEnv lost PATH")
+	}
+
+	sub["MUTATED"] = "true"
+	if _, ok := ws.SubprocessEnv()["MUTATED"]; ok {
+		t.Error("mutating returned SubprocessEnv map should not affect workspace state")
+	}
+
+	// Restricted mode excludes project .env from both Env() and SubprocessEnv(),
+	// while still keeping user ~/.config/tasksmith/.env out of SubprocessEnv().
+	restrictedWS, err := Open(ctx, dir, WithRestrictedMode(true))
+	if err != nil {
+		t.Fatalf("Open restricted: %v", err)
+	}
+	if restrictedWS.Env()["USER_GLOBAL_KEY"] != "global-secret" {
+		t.Error("restricted Env() lost user .env")
+	}
+	if _, ok := restrictedWS.Env()["JWT_SECRET"]; ok {
+		t.Error("restricted Env() loaded untrusted project .env")
+	}
+	restrictedSub := restrictedWS.SubprocessEnv()
+	for _, blocked := range []string{"USER_GLOBAL_KEY", "SENTRY_DSN", "JWT_SECRET", "DATABASE_URL", "ACME_LLM_ACCESS", "TASKSMITH_APPNAME"} {
+		if got, ok := restrictedSub[blocked]; ok {
+			t.Errorf("restricted SubprocessEnv leaked %s=%q", blocked, got)
+		}
+	}
+	if restrictedSub["GH_TOKEN"] != "ghp_developer_shell_token" {
+		t.Errorf("restricted SubprocessEnv dropped host GH_TOKEN: %q", restrictedSub["GH_TOKEN"])
+	}
+}

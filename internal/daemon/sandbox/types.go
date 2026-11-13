@@ -91,6 +91,11 @@ type Sandbox interface {
 	// Env returns a defensive copy of the sandbox's base environment variables.
 	Env() map[string]string
 
+	// SetEnv replaces the sandbox's base environment variables for future child
+	// processes, defensively cloning env so external mutations cannot affect the
+	// sandbox.
+	SetEnv(env map[string]string)
+
 	// FS returns the confined filesystem capability rooted at WorkDir.
 	FS() FS
 

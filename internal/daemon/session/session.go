@@ -458,7 +458,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 		ID:      s.ID,
 		WorkDir: s.WorkDir,
 		Mode:    sandbox.ModeLocal,
-		Env:     s.workspace.Env(),
+		Env:     s.workspace.SubprocessEnv(),
 		Network: sandbox.NetworkPolicy{
 			AllowLoopback: true,
 		},
@@ -821,6 +821,10 @@ func (s *Session) setConfigModel(model string) {
 }
 
 func (s *Session) configureHarness(ctx context.Context) error {
+	if s.Sandbox != nil && s.workspace != nil {
+		s.Sandbox.SetEnv(s.workspace.SubprocessEnv())
+	}
+
 	s.Lock()
 	config := s.Config
 	agentName := config.Agent

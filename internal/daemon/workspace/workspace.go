@@ -121,14 +121,15 @@ func findWarpPreset(name string) *warp.ModelProvider {
 // Workspace manages an active TaskSmith workspace, encapsulating its 4-tier
 // resource registry and isolated environment variables.
 type Workspace struct {
-	mu       sync.RWMutex
-	cwd      string
-	rootDir  string
-	opts     openOptions
-	registry *warp.Registry
-	env      map[string]string
-	catalog  *Catalog
-	mcp      MCPService
+	mu            sync.RWMutex
+	cwd           string
+	rootDir       string
+	opts          openOptions
+	registry      *warp.Registry
+	env           map[string]string
+	subprocessEnv map[string]string
+	catalog       *Catalog
+	mcp           MCPService
 }
 
 // Open discovers and loads the workspace for dir, applying the 4-tier resource
@@ -153,10 +154,11 @@ func Open(ctx context.Context, dir string, opts ...Option) (*Workspace, error) {
 	}
 
 	w := &Workspace{
-		cwd:     absDir,
-		rootDir: absDir,
-		opts:    o,
-		env:     make(map[string]string),
+		cwd:           absDir,
+		rootDir:       absDir,
+		opts:          o,
+		env:           make(map[string]string),
+		subprocessEnv: make(map[string]string),
 	}
 
 	if err := w.Reload(ctx); err != nil {
@@ -187,6 +189,7 @@ func (w *Workspace) PrepareReload(ctx context.Context) (*Workspace, func(), erro
 		w.registry = next.registry
 		w.rootDir = next.rootDir
 		w.env = next.env
+		w.subprocessEnv = next.subprocessEnv
 		w.catalog = next.catalog
 		w.mcp = next.mcp
 	}
@@ -266,7 +269,7 @@ func (w *Workspace) Reload(ctx context.Context) error {
 		}
 	}
 
-	loadedEnv, err := loadIsolatedEnv(w.cwd, rootDir, w.opts.restricted)
+	loadedEnv, subEnv, err := loadIsolatedEnv(w.cwd, rootDir, w.opts.restricted)
 	if err != nil {
 		return err
 	}
@@ -274,6 +277,7 @@ func (w *Workspace) Reload(ctx context.Context) error {
 	w.registry = reg
 	w.rootDir = rootDir
 	w.env = loadedEnv
+	w.subprocessEnv = subEnv
 	w.catalog = NewCatalog(reg, w.cwd, rootDir)
 	// The catalog is freshly built, so it carries no resource probe; re-install it
 	// against the runtime this workspace already has attached. The caller holds the
@@ -337,27 +341,27 @@ func ensureSubprojectLoaded(ctx context.Context, reg *warp.Registry, rootDir, cw
 	return nil
 }
 
-func loadIsolatedEnv(cwd, rootDir string, restricted bool) (map[string]string, error) {
-	var layers []map[string]string
-
+func loadIsolatedEnv(cwd, rootDir string, restricted bool) (daemonEnv, subprocessEnv map[string]string, err error) {
 	hostEnv := make(map[string]string)
 	for _, entry := range os.Environ() {
 		if k, v, ok := strings.Cut(entry, "="); ok && k != "" {
 			hostEnv[k] = v
 		}
 	}
-	layers = append(layers, hostEnv)
+
+	daemonLayers := []map[string]string{hostEnv}
+	subLayers := []map[string]string{hostEnv}
 
 	if userEnvPath, err := xdg.SubConfigDir(".env"); err == nil {
 		m, loadErr := env.LoadFile(userEnvPath)
 		if loadErr != nil {
-			return nil, fmt.Errorf("workspace: load user .env: %w", loadErr)
+			return nil, nil, fmt.Errorf("workspace: load user .env: %w", loadErr)
 		}
-		layers = append(layers, m)
+		daemonLayers = append(daemonLayers, m)
 	}
 
 	if restricted {
-		return env.Merge(layers...), nil
+		return env.Merge(daemonLayers...), env.Merge(subLayers...), nil
 	}
 
 	var climbPaths []string
@@ -398,12 +402,13 @@ func loadIsolatedEnv(cwd, rootDir string, restricted bool) (map[string]string, e
 		curr = parent
 	}
 
+	var projectLayers []map[string]string
 	for _, climbPath := range slices.Backward(climbPaths) {
 		m, err := env.LoadFile(climbPath)
 		if err != nil {
-			return nil, fmt.Errorf("workspace: load ancestor .env %q: %w", climbPath, err)
+			return nil, nil, fmt.Errorf("workspace: load ancestor .env %q: %w", climbPath, err)
 		}
-		layers = append(layers, m)
+		projectLayers = append(projectLayers, m)
 	}
 
 	rootEnvPath := filepath.Clean(filepath.Join(rootDir, ".env"))
@@ -411,9 +416,9 @@ func loadIsolatedEnv(cwd, rootDir string, restricted bool) (map[string]string, e
 		seenPaths[rootEnvPath] = true
 		m, err := env.LoadFile(rootEnvPath)
 		if err != nil {
-			return nil, fmt.Errorf("workspace: load root .env: %w", err)
+			return nil, nil, fmt.Errorf("workspace: load root .env: %w", err)
 		}
-		layers = append(layers, m)
+		projectLayers = append(projectLayers, m)
 	}
 
 	cwdEnvPath := filepath.Clean(filepath.Join(cwd, ".env"))
@@ -421,12 +426,14 @@ func loadIsolatedEnv(cwd, rootDir string, restricted bool) (map[string]string, e
 		seenPaths[cwdEnvPath] = true
 		m, err := env.LoadFile(cwdEnvPath)
 		if err != nil {
-			return nil, fmt.Errorf("workspace: load cwd .env: %w", err)
+			return nil, nil, fmt.Errorf("workspace: load cwd .env: %w", err)
 		}
-		layers = append(layers, m)
+		projectLayers = append(projectLayers, m)
 	}
 
-	return env.Merge(layers...), nil
+	daemonLayers = append(daemonLayers, projectLayers...)
+	subLayers = append(subLayers, projectLayers...)
+	return env.Merge(daemonLayers...), env.Merge(subLayers...), nil
 }
 
 // IsRestricted reports whether the workspace was opened in restricted mode.
@@ -473,6 +480,8 @@ func (w *Workspace) IsSynthetic() bool {
 }
 
 // Env returns a defensive copy of the workspace's isolated environment variables.
+// It is the daemon-side view used for provider and MCP credential resolution;
+// agent-spawned subprocesses must use SubprocessEnv instead.
 func (w *Workspace) Env() map[string]string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -480,6 +489,57 @@ func (w *Workspace) Env() map[string]string {
 		return map[string]string{}
 	}
 	return maps.Clone(w.env)
+}
+
+// SubprocessEnv returns the environment passed to agent-spawned child processes
+// (bash commands and custom tools). It preserves the host shell environment and,
+// in trusted workspaces, project .env layers, while excluding TaskSmith's
+// private user .env (~/.config/tasksmith/.env), configured ModelProvider
+// auth.env credentials, and the TASKSMITH_* internal namespace.
+func (w *Workspace) SubprocessEnv() map[string]string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if len(w.subprocessEnv) == 0 {
+		return map[string]string{}
+	}
+	deny := w.providerAuthEnvLocked()
+	out := make(map[string]string, len(w.subprocessEnv))
+	for k, v := range w.subprocessEnv {
+		trimmed := strings.TrimSpace(k)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToUpper(trimmed), "TASKSMITH_") {
+			continue
+		}
+		if _, blocked := deny[trimmed]; blocked {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// providerAuthEnvLocked collects environment variable names declared as
+// spec.auth.env on configured ModelProvider resources. The caller must hold at
+// least the read lock.
+func (w *Workspace) providerAuthEnvLocked() map[string]struct{} {
+	if w.catalog == nil {
+		return nil
+	}
+	var out map[string]struct{}
+	for _, p := range w.catalog.Providers() {
+		if p == nil || p.Spec.Auth == nil {
+			continue
+		}
+		if name := strings.TrimSpace(p.Spec.Auth.Env); name != "" {
+			if out == nil {
+				out = make(map[string]struct{})
+			}
+			out[name] = struct{}{}
+		}
+	}
+	return out
 }
 
 // PortablePath converts targetPath into a portable representation relative to the

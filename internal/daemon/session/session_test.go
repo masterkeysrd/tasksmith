@@ -6710,3 +6710,123 @@ Always wrap and propagate errors in Go.
 		t.Errorf("expected 4 message timeline entries, got %d", messageEntries)
 	}
 }
+
+// TestSessionSandboxEnvIsolatesProviderAndUserSecrets verifies that configured
+// ModelProvider auth.env keys, TaskSmith's global ~/.config/tasksmith/.env, and
+// TASKSMITH_* variables stay out of the session sandbox while preserving the
+// user's developer shell environment and refreshing live on workspace reload.
+func TestSessionSandboxEnvIsolatesProviderAndUserSecrets(t *testing.T) {
+	ctx := context.Background()
+
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-leak-check")
+	t.Setenv("ROTATED_CORP_LLM_KEY", "corp-llm-secret")
+	t.Setenv("GH_TOKEN", "ghp_user_cli_token")
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-session-test")
+
+	_, ws, _, _, mgr := setupTestEnv(t, &fakeProvider{})
+
+	userEnvPath, err := xdg.SubConfigDir(".env")
+	if err != nil {
+		t.Fatalf("xdg.SubConfigDir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(userEnvPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userEnvPath, []byte("GLOBAL_SETUP_KEY=from-user-config-env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	providerYAML := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: anthropic
+spec:
+  type: anthropic
+  auth:
+    type: api-key
+    env: ANTHROPIC_API_KEY
+  models:
+    - id: claude-test
+      name: claude-test
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "anthropic.provider.yaml"), []byte(providerYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.RootDir(), ".env"), []byte("APP_FIXTURE_SECRET=local-test-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	if ws.Env()["ANTHROPIC_API_KEY"] != "sk-ant-leak-check" {
+		t.Fatal("expected workspace Env() to keep ANTHROPIC_API_KEY for gateway resolution")
+	}
+	if ws.Env()["GLOBAL_SETUP_KEY"] != "from-user-config-env" {
+		t.Fatal("expected workspace Env() to keep ~/.config/tasksmith/.env values")
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "env provenance"})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	env := sess.Sandbox.Env()
+	for _, blocked := range []string{"ANTHROPIC_API_KEY", "GLOBAL_SETUP_KEY", "TASKSMITH_APPNAME"} {
+		if got, ok := env[blocked]; ok {
+			t.Errorf("sandbox env leaked %s=%q to subprocesses", blocked, got)
+		}
+	}
+	if env["GH_TOKEN"] != "ghp_user_cli_token" {
+		t.Errorf("sandbox env dropped user GH_TOKEN: %q", env["GH_TOKEN"])
+	}
+	if env["APP_FIXTURE_SECRET"] != "local-test-secret" {
+		t.Errorf("sandbox env dropped trusted project .env APP_FIXTURE_SECRET: %q", env["APP_FIXTURE_SECRET"])
+	}
+	if env["PATH"] == "" {
+		t.Error("sandbox env lost PATH")
+	}
+
+	// Before corp.provider.yaml exists, ROTATED_CORP_LLM_KEY is an ordinary host env var.
+	if env["ROTATED_CORP_LLM_KEY"] != "corp-llm-secret" {
+		t.Fatalf("expected unconfigured host var before reload, got %q", env["ROTATED_CORP_LLM_KEY"])
+	}
+
+	// Configure a new provider and update project .env, then reload and refresh the open session.
+	corpYAML := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: corp
+spec:
+  type: openai
+  endpoint: https://llm.corp.example
+  auth:
+    type: api-key
+    env: ROTATED_CORP_LLM_KEY
+  models:
+    - id: corp-chat
+      name: corp-chat
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "corp.provider.yaml"), []byte(corpYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.RootDir(), ".env"), []byte("APP_FIXTURE_SECRET=reloaded-test-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload after provider update: %v", err)
+	}
+	sess.Refresh(ctx)
+
+	refreshed := sess.Sandbox.Env()
+	if got, ok := refreshed["ROTATED_CORP_LLM_KEY"]; ok {
+		t.Errorf("refreshed sandbox env still exposed newly configured provider key ROTATED_CORP_LLM_KEY=%q", got)
+	}
+	if refreshed["APP_FIXTURE_SECRET"] != "reloaded-test-secret" {
+		t.Errorf("refreshed sandbox env did not pick up updated project .env: %q", refreshed["APP_FIXTURE_SECRET"])
+	}
+}

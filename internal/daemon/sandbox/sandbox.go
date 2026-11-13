@@ -23,6 +23,7 @@ type session struct {
 	realWorkDir string
 	tempDir     string
 	realTempDir string
+	envMu       sync.RWMutex
 	cfg         Config
 	root        *os.Root
 	fsCap       *sandboxFS
@@ -131,9 +132,19 @@ func (s *session) Platform() Platform {
 }
 
 func (s *session) Env() map[string]string {
+	s.envMu.RLock()
+	defer s.envMu.RUnlock()
 	out := make(map[string]string, len(s.cfg.Env))
 	maps.Copy(out, s.cfg.Env)
 	return out
+}
+
+func (s *session) SetEnv(env map[string]string) {
+	cloned := make(map[string]string, len(env))
+	maps.Copy(cloned, env)
+	s.envMu.Lock()
+	s.cfg.Env = cloned
+	s.envMu.Unlock()
 }
 
 func (s *session) FS() FS {
