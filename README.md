@@ -13,7 +13,8 @@
   <a href="#key-features">Key Features</a> •
   <a href="#interactive-cli">Interactive CLI</a> •
   <a href="./docs/README.md">Documentation</a> •
-  <a href="./docs/architecture/daemon.md">Architecture</a>
+  <a href="./docs/architecture/daemon.md">Architecture</a> •
+  <a href="./ROADMAP.md">Roadmap</a>
 </p>
 
 ---
