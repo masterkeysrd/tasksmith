@@ -289,6 +289,16 @@ func (b *Broker) Len() int {
 	return len(b.subscribers)
 }
 
+// HasSubscribers reports whether any subscriber is currently subscribed to
+// topic. Sessions use it to tell whether a client is attached that could
+// answer an interactive prompt.
+func (b *Broker) HasSubscribers(topic string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return len(b.topics[topic]) > 0
+}
+
 // Publish delivers event to every subscriber subscribed to topic.
 // A subscriber whose buffer is full is closed with [ErrOverflow] and removed,
 // so a slow subscriber can never silently miss part of a stream.

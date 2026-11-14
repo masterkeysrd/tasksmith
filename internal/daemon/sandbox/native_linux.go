@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -87,9 +88,17 @@ type bwrapParams struct {
 	TargetDir       string
 	ReadOnly        bool
 	NetworkDisabled bool
-	Filesystem      FilesystemPolicy
-	ResolvedBin     string
-	Args            []string
+	// NetworkAllowlist keeps the network namespace closed even when a relay
+	// is not wired up, so an allowlist posture can never fail open to the
+	// host network.
+	NetworkAllowlist bool
+	// ProxySocket, when set, routes child traffic to the daemon-side
+	// allowlist proxy through a relay bound to this Unix socket inside the
+	// (bind-mounted) sandbox temp dir.
+	ProxySocket string
+	Filesystem  FilesystemPolicy
+	ResolvedBin string
+	Args        []string
 }
 
 // wrapNativeCommand wraps a resolved command invocation in Linux Bubblewrap (bwrap).
@@ -103,19 +112,49 @@ func wrapNativeCommand(s *session, targetDir, resolvedBin string, args []string,
 	if p != nil {
 		policy = *p
 	}
-	wrappedArgs := buildBwrapArgs(bwrapParams{
-		WorkDir:         s.workDir,
-		RealWorkDir:     s.realWorkDir,
-		TempDir:         s.tempDir,
-		RealTempDir:     s.realTempDir,
-		TargetDir:       targetDir,
-		ReadOnly:        s.readOnly.Load() || cmdReadOnly,
-		NetworkDisabled: s.cfg.Network.Disabled,
-		Filesystem:      policy,
-		ResolvedBin:     resolvedBin,
-		Args:            args,
+	network, proxyPort := s.networkPosture()
+	allowlist := network.Allowlist && !network.Disabled
+	if allowlist && proxyPort == 0 {
+		return "", nil, fmt.Errorf("%w: network allowlist is active but the sandbox network proxy is not running", ErrProxyUnavailable)
+	}
+	bin := bwrapBin
+	wrappedBin := resolvedBin
+	wrappedArgs := args
+	var proxySocket string
+	if allowlist && proxyPort > 0 {
+		proxySocket = s.netProxySocketPath()
+		// Inside the closed namespace 127.0.0.1 is not usable until lo is up,
+		// and the proxy is only reachable as a Unix socket on the mounted
+		// temp dir. Replace the target with the hidden relay bootstrap, which
+		// raises lo, bridges loopback proxy traffic to the socket, then execs
+		// the real command in place.
+		self, err := os.Executable()
+		if err != nil {
+			return "", nil, fmt.Errorf("sandbox: locate TaskSmith binary for network relay: %w", err)
+		}
+		wrappedBin = self
+		wrappedArgs = append([]string{
+			"sandbox-relay",
+			"--socket", proxySocket,
+			"--port", strconv.Itoa(proxyPort),
+			"--", resolvedBin,
+		}, args...)
+	}
+	bwrapArgs := buildBwrapArgs(bwrapParams{
+		WorkDir:          s.workDir,
+		RealWorkDir:      s.realWorkDir,
+		TempDir:          s.tempDir,
+		RealTempDir:      s.realTempDir,
+		TargetDir:        targetDir,
+		ReadOnly:         s.readOnly.Load() || cmdReadOnly,
+		NetworkDisabled:  network.Disabled,
+		NetworkAllowlist: allowlist,
+		ProxySocket:      proxySocket,
+		Filesystem:       policy,
+		ResolvedBin:      wrappedBin,
+		Args:             wrappedArgs,
 	})
-	return bwrapBin, wrappedArgs, nil
+	return bin, bwrapArgs, nil
 }
 
 // buildBwrapArgs constructs arguments for Linux Bubblewrap (bwrap).
@@ -173,7 +212,10 @@ func buildBwrapArgs(params bwrapParams) []string {
 		"--unshare-pid",
 		"--die-with-parent",
 	)
-	if params.NetworkDisabled {
+	if params.NetworkDisabled || params.NetworkAllowlist || params.ProxySocket != "" {
+		// Under the allowlist posture the namespace stays closed as well; the
+		// wrapped command is a relay bootstrap that bridges loopback to the
+		// proxy socket on the bind-mounted temp dir.
 		out = append(out, "--unshare-net")
 	}
 	out = append(out, "--chdir", params.TargetDir, "--", params.ResolvedBin)

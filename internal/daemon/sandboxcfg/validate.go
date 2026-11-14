@@ -2,6 +2,7 @@ package sandboxcfg
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,7 +98,9 @@ func Validate(scope api.PermissionScope, workDir string, settings api.SandboxSet
 }
 
 // validateDomainPattern accepts an exact hostname or a "*." wildcard suffix
-// (e.g. "api.example.com", "*.example.com").
+// (e.g. "api.example.com", "*.example.com"), as well as bare IPv4/IPv6
+// literals including the bracketed form ("[::1]") users copy from URLs.
+// Wildcards are never valid for IP literals.
 func validateDomainPattern(raw string) error {
 	d := strings.TrimSpace(raw)
 	if d == "" {
@@ -105,6 +108,16 @@ func validateDomainPattern(raw string) error {
 	}
 	if strings.ContainsAny(d, " \t/@\\") {
 		return fmt.Errorf("%w: domain %q must be a hostname or \"*.domain\" pattern", ErrInvalidValue, raw)
+	}
+	if strings.HasPrefix(d, "[") || strings.Contains(d, ":") {
+		literal := strings.TrimSuffix(strings.TrimPrefix(d, "["), "]")
+		if strings.HasPrefix(d, "[") && !strings.HasSuffix(d, "]") {
+			return fmt.Errorf("%w: %q has an unmatched bracket", ErrInvalidValue, raw)
+		}
+		if net.ParseIP(literal) == nil {
+			return fmt.Errorf("%w: %q is not a valid IP address literal", ErrInvalidValue, raw)
+		}
+		return nil
 	}
 	if strings.HasPrefix(d, "*.") {
 		d = d[2:]

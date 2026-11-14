@@ -319,6 +319,7 @@ type Session struct {
 	Root        string          `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
 	Sandbox     sandbox.Sandbox `json:"-"`
 	sbxPolicy   sandbox.FilesystemPolicy
+	sbxNetwork  sandbox.NetworkPolicy
 	Timeline    timeline.Timeline `json:"-"`
 	Journal     journal.Journal   `json:"-"`
 	Tools       tools.Container   `json:"-"`
@@ -381,6 +382,7 @@ func (s *Session) Clone() *Session {
 		Root:        s.Root,
 		Sandbox:     s.Sandbox,
 		sbxPolicy:   s.sbxPolicy,
+		sbxNetwork:  s.sbxNetwork,
 		Timeline:    s.Timeline,
 		Journal:     s.Journal,
 		Tools:       s.Tools,
@@ -643,8 +645,9 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 		Mode:       mode,
 		Env:        s.workspace.SubprocessEnv(),
 		Filesystem: sbPolicy,
-		Network: sandbox.NetworkPolicy{
-			AllowLoopback: true,
+		Network:    sandboxNetworkPolicy(sandboxEff),
+		OnUnlistedHost: func(ctx context.Context, host string, port int) (bool, error) {
+			return s.requestHostApproval(ctx, host, port)
 		},
 	})
 	if err != nil {
@@ -652,6 +655,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	}
 	s.Sandbox = sb
 	s.sbxPolicy = sbPolicy
+	s.sbxNetwork = sandboxNetworkPolicy(sandboxEff)
 	s.publishSandboxPosture(mode, sandboxEff)
 	s.applyReadOnlyPolicy()
 
@@ -807,8 +811,17 @@ func (s *Session) refreshSandboxPolicy(_ context.Context) {
 	}
 	s.Lock()
 	s.sbxPolicy = policy
+	if eff != nil {
+		s.sbxNetwork = sandboxNetworkPolicy(eff)
+	}
 	s.Unlock()
 	sbx.SetFilesystemPolicy(policy)
+	if eff != nil {
+		if err := sbx.SetNetworkPolicy(sandboxNetworkPolicy(eff)); err != nil {
+			s.logger.Warn("session: apply live network policy failed",
+				log.String("session", s.ID), log.String("error", err.Error()))
+		}
+	}
 	s.publishSandboxPosture(sbx.Mode(), eff)
 	s.pushRuntimePolicy()
 }
@@ -986,6 +999,10 @@ func (s *Session) Close() error {
 		_ = ch.Close()
 	}
 	s.Lock()
+	s.closing = true
+	s.Unlock()
+	s.cancelHostApprovals(errors.New("session: closed"))
+	s.Lock()
 	defer s.Unlock()
 	if s.FileIndex != nil {
 		_ = s.FileIndex.Close()
@@ -1067,6 +1084,10 @@ func (s *Session) configureHarness(ctx context.Context) error {
 	if s.Sandbox != nil && s.workspace != nil {
 		s.Sandbox.SetEnv(s.workspace.SubprocessEnv())
 		s.Sandbox.SetFilesystemPolicy(s.sbxPolicy)
+		if err := s.Sandbox.SetNetworkPolicy(s.sbxNetwork); err != nil {
+			s.logger.Warn("session: re-apply network policy failed",
+				log.String("session", s.ID), log.String("error", err.Error()))
+		}
 		s.applyReadOnlyPolicy()
 	}
 

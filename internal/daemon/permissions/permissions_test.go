@@ -589,6 +589,56 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	}
 }
 
+// TestSessionManagerIncludeDoesNotDenyHostApprovals verifies that an explicit
+// tools.include allow-list does not silently deny the synthetic "net" plans
+// the sandbox proxy mints for unlisted hosts: those plans represent egress
+// requested through an already-approved tool, so they must still reach the
+// ask stage (and openWorld:deny must still deny them).
+func TestSessionManagerIncludeDoesNotDenyHostApprovals(t *testing.T) {
+	sess := attachTestSession(t, api.ModeDefault)
+	sess.SetPolicies(&warp.Policies{
+		Tools: &warp.ToolPolicies{Include: []string{"bash", "view", "edit"}},
+	})
+
+	netPlan := &tools.Plan{ToolName: "net", Action: api.ActionNet, Safety: api.SafetyOutside, Target: "api.example.com"}
+	dec, req, err := sess.Evaluate(netPlan)
+	if dec != tools.AccessAsk || req == nil || err != nil {
+		t.Fatalf("synthetic net plan with include list: got %s (req=%+v err=%v), want ask", dec, req, err)
+	}
+
+	sess.SetPolicies(&warp.Policies{
+		Tools: &warp.ToolPolicies{Include: []string{"bash"}, OpenWorld: warp.ToolPolicyDeny},
+	})
+	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "net", Action: api.ActionNet, Safety: api.SafetyOutside, Target: "api.example.com"}); dec != tools.AccessDeny {
+		t.Fatalf("synthetic net plan with openWorld=deny: got %s, want deny", dec)
+	}
+}
+
+// TestSessionManagerAutoModeDoesNotAutoApproveUnlistedHosts verifies the
+// sandbox.json network allowlist stays authoritative in auto mode: a synthetic
+// host-approval plan prompts unless an explicit net(...) allow rule matches.
+func TestSessionManagerAutoModeDoesNotAutoApproveUnlistedHosts(t *testing.T) {
+	sess := attachTestSession(t, api.ModeAuto)
+	netPlan := &tools.Plan{ToolName: "net", Action: api.ActionNet, Safety: api.SafetyOutside, Target: "unlisted.example.com"}
+	dec, req, err := sess.Evaluate(netPlan)
+	if dec != tools.AccessAsk || req == nil || err != nil {
+		t.Fatalf("auto mode unlisted host: got %s (req=%+v err=%v), want ask", dec, req, err)
+	}
+
+	if err := sess.AddAllow("net(other.example.com)"); err != nil {
+		t.Fatalf("AddAllow: %v", err)
+	}
+	if dec, _, _ := sess.Evaluate(netPlan); dec != tools.AccessAsk {
+		t.Fatalf("auto mode with unrelated net rule: got %s, want ask", dec)
+	}
+	if err := sess.AddAllow("net(unlisted.example.com)"); err != nil {
+		t.Fatalf("AddAllow: %v", err)
+	}
+	if dec, _, _ := sess.Evaluate(netPlan); dec != tools.AccessAllow {
+		t.Fatalf("auto mode with matching net rule: got %s, want allow", dec)
+	}
+}
+
 func TestSessionManagerUnsandboxedDeniesSpanNamespaces(t *testing.T) {
 	// A plain bash(git *) deny covers sandboxed, bypass, and excluded plans.
 	for _, plan := range []*tools.Plan{sandboxedBashPlan("git commit -m x"), bypassBashPlan("git commit -m x"), excludedBashPlan("git commit -m x")} {

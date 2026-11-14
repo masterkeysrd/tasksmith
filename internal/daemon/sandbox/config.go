@@ -83,6 +83,12 @@ type Config struct {
 	// Network configures outbound network restrictions.
 	Network NetworkPolicy `json:"network,omitzero"`
 
+	// OnUnlistedHost is consulted by the allowlist proxy when child traffic
+	// targets a host matching neither the allowed nor denied domain patterns.
+	// A nil approver refuses unlisted hosts. It is only consulted while the
+	// Network.Allowlist posture is active.
+	OnUnlistedHost HostApprovalFunc `json:"-"`
+
 	// Filesystem carries the structured read/write path lists native OS
 	// sandbox profiles enforce in addition to the WorkDir confinement. It has
 	// no effect in ModeLocal, where reads and writes are already confined to

@@ -53,14 +53,20 @@ func wrapNativeCommand(s *session, _ string, resolvedBin string, args []string, 
 	if p != nil {
 		policy = *p
 	}
+	network, proxyPort := s.networkPosture()
+	if network.Allowlist && !network.Disabled && proxyPort == 0 {
+		return "", nil, fmt.Errorf("%w: network allowlist is active but the sandbox network proxy is not running", ErrProxyUnavailable)
+	}
 	profile := buildSeatbeltProfile(seatbeltParams{
-		WorkDir:         s.workDir,
-		RealWorkDir:     s.realWorkDir,
-		TempDir:         s.tempDir,
-		RealTempDir:     s.realTempDir,
-		ReadOnly:        s.readOnly.Load() || cmdReadOnly,
-		NetworkDisabled: s.cfg.Network.Disabled,
-		Filesystem:      policy,
+		WorkDir:          s.workDir,
+		RealWorkDir:      s.realWorkDir,
+		TempDir:          s.tempDir,
+		RealTempDir:      s.realTempDir,
+		ReadOnly:         s.readOnly.Load() || cmdReadOnly,
+		NetworkDisabled:  network.Disabled,
+		NetworkAllowlist: network.Allowlist && !network.Disabled,
+		ProxyPort:        proxyPort,
+		Filesystem:       policy,
 	})
 	wrappedArgs := make([]string, 0, 4+len(args))
 	wrappedArgs = append(wrappedArgs, "-p", profile, "--", resolvedBin)
@@ -71,13 +77,20 @@ func wrapNativeCommand(s *session, _ string, resolvedBin string, args []string, 
 // seatbeltParams carries the resolved confinement inputs for
 // [buildSeatbeltProfile].
 type seatbeltParams struct {
-	WorkDir         string
-	RealWorkDir     string
-	TempDir         string
-	RealTempDir     string
-	ReadOnly        bool
+	WorkDir     string
+	RealWorkDir string
+	TempDir     string
+	RealTempDir string
+	ReadOnly    bool
+	// NetworkDisabled drops all network rules from the profile.
 	NetworkDisabled bool
-	Filesystem      FilesystemPolicy
+	// NetworkAllowlist confines outbound traffic to the daemon-side
+	// allowlist proxy. Without an active ProxyPort the profile stays
+	// fail-closed (no network rules at all).
+	NetworkAllowlist bool
+	// ProxyPort is the loopback port of the active allowlist proxy.
+	ProxyPort  int
+	Filesystem FilesystemPolicy
 }
 
 // buildSeatbeltProfile generates a macOS Seatbelt SBPL policy string.
@@ -87,7 +100,8 @@ type seatbeltParams struct {
 // /private/var/folders/... on macOS), the dedicated temp directory, and every
 // ExtraWritePaths entry when ReadOnly is false, or denying writes to WorkDir
 // when ReadOnly is true. Outbound/inbound network access is omitted when
-// NetworkDisabled is true.
+// NetworkDisabled is true, and confined to the loopback proxy port when
+// ProxyPort is non-zero (allowlist posture).
 //
 // Seatbelt resolves file rules by last-match wins, so read rules are emitted
 // after the blanket read allow sorted from broadest to narrowest path —
@@ -141,7 +155,20 @@ func buildSeatbeltProfile(params seatbeltParams) string {
 		}
 	}
 
-	if !params.NetworkDisabled {
+	switch {
+	case params.NetworkDisabled:
+		// No network rules: the implicit deny default keeps children offline.
+	case params.NetworkAllowlist:
+		// Allowlist posture: children may only reach the daemon-side domain
+		// proxy on loopback. Outbound is pinned to the proxy's port; the bind
+		// rule lets children open the (ephemeral) client socket itself.
+		// If the proxy failed to start (ProxyPort == 0) the profile keeps the
+		// implicit deny: an allowlist must never fail open to full access.
+		if params.ProxyPort > 0 {
+			fmt.Fprintf(&b, "(allow network-outbound (remote ip \"localhost:%d\"))\n", params.ProxyPort)
+			b.WriteString("(allow network-bind (local ip \"localhost:*\"))\n")
+		}
+	default:
 		b.WriteString("(allow network*)\n")
 	}
 

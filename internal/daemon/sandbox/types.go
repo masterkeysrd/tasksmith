@@ -24,6 +24,7 @@ var (
 	ErrNetworkDisabled   = errors.New("sandbox: network access is disabled")
 	ErrHostBlocked       = errors.New("sandbox: target host is blocked by policy")
 	ErrLoopbackBlocked   = errors.New("sandbox: loopback address access is blocked by policy")
+	ErrProxyUnavailable  = errors.New("sandbox: network allowlist proxy is not running")
 	ErrInvalidURL        = errors.New("sandbox: invalid http/https url")
 	ErrNativeUnavailable = errors.New("sandbox: native OS sandbox backend is unavailable")
 	ErrWatchUnsupported  = errors.New("sandbox: watching filesystem is unsupported")
@@ -56,6 +57,13 @@ type NetworkPolicy struct {
 	// Disabled completely blocks all outbound network connections when true.
 	Disabled bool `json:"disabled,omitempty"`
 
+	// Allowlist routes child process traffic through the daemon-side domain
+	// proxy instead of granting direct network access. It only takes effect
+	// in ModeNative, where the kernel profile can physically force the
+	// routing; in ModeLocal the in-process Net capability still enforces
+	// AllowedHosts/BlockedHosts, but child processes cannot be confined.
+	Allowlist bool `json:"allowlist,omitempty"`
+
 	// AllowedHosts restricts outbound connections to matching hostnames or
 	// wildcard domain patterns (e.g., "api.example.com", "*.example.com").
 	// When empty, all non-blocked hosts are permitted.
@@ -72,10 +80,19 @@ type NetworkPolicy struct {
 }
 
 func (p *NetworkPolicy) IsZero() bool {
-	return !p.Disabled &&
+	return !p.Disabled && !p.Allowlist &&
 		len(p.AllowedHosts) == 0 &&
 		len(p.BlockedHosts) == 0 &&
 		!p.AllowLoopback
+}
+
+// ProxyPolicy derives the domain policy the network proxy enforces from the
+// sandbox network posture.
+func (p *NetworkPolicy) ProxyPolicy() ProxyPolicy {
+	return ProxyPolicy{
+		AllowedDomains: append([]string(nil), p.AllowedHosts...),
+		DeniedDomains:  append([]string(nil), p.BlockedHosts...),
+	}
 }
 
 // Sandbox represents an isolated OS execution environment exposing confined
@@ -118,6 +135,15 @@ type Sandbox interface {
 	// processes keep the kernel profile they started with. It has no effect
 	// in ModeLocal.
 	SetFilesystemPolicy(policy FilesystemPolicy)
+
+	// SetNetworkPolicy atomically replaces the live outbound network posture
+	// for future child processes and in-process dials. When the Allowlist
+	// flag turns on in ModeNative the sandbox starts its domain proxy; when
+	// it turns off the proxy stops. Already-running child processes keep the
+	// profile and environment they started with. If the proxy cannot start,
+	// the allowlist posture is kept (fail-closed: confined children get no
+	// network) and the error is reported.
+	SetNetworkPolicy(policy NetworkPolicy) error
 
 	// FS returns the confined filesystem capability rooted at WorkDir.
 	FS() FS

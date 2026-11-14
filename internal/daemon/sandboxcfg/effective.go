@@ -276,6 +276,12 @@ func (m *manager) effective(global, project api.SandboxSettings, restricted bool
 	}
 	network.AllowedDomains = unionDedup(global.Network.AllowedDomains, project.Network.AllowedDomains)
 	network.DeniedDomains = unionDedup(global.Network.DeniedDomains, project.Network.DeniedDomains)
+	// A non-empty allowlist opts into the proxy-backed posture when no mode
+	// was named, resolved once here so every consumer (sessions and the
+	// /sandbox effective view) agrees: an explicit "open" always wins.
+	if network.Mode == "" && len(network.AllowedDomains) > 0 {
+		network.Mode = api.SandboxNetworkAllowlist
+	}
 
 	settings := api.SandboxSettings{
 		Schema:            1,

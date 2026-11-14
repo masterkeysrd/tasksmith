@@ -437,6 +437,15 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 		if hasMatchingAllow(plan) {
 			return tools.AccessAllow, nil, nil
 		}
+	} else if plan.Action == api.ActionNet && plan.ToolName == "net" {
+		// A synthetic host-approval plan from the sandbox network proxy:
+		// sandbox.json's allowlist is the boundary, so no permission mode,
+		// including auto, may silently open an unlisted host. Only an explicit
+		// net(host) (or wildcard) allow rule auto-approves; everything else
+		// falls through to a prompt.
+		if hasMatchingAllow(plan) {
+			return tools.AccessAllow, nil, nil
+		}
 	} else {
 		switch mode {
 		case api.ModePlan:
@@ -556,6 +565,16 @@ func evaluateToolPolicies(tp *warp.ToolPolicies, plan *tools.Plan, wsTool *warp.
 
 	action := warp.ToolPolicyAllow
 	if tp != nil {
+		// A synthesized plan has no catalog manifest. For network plans the
+		// tool name is synthetic ("net"): it represents egress requested by an
+		// already-approved tool such as bash, so an explicit Include allow-list
+		// must not silently deny it just because "net" is not listed. Exclude,
+		// Ask, Dangerous, and OpenWorld layers still apply unchanged.
+		if wsTool == nil && plan.Action == api.ActionNet && len(tp.Include) > 0 {
+			relaxed := *tp
+			relaxed.Include = nil
+			tp = &relaxed
+		}
 		action = tp.EvaluateTool(tool)
 	}
 

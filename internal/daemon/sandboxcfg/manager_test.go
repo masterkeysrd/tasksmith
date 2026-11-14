@@ -119,6 +119,8 @@ func TestSetRejectsInvalidSettings(t *testing.T) {
 		"empty path":           {Filesystem: api.SandboxFilesystemSettings{DenyWrite: []string{"  "}}},
 		"wildcard bare":        {Network: api.SandboxNetworkSettings{DeniedDomains: []string{"*"}}},
 		"wildcard no suffix":   {Network: api.SandboxNetworkSettings{DeniedDomains: []string{"*."}}},
+		"wildcard ip":          {Network: api.SandboxNetworkSettings{AllowedDomains: []string{"*.::1"}}},
+		"malformed ip":         {Network: api.SandboxNetworkSettings{AllowedDomains: []string{"[::1"}}},
 	}
 	for name, settings := range invalid {
 		if err := mgr.Set(api.ScopeGlobal, settings); !errors.Is(err, ErrInvalidValue) {
@@ -131,6 +133,7 @@ func TestSetRejectsInvalidSettings(t *testing.T) {
 		"tilde-expanded global path":      {Filesystem: api.SandboxFilesystemSettings{DenyRead: []string{"~/Documents"}}},
 		"absolute project path":           {Filesystem: api.SandboxFilesystemSettings{AllowWrite: []string{workDir}}},
 		"wildcard domain":                 {Network: api.SandboxNetworkSettings{Mode: api.SandboxNetworkAllowlist, AllowedDomains: []string{"*.example.com"}}},
+		"ipv6 literal":                    {Network: api.SandboxNetworkSettings{Mode: api.SandboxNetworkAllowlist, AllowedDomains: []string{"::1", "[::1]", "fd00:ec2::254", "127.0.0.1"}}},
 	}
 	for name, settings := range valid {
 		if err := mgr.Set(api.ScopeProject, settings); err != nil {
@@ -142,6 +145,41 @@ func TestSetRejectsInvalidSettings(t *testing.T) {
 	}
 	if err := mgr.Set(api.PermissionScope("machine"), api.SandboxSettings{}); !errors.Is(err, ErrInvalidScope) {
 		t.Errorf("Set(machine scope) error = %v, want ErrInvalidScope", err)
+	}
+}
+
+// TestEffectiveNetworkModeResolution verifies the implicit allowlist opt-in is
+// resolved once in Effective: an unset mode with a non-empty allowedDomains
+// reads back as allowlist (so the /sandbox effective view matches what the
+// session enforces), while an explicit "open" always wins even when domains
+// remain configured.
+func TestEffectiveNetworkModeResolution(t *testing.T) {
+	mgr, workDir := testManager(t, false)
+
+	if err := mgr.Set(api.ScopeGlobal, api.SandboxSettings{
+		Network: api.SandboxNetworkSettings{AllowedDomains: []string{"*.example.com"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eff, err := mgr.EffectiveFor(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff.Network.Mode != api.SandboxNetworkAllowlist {
+		t.Fatalf("unset mode with allowedDomains: effective mode = %q, want allowlist", eff.Network.Mode)
+	}
+
+	if err := mgr.Set(api.ScopeProject, api.SandboxSettings{
+		Network: api.SandboxNetworkSettings{Mode: api.SandboxNetworkOpen},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eff, err = mgr.EffectiveFor(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eff.Network.Mode != api.SandboxNetworkOpen {
+		t.Fatalf("explicit project open with global domains: effective mode = %q, want open", eff.Network.Mode)
 	}
 }
 

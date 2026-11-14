@@ -25,6 +25,31 @@ func TestBuildBwrapArgs(t *testing.T) {
 	}
 }
 
+func TestBuildBwrapArgsAllowlistKeepsNetNamespaceClosed(t *testing.T) {
+	// Under the allowlist posture the namespace stays closed (the relay
+	// bootstrap bridges to the proxy socket), while an open posture keeps
+	// full networking with no --unshare-net flag.
+	allowlist := strings.Join(buildBwrapArgs(bwrapParams{
+		WorkDir: "/work", RealWorkDir: "/work",
+		TempDir: "/tmp/temp", RealTempDir: "/tmp/temp",
+		TargetDir: "/work", ProxySocket: "/tmp/temp/net.sock",
+		ResolvedBin: "/tasksmith", Args: []string{"sandbox-relay", "--", "/bin/sh"},
+	}), " ")
+	if !strings.Contains(allowlist, "--unshare-net") {
+		t.Fatalf("allowlist posture must keep --unshare-net: %s", allowlist)
+	}
+
+	open := strings.Join(buildBwrapArgs(bwrapParams{
+		WorkDir: "/work", RealWorkDir: "/work",
+		TempDir: "/tmp/temp", RealTempDir: "/tmp/temp",
+		TargetDir:   "/work",
+		ResolvedBin: "/bin/sh", Args: []string{"-c", "id"},
+	}), " ")
+	if strings.Contains(open, "--unshare-net") {
+		t.Fatalf("open posture must not unshare net: %s", open)
+	}
+}
+
 func TestBuildBwrapArgsMasksDeniedPaths(t *testing.T) {
 	dir := t.TempDir()
 	deniedDir := filepath.Join(dir, ".ssh")

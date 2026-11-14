@@ -27,13 +27,16 @@ type State struct {
 	StartedAt          time.Time               `json:"started_at,omitzero"`
 	FinishedAt         time.Time               `json:"finished_at,omitzero"`
 
-	cancel          context.CancelFunc                `json:"-"`
-	done            chan struct{}                     `json:"-"`
-	err             error                             `json:"-"`
-	decisions       map[string]api.PermissionDecision `json:"-"`
-	answers         map[string]api.QuestionResponse   `json:"-"`
-	queue           []queueItem                       `json:"-"`
-	titleGenerating bool                              `json:"-"`
+	cancel             context.CancelFunc                `json:"-"`
+	done               chan struct{}                     `json:"-"`
+	err                error                             `json:"-"`
+	decisions          map[string]api.PermissionDecision `json:"-"`
+	answers            map[string]api.QuestionResponse   `json:"-"`
+	hostApprovals      map[string]*hostApproval          `json:"-"`
+	hostApprovalActive int                               `json:"-"`
+	closing            bool                              `json:"-"`
+	queue              []queueItem                       `json:"-"`
+	titleGenerating    bool                              `json:"-"`
 }
 
 // NewState constructs a new [State] initialized to [api.StatusIdle].
@@ -62,6 +65,11 @@ func (s *State) Clone() *State {
 			p.GrantPatterns = slices.Clone(p.GrantPatterns)
 			perms[i] = p
 		}
+	}
+	for _, w := range s.hostApprovals {
+		req := w.request
+		req.GrantPatterns = slices.Clone(req.GrantPatterns)
+		perms = append(perms, req)
 	}
 	var questions []api.QuestionRequest
 	for i := range s.PendingQuestions {

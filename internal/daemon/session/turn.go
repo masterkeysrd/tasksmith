@@ -65,6 +65,11 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 		if strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" {
 			return fmt.Errorf("%w: cannot specify both message and decision", ErrInvalidConfig)
 		}
+		// Out-of-band sandbox host approvals resolve while the turn keeps
+		// running; they never resume the harness.
+		if handled, err := s.resolveHostApproval(*req.Decision); handled {
+			return err
+		}
 		return s.resumeInteraction(ctx, func(c context.Context) (bool, error) {
 			return s.recordDecision(c, *req.Decision)
 		})
@@ -198,7 +203,8 @@ func (s *Session) Cancel(ctx context.Context) error {
 	s.queue = nil
 	s.Unlock()
 
-	if done == nil {
+	s.cancelHostApprovals(context.Canceled)
+	if done == nil || cancel == nil {
 		return nil
 	}
 
@@ -340,7 +346,8 @@ func (s *Session) PopMessages() []message.Message {
 }
 
 func (s *Session) waitingForInteractionLocked() bool {
-	return len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 || s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion
+	return len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 || len(s.hostApprovals) > 0 ||
+		s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion
 }
 
 func (s *Session) startTurn(hInput harness.Input) error {

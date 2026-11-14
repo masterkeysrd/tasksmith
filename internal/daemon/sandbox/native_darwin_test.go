@@ -41,6 +41,36 @@ func TestBuildSeatbeltProfile(t *testing.T) {
 		t.Fatalf("darwin network-disabled profile should not allow network:\n%s", darwinRO)
 	}
 
+	proxyParams := base
+	proxyParams.NetworkAllowlist = true
+	proxyParams.ProxyPort = 45123
+	darwinProxy := buildSeatbeltProfile(proxyParams)
+	if !strings.Contains(darwinProxy, `(allow network-outbound (remote ip "localhost:45123"))`) {
+		t.Fatalf("darwin allowlist profile must pin outbound traffic to the proxy port:\n%s", darwinProxy)
+	}
+	if !strings.Contains(darwinProxy, `(allow network-bind (local ip "localhost:*"))`) {
+		t.Fatalf("darwin allowlist profile must allow ephemeral client binds:\n%s", darwinProxy)
+	}
+	if strings.Contains(darwinProxy, "(allow network*)") {
+		t.Fatalf("darwin allowlist profile must not blanket-allow network:\n%s", darwinProxy)
+	}
+
+	// Fail-closed: an allowlist posture whose proxy never started must not
+	// fall back to unrestricted network access.
+	proxyNoPort := proxyParams
+	proxyNoPort.ProxyPort = 0
+	darwinNoPort := buildSeatbeltProfile(proxyNoPort)
+	if strings.Contains(darwinNoPort, "(allow network*)") || strings.Contains(darwinNoPort, "network-outbound") {
+		t.Fatalf("allowlist without a proxy port must deny all network:\n%s", darwinNoPort)
+	}
+
+	proxyDisabled := proxyParams
+	proxyDisabled.NetworkDisabled = true
+	darwinProxyDisabled := buildSeatbeltProfile(proxyDisabled)
+	if strings.Contains(darwinProxyDisabled, "network-outbound") || strings.Contains(darwinProxyDisabled, "(allow network*)") {
+		t.Fatalf("network-disabled must win over an active proxy port:\n%s", darwinProxyDisabled)
+	}
+
 	policyParams := base
 	policyParams.Filesystem = FilesystemPolicy{
 		DeniedReadPaths: []string{"/tmp/fake-home/.ssh", "/tmp/fake-home/config/tasksmith/.env", "  "},

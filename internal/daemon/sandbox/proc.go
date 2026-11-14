@@ -94,6 +94,25 @@ func (p *sandboxProc) buildEnv(cmdEnv map[string]string, workDir string, unsandb
 		}
 	}
 
+	if p.s.mode == ModeNative && !unsandboxed {
+		// Under the network allowlist posture the kernel profile only lets
+		// children reach the daemon-side domain proxy, so every proxy-aware
+		// tool must be pointed at it. NO_PROXY stays empty: nothing may
+		// bypass the proxy, and the proxy itself can still reach explicitly
+		// allowed loopback targets.
+		if addr := p.s.netProxyAddr(); addr != "" {
+			proxyURL := "http://" + addr
+			merged["HTTP_PROXY"] = proxyURL
+			merged["HTTPS_PROXY"] = proxyURL
+			merged["ALL_PROXY"] = proxyURL
+			merged["NO_PROXY"] = ""
+			merged["http_proxy"] = proxyURL
+			merged["https_proxy"] = proxyURL
+			merged["all_proxy"] = proxyURL
+			merged["no_proxy"] = ""
+		}
+	}
+
 	keys := make([]string, 0, len(merged))
 	for k := range merged {
 		keys = append(keys, k)

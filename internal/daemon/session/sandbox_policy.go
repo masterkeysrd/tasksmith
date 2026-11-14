@@ -5,10 +5,37 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 	"github.com/masterkeysrd/tasksmith/internal/core/vcs"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 )
+
+// sandboxNetworkPolicy maps the merged sandbox.json network posture onto the
+// sandbox backend's network policy. "disabled" removes connectivity;
+// "allowlist" (explicit, or implied by a non-empty allowedDomains list via
+// sandboxcfg.Effective) routes child traffic through the daemon-side domain
+// proxy; otherwise children keep direct access. DeniedDomains always populate
+// BlockedHosts, including in open mode, where the in-process Net capability
+// still enforces them. Loopback stays permitted for the in-process capability
+// and for explicitly listed local targets, matching the posture sessions have
+// always had.
+func sandboxNetworkPolicy(eff *sandboxcfg.Effective) sandbox.NetworkPolicy {
+	policy := sandbox.NetworkPolicy{AllowLoopback: true}
+	if eff == nil {
+		return policy
+	}
+	policy.BlockedHosts = append([]string(nil), eff.Network.DeniedDomains...)
+	switch eff.Network.Mode {
+	case api.SandboxNetworkDisabled:
+		policy.Disabled = true
+	case api.SandboxNetworkAllowlist:
+		policy.Allowlist = true
+		policy.AllowedHosts = append([]string(nil), eff.Network.AllowedDomains...)
+	}
+	return policy
+}
 
 // sandboxFilesystemPolicy assembles the native kernel path policy for a
 // session work directory: the read-masking floor over host credential stores,

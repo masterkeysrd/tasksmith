@@ -26,14 +26,18 @@ type session struct {
 	fsPolicy    atomic.Pointer[FilesystemPolicy]
 	envMu       sync.RWMutex
 	cfg         Config
-	readOnly    atomic.Bool
-	root        *os.Root
-	fsCap       *sandboxFS
-	procCap     *sandboxProc
-	netCap      *sandboxNet
-	closed      atomic.Bool
-	watchersMu  sync.Mutex
-	watchers    map[*sandboxWatcher]struct{}
+	// netProxy serves allowlisted child traffic when the network posture is
+	// "allowlist"; guarded by envMu together with cfg.
+	netProxy       *Proxy
+	onUnlistedHost HostApprovalFunc
+	readOnly       atomic.Bool
+	root           *os.Root
+	fsCap          *sandboxFS
+	procCap        *sandboxProc
+	netCap         *sandboxNet
+	closed         atomic.Bool
+	watchersMu     sync.Mutex
+	watchers       map[*sandboxWatcher]struct{}
 }
 
 // New validates cfg and initializes a new confined Sandbox instance.
@@ -111,12 +115,110 @@ func New(cfg Config) (Sandbox, error) {
 	}
 	s.readOnly.Store(cfg.ReadOnly)
 	s.fsPolicy.Store(normalizeFilesystemPolicy(cfg.Filesystem))
+	s.onUnlistedHost = cfg.OnUnlistedHost
 
 	s.fsCap = newSandboxFS(s)
 	s.procCap = newSandboxProc(s)
 	s.netCap = newSandboxNet(s)
 
+	if mode == ModeNative && cfg.Network.Allowlist && !cfg.Network.Disabled {
+		if err := s.startNetProxy(); err != nil {
+			_ = root.Close()
+			if tempDir != "" {
+				_ = os.RemoveAll(tempDir)
+			}
+			return nil, err
+		}
+	}
+
 	return s, nil
+}
+
+// startNetProxy binds the domain-allowlist proxy for this sandbox. The unix
+// socket lives inside the sandbox temp dir so network-namespaced children can
+// reach the proxy over the bind-mounted filesystem.
+func (s *session) startNetProxy() error {
+	cfg := s.netProxyConfig(s.cfg.Network)
+	p, err := NewProxy(cfg)
+	if err != nil {
+		return err
+	}
+	s.netProxy = p
+	return nil
+}
+
+func (s *session) netProxyConfig(network NetworkPolicy) ProxyConfig {
+	cfg := ProxyConfig{Policy: network.ProxyPolicy()}
+	if s.onUnlistedHost != nil {
+		cfg.Approver = HostApprovalFunc(s.onUnlistedHost)
+	}
+	// On Linux the child runs in a closed network namespace and can only reach
+	// the proxy through a Unix socket on the bind-mounted temp dir; macOS
+	// children connect straight to the loopback TCP listener.
+	if sock := s.netProxySocketPath(); sock != "" {
+		cfg.UnixSocket = sock
+	}
+	return cfg
+}
+
+// netProxySocketPath returns the Unix socket path the allowlist proxy binds
+// for network-namespaced children, or "" when children reach the proxy over
+// loopback TCP instead.
+func (s *session) netProxySocketPath() string {
+	if runtime.GOOS == "linux" && s.tempDir != "" {
+		return filepath.Join(s.tempDir, "net.sock")
+	}
+	return ""
+}
+
+// netProxyAddr returns the proxy's loopback address, or "" when no proxy is
+// active.
+func (s *session) netProxyAddr() string {
+	s.envMu.RLock()
+	defer s.envMu.RUnlock()
+	if s.netProxy == nil {
+		return ""
+	}
+	return s.netProxy.Addr()
+}
+
+// networkPosture snapshots the live network policy and the allowlist proxy
+// port (0 when no proxy is active) under the environment lock, for the
+// platform command wrappers.
+func (s *session) networkPosture() (NetworkPolicy, int) {
+	s.envMu.RLock()
+	defer s.envMu.RUnlock()
+	port := 0
+	if s.netProxy != nil {
+		port = s.netProxy.Port()
+	}
+	return s.cfg.Network, port
+}
+
+// SetNetworkPolicy atomically replaces the live network posture for future
+// child processes and in-process dials. The allowlist proxy starts or stops
+// with the Allowlist flag; already-running children keep the profile they
+// started with. A proxy that cannot start keeps the fail-closed allowlist
+// posture (confined children get no network) and reports the error.
+func (s *session) SetNetworkPolicy(policy NetworkPolicy) error {
+	s.envMu.Lock()
+	defer s.envMu.Unlock()
+	if s.closed.Load() {
+		return ErrSandboxClosed
+	}
+	s.cfg.Network = policy
+	switch {
+	case s.netProxy != nil && (policy.Allowlist && !policy.Disabled):
+		s.netProxy.SetPolicy(policy.ProxyPolicy())
+		return nil
+	case s.netProxy != nil:
+		_ = s.netProxy.Close()
+		s.netProxy = nil
+		return nil
+	case policy.Allowlist && !policy.Disabled && s.mode == ModeNative:
+		return s.startNetProxy()
+	}
+	return nil
 }
 
 func (s *session) ID() string {
@@ -497,6 +599,12 @@ func (s *session) Close() error {
 
 	s.closeWatchers()
 	s.netCap.closeIdleConnections()
+	s.envMu.Lock()
+	if s.netProxy != nil {
+		_ = s.netProxy.Close()
+		s.netProxy = nil
+	}
+	s.envMu.Unlock()
 	procErr := s.procCap.closeAll()
 	rootErr := s.root.Close()
 	var tempErr error
