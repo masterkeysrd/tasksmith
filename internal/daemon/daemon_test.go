@@ -28,6 +28,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -1362,6 +1363,110 @@ func TestWorkspacePermissionsEndpoints(t *testing.T) {
 		Rule:   "bash(*)",
 	}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400 Bad Request for invalid effect, got %v", err)
+	}
+}
+
+func TestWorkspaceSandboxEndpoints(t *testing.T) {
+	ctx := context.Background()
+	_, cli, _ := setupDaemonTest(t, nil)
+
+	// 1. Initial sandbox posture: empty scopes over the built-in defaults.
+	resp, err := cli.GetSandbox(ctx)
+	if err != nil {
+		t.Fatalf("GetSandbox: %v", err)
+	}
+	if resp.Global.Mode != "" || resp.Project.Mode != "" {
+		t.Errorf("expected empty stored scopes, got global=%+v project=%+v", resp.Global, resp.Project)
+	}
+	if resp.Effective.AllowUnsandboxed == nil || !*resp.Effective.AllowUnsandboxed {
+		t.Errorf("expected allowUnsandboxed true in trusted workspace effective settings, got %+v", resp.Effective)
+	}
+	if resp.ResolvedPaths.WorkDir == "" {
+		t.Errorf("expected resolved workDir, got %+v", resp.ResolvedPaths)
+	}
+	if want := sandbox.Availability(); resp.Availability != want {
+		t.Errorf("availability = %+v, want host probe %+v", resp.Availability, want)
+	}
+	if resp.Restricted {
+		t.Errorf("expected unrestricted workspace posture, got restricted=true")
+	}
+
+	// 2. PUT project scope persists settings and reflects them in the response.
+	putResp, err := cli.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope: api.ScopeProject,
+		Settings: api.SandboxSettings{
+			Mode:             api.SandboxLocal,
+			ExcludedCommands: []string{"git commit *"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSandbox (project): %v", err)
+	}
+	if putResp.Project.Mode != api.SandboxLocal || !slices.Contains(putResp.Project.ExcludedCommands, "git commit *") {
+		t.Errorf("project scope = %+v, want mode local with git commit exclusion", putResp.Project)
+	}
+	if putResp.Effective.Mode != api.SandboxLocal {
+		t.Errorf("effective mode = %q, want local", putResp.Effective.Mode)
+	}
+
+	// 3. PUT global scope locks allowUnsandboxed off; the project scope can no
+	//    longer widen it back (monotonic lock).
+	lockedOff := false
+	relaxedOn := true
+	if _, err := cli.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope:    api.ScopeGlobal,
+		Settings: api.SandboxSettings{AllowUnsandboxed: &lockedOff},
+	}); err != nil {
+		t.Fatalf("UpdateSandbox (global lock): %v", err)
+	}
+	if _, err := cli.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope:    api.ScopeProject,
+		Settings: api.SandboxSettings{Mode: api.SandboxLocal, AllowUnsandboxed: &relaxedOn},
+	}); err != nil {
+		t.Fatalf("UpdateSandbox (project relax attempt): %v", err)
+	}
+	locked, err := cli.GetSandbox(ctx)
+	if err != nil {
+		t.Fatalf("GetSandbox after lock: %v", err)
+	}
+	if locked.Effective.AllowUnsandboxed == nil || *locked.Effective.AllowUnsandboxed {
+		t.Errorf("expected global allowUnsandboxed:false lock to hold, got %+v", locked.Effective)
+	}
+	if len(locked.Effective.ExcludedCommands) != 0 {
+		t.Errorf("expected exclusions disabled under allowUnsandboxed lock, got %v", locked.Effective.ExcludedCommands)
+	}
+
+	// 4. Validation errors surface as 400 Bad Request.
+	var apiErr *api.APIError
+	if _, err := cli.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope: "unknown-scope",
+	}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid scope, got %v", err)
+	}
+
+	if _, err := cli.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope:    api.ScopeProject,
+		Settings: api.SandboxSettings{Mode: "docker"},
+	}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid mode, got %v", err)
+	}
+
+	if _, err := cli.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope: api.ScopeGlobal,
+		Settings: api.SandboxSettings{
+			Filesystem: api.SandboxFilesystemSettings{AllowWrite: []string{"relative/path"}},
+		},
+	}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for relative path in global scope, got %v", err)
+	}
+
+	if _, err := cli.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope: api.ScopeProject,
+		Settings: api.SandboxSettings{
+			Network: api.SandboxNetworkSettings{AllowedDomains: []string{"not a domain/"}},
+		},
+	}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid domain pattern, got %v", err)
 	}
 }
 

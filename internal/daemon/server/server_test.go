@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 )
 
@@ -83,6 +85,12 @@ type mockBackend struct {
 	modelQuotaErr     error
 	permsResp         *api.PermissionsResponse
 	permsErr          error
+	sandboxResp       *api.SandboxResponse
+	sandboxErr        error
+	updateSandboxErr  error
+	updateSandboxReq  api.UpdateSandboxRequest
+	updateSandboxWS   string
+	getSandboxCalled  int
 	createSessResp    *api.Session
 	createSessCreated bool
 	createSessErr     error
@@ -258,6 +266,20 @@ func (m *mockBackend) AddPermissionRule(ctx context.Context, workspace string, r
 
 func (m *mockBackend) RemovePermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error) {
 	return m.permsResp, m.permsErr
+}
+
+func (m *mockBackend) GetSandbox(ctx context.Context, workspace string) (*api.SandboxResponse, error) {
+	m.getSandboxCalled++
+	return m.sandboxResp, m.sandboxErr
+}
+
+func (m *mockBackend) UpdateSandbox(ctx context.Context, workspace string, req api.UpdateSandboxRequest) (*api.SandboxResponse, error) {
+	m.updateSandboxReq = req
+	m.updateSandboxWS = workspace
+	if m.updateSandboxErr != nil {
+		return nil, m.updateSandboxErr
+	}
+	return m.sandboxResp, m.sandboxErr
 }
 
 func (m *mockBackend) CreateSession(ctx context.Context, workspace string, req api.CreateSessionRequest) (*api.Session, bool, error) {
@@ -557,6 +579,113 @@ func TestWorkspaceRouterEndpoints(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("delete permission rule status = %d", rec.Code)
+	}
+}
+
+func TestSandboxRoutes(t *testing.T) {
+	enabled := true
+	mock := &mockBackend{
+		sandboxResp: &api.SandboxResponse{
+			Global:    api.SandboxSettings{Mode: api.SandboxNative},
+			Project:   api.SandboxSettings{AllowUnsandboxed: &enabled},
+			Effective: api.SandboxSettings{Mode: api.SandboxNative, AllowUnsandboxed: &enabled},
+			Availability: api.SandboxAvailability{
+				Available: true,
+				Backend:   "seatbelt",
+			},
+			ResolvedPaths: api.SandboxResolvedPaths{
+				WorkDir:   "/ws",
+				DenyWrite: []string{"/ws/.agents"},
+			},
+		},
+	}
+	handler := setupTestServer(mock)
+
+	// GET returns the full posture.
+	req := httptest.NewRequest(http.MethodGet, "/v1/sandbox", nil)
+	req.Header.Set(api.HeaderCWD, "/ws")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get sandbox status = %d", rec.Code)
+	}
+	var getResp api.SandboxResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("decode get sandbox body: %v", err)
+	}
+	if getResp.Effective.Mode != api.SandboxNative || getResp.Effective.AllowUnsandboxed == nil || !*getResp.Effective.AllowUnsandboxed {
+		t.Errorf("effective settings = %+v, want native with allowUnsandboxed true", getResp.Effective)
+	}
+	if !getResp.Availability.Available || getResp.Availability.Backend != "seatbelt" {
+		t.Errorf("availability = %+v, want available seatbelt", getResp.Availability)
+	}
+	if len(getResp.ResolvedPaths.DenyWrite) != 1 || getResp.ResolvedPaths.DenyWrite[0] != "/ws/.agents" {
+		t.Errorf("resolved denyWrite = %v", getResp.ResolvedPaths.DenyWrite)
+	}
+
+	// PUT persists one scope and echoes the refreshed posture.
+	mock.updateSandboxErr = nil
+	req = httptest.NewRequest(http.MethodPut, "/v1/sandbox",
+		strings.NewReader(`{"scope":"project","settings":{"mode":"local","excludedCommands":["git commit *"]}}`))
+	req.Header.Set(api.HeaderCWD, "/ws")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put sandbox status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if mock.updateSandboxWS != "/ws" {
+		t.Errorf("update workspace = %q, want /ws", mock.updateSandboxWS)
+	}
+	if mock.updateSandboxReq.Scope != api.ScopeProject || mock.updateSandboxReq.Settings.Mode != api.SandboxLocal {
+		t.Errorf("update request = %+v", mock.updateSandboxReq)
+	}
+	if len(mock.updateSandboxReq.Settings.ExcludedCommands) != 1 || mock.updateSandboxReq.Settings.ExcludedCommands[0] != "git commit *" {
+		t.Errorf("excludedCommands = %v", mock.updateSandboxReq.Settings.ExcludedCommands)
+	}
+
+	// PUT with an invalid JSON body maps to 400.
+	req = httptest.NewRequest(http.MethodPut, "/v1/sandbox", strings.NewReader(`{invalid`))
+	req.Header.Set(api.HeaderCWD, "/ws")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("put sandbox invalid body status = %d, want 400", rec.Code)
+	}
+
+	// Backend validation failures (invalid scope/path/pattern) map to 400.
+	mock.updateSandboxErr = fmt.Errorf("%w: %q", sandboxcfg.ErrInvalidScope, "session")
+	req = httptest.NewRequest(http.MethodPut, "/v1/sandbox", strings.NewReader(`{"scope":"session","settings":{}}`))
+	req.Header.Set(api.HeaderCWD, "/ws")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("put sandbox invalid scope status = %d, want 400", rec.Code)
+	}
+	var errResp api.ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if errResp.Code != "bad_request" {
+		t.Errorf("error code = %q, want bad_request", errResp.Code)
+	}
+
+	mock.updateSandboxErr = fmt.Errorf("%w: unsupported sandbox mode %q", sandboxcfg.ErrInvalidValue, "docker")
+	req = httptest.NewRequest(http.MethodPut, "/v1/sandbox", strings.NewReader(`{"scope":"project","settings":{"mode":"docker"}}`))
+	req.Header.Set(api.HeaderCWD, "/ws")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("put sandbox invalid mode status = %d, want 400", rec.Code)
+	}
+
+	// GET backend errors keep their envelope status.
+	mock.sandboxErr = &api.APIError{StatusCode: http.StatusInternalServerError, Code: "internal_error", Message: "sandbox manager unavailable"}
+	req = httptest.NewRequest(http.MethodGet, "/v1/sandbox", nil)
+	req.Header.Set(api.HeaderCWD, "/ws")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("get sandbox error status = %d, want 500", rec.Code)
 	}
 }
 

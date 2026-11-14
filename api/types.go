@@ -609,6 +609,9 @@ type SandboxResponse struct {
 	Effective     SandboxSettings      `json:"effective"`
 	Availability  SandboxAvailability  `json:"availability"`
 	ResolvedPaths SandboxResolvedPaths `json:"resolvedPaths"`
+	// Restricted reports whether the workspace is untrusted, which forces
+	// allowUnsandboxed off regardless of the stored scopes.
+	Restricted bool `json:"restricted"`
 }
 
 // UpdateSandboxRequest overwrites one scope's sandbox settings.

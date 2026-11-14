@@ -149,6 +149,7 @@ Some built-in commands:
 | `/tasks` | `/tasks` | Open the background task monitor. |
 | `/subagents` | `/subagents` (or `/subagent`) | Open the subagents browser and live session inspector. |
 | `/permissions` | `/permissions` | Open the interactive permission rules manager. |
+| `/sandbox` | `/sandbox` | Open the interactive sandbox configuration editor to inspect kernel sandboxing health and edit isolation settings per scope. |
 | `/rules` | `/rules` | Open the workspace rules browser to inspect rule status and triggers, or reload rules from disk. |
 | `/tools` | `/tools` | Open the workspace tools browser to inspect each tool's status for the active agent, its safety annotations and schemas, or reload tools from disk. |
 | `/mcp` | `/mcp` (or `/mcps`), `/mcp auth <name>`, `/mcp restart <name>` | Open the MCP browser to inspect servers and everything they offer, authorize or restart one, and run prompts or attach resources. |
@@ -213,6 +214,18 @@ The interactive question form supports:
 - **Multi-Select**: Use `↑` / `↓` to highlight options and press `Space` to toggle selections (`[✓]` / `[ ]`). Press `Enter` to confirm your selections.
 - **Confirmation**: Select between `Yes` and `No`.
 - **Multi-Step Questionnaires**: When an agent asks multiple questions at once, a step bar (`Step 1 of 3`) lets you navigate back and forth using `Left` / `Shift+Tab` and `Right` before final submission. Press `Esc` to cancel the questionnaire.
+
+---
+
+## Sandbox Configuration (`/sandbox`)
+
+Run `/sandbox` to open the interactive sandbox configuration editor. It reads the same `sandbox.json` settings described in the [Permissions Guide](./permissions.md#isolation-settings-sandboxjson) and presents them in three tabs (`Tab` / `Shift+Tab` / `←` / `→` / `1`–`3` to switch):
+
+- **`1 Policy`**: a live status banner — the active session's backend, the host kernel backend's health (including a word-wrapped `Fix: …` remediation line when kernel sandboxing is unavailable, for example the Ubuntu 24.04 AppArmor unprivileged-userns restriction), and workspace trust — above a table of the scope's settings. `Space` / `Enter` / `t` cycle the default `mode` (`native → local → inherit`) or toggle the highlighted `failIfUnavailable` / `allowUnsandboxed` / `autoAllowBash` knob; `x` / `Backspace` clears an override so the scope inherits again. A knob pinned by the other scope or by the workspace trust floor shows `🔒 locked (…)` and refuses edits.
+- **`2 Exclusions (<n>)`**: list, add (`a`), edit in place (`e`), and remove (`d`) `excludedCommands` patterns for the selected scope, with Global patterns echoed read-only in Project scope.
+- **`3 Effective`**: a read-only, scrollable view of the fully merged configuration — posture (mode, fail-if-unavailable, allow-unsandboxed, auto-allow bash, network posture and domains, union of excluded commands) plus the canonical allow/deny path rules.
+
+Press `s` on either editable tab to switch the scope between `Project` and `Global` (the selector shows inline in the tab strip). Edits are saved immediately and apply to sessions created afterwards; the active session keeps its current backend, shown on the status banner. For keybindings and tab details, see the [CLI Reference](../reference/cli.md#sandbox-editor-sandbox).
 
 ---
 

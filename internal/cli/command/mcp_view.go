@@ -323,7 +323,7 @@ func mcpAllowedColor(scheme *theme.Scheme, allowed bool) style.Style {
 
 // mcpBadgeNode wraps a badge in a clipping flex row so a narrow column cannot
 // push the rest of the row off screen.
-func mcpBadgeNode(scheme *theme.Scheme, text string, sty style.Style) trail.Node {
+func mcpBadgeNode(text string, sty style.Style) trail.Node {
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
 			FlexDirection(style.FlexRow).
@@ -713,7 +713,7 @@ type mcpMenuActions struct {
 // mcpMenuFor builds the action menu for a server. A server that cannot be used
 // yet leads with the thing that would fix it, so the first entry is the answer to
 // "why can't I use this server?".
-func mcpMenuFor(server api.MCPServer, actions mcpMenuActions) []mcpMenuItem {
+func mcpMenuFor(server api.MCPServer) []mcpMenuItem {
 	items := []mcpMenuItem{}
 	switch server.Status {
 	case api.MCPStatusAuthRequired:
@@ -829,7 +829,7 @@ var mcpInspector = trail.FC("MCPServerInspector", func(props mcpInspectorProps) 
 		onAuth:      props.onAuth,
 		onRestart:   props.onRestart,
 	}
-	items := mcpMenuFor(props.server, actions)
+	items := mcpMenuFor(props.server)
 
 	// A refresh can shrink the menu, for instance when a server loses its prompts,
 	// so the cursor is clamped rather than allowed to point past the last entry.
@@ -1276,7 +1276,7 @@ var mcpItemPicker = trail.FC("mcpItemPicker", func(props mcpItemPickerProps) tra
 			Label:       target.label(),
 			Description: descriptions[key],
 			Cells:       []string{mcpItemCell(target), badge},
-			CellNodes:   []trail.Node{nil, mcpBadgeNode(scheme, badge, mcpAllowedColor(scheme, target.allowed))},
+			CellNodes:   []trail.Node{nil, mcpBadgeNode(badge, mcpAllowedColor(scheme, target.allowed))},
 		}
 	}
 
@@ -1778,7 +1778,7 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 			Icon:        mcpIconNode(mcpStatusIcon(server.Status), mcpStatusIconColor(scheme, server.Status)),
 			CellNodes: []trail.Node{
 				nil,
-				mcpBadgeNode(scheme, status, mcpRowStatusColor(scheme, server.Status)),
+				mcpBadgeNode(status, mcpRowStatusColor(scheme, server.Status)),
 			},
 		}
 	}

@@ -40,6 +40,8 @@ type WorkspaceBackend interface {
 	GetPermissions(ctx context.Context, workspace string) (*api.PermissionsResponse, error)
 	AddPermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)
 	RemovePermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)
+	GetSandbox(ctx context.Context, workspace string) (*api.SandboxResponse, error)
+	UpdateSandbox(ctx context.Context, workspace string, req api.UpdateSandboxRequest) (*api.SandboxResponse, error)
 	GetTrustStatus(ctx context.Context, workspace string) (*api.TrustStatus, error)
 	TrustWorkspace(ctx context.Context, req api.TrustFolderRequest) error
 	RevokeTrust(ctx context.Context, workspace string) error

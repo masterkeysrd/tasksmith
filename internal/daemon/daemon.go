@@ -859,6 +859,97 @@ func (d *Daemon) RemovePermissionRule(ctx context.Context, rawWS string, req api
 	return d.GetPermissions(ctx, rawWS)
 }
 
+// GetSandbox returns the workspace's sandbox posture: the stored global and
+// project sandbox.json scopes, their effective merge, host kernel backend
+// diagnostics, and the canonical resolved path rules for transparent
+// inspection in clients.
+func (d *Daemon) GetSandbox(ctx context.Context, rawWS string) (*api.SandboxResponse, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	cfgMgr := rt.SandboxConfig()
+	if cfgMgr == nil {
+		return nil, &api.APIError{
+			StatusCode: http.StatusInternalServerError,
+			Code:       "internal_error",
+			Message:    "daemon: sandbox settings manager is unavailable for this workspace",
+		}
+	}
+
+	project, err := cfgMgr.Get(api.ScopeProject)
+	if err != nil {
+		return nil, err
+	}
+	global, err := cfgMgr.Get(api.ScopeGlobal)
+	if err != nil {
+		return nil, err
+	}
+	eff, err := cfgMgr.Effective()
+	if err != nil {
+		return nil, err
+	}
+
+	return &api.SandboxResponse{
+		Global:        global,
+		Project:       project,
+		Effective:     eff.Settings,
+		Availability:  sandbox.Availability(),
+		ResolvedPaths: eff.ResolvedPaths(),
+		Restricted:    cfgMgr.Restricted(),
+	}, nil
+}
+
+// UpdateSandbox validates and atomically overwrites one scope's sandbox.json
+// settings, then refreshes the kernel path policy of every open session in the
+// workspace so edits take effect on the next command without restarting them.
+// It returns the updated [api.SandboxResponse].
+func (d *Daemon) UpdateSandbox(ctx context.Context, rawWS string, req api.UpdateSandboxRequest) (*api.SandboxResponse, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	cfgMgr := rt.SandboxConfig()
+	if cfgMgr == nil {
+		return nil, &api.APIError{
+			StatusCode: http.StatusInternalServerError,
+			Code:       "internal_error",
+			Message:    "daemon: sandbox settings manager is unavailable for this workspace",
+		}
+	}
+
+	if err := cfgMgr.Set(req.Scope, req.Settings); err != nil {
+		return nil, err
+	}
+
+	// A global-scope edit changes ~/.config/tasksmith/sandbox.json, which is
+	// the base posture of every workspace the daemon hosts, so every open
+	// runtime must re-resolve its live sessions' policies — not just the
+	// caller's. Runtimes are deduplicated because several workspace keys can
+	// map to the same runtime.
+	if req.Scope == api.ScopeGlobal {
+		d.wsMu.Lock()
+		seen := make(map[*workspaceRuntime]struct{}, len(d.workspaces))
+		runtimes := make([]*workspaceRuntime, 0, len(d.workspaces))
+		for _, wsRT := range d.workspaces {
+			if _, ok := seen[wsRT]; !ok {
+				seen[wsRT] = struct{}{}
+				runtimes = append(runtimes, wsRT)
+			}
+		}
+		d.wsMu.Unlock()
+		for _, wsRT := range runtimes {
+			wsRT.RefreshSessions()
+		}
+	} else {
+		rt.RefreshSessions()
+	}
+
+	return d.GetSandbox(ctx, rawWS)
+}
+
 func (d *Daemon) GetTrustStatus(ctx context.Context, rawWS string) (*api.TrustStatus, error) {
 	cleanDir, err := fsutils.CleanPath(rawWS)
 	if err != nil {

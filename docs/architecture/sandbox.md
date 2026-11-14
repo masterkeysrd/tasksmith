@@ -115,6 +115,8 @@ Effective settings follow the workspace trust boundary:
 
 Repository-committed manifests (`WORKSPACE.md`, `.agents/`) may only narrow these scopes, never widen them. The merged posture is computed once per session at creation and re-applied live through `Sandbox.SetFilesystemPolicy` on workspace reload, so edits apply to running sessions without recreating the sandbox.
 
+Clients read and manage the layer through the workspace-scoped daemon API: `GET /v1/sandbox` returns the stored `global`/`project` scopes, the effective merge, the canonical resolved path lists, whether the workspace is restricted (which forces `allowUnsandboxed` off), and a host backend availability probe (backend name `seatbelt`/`bubblewrap`, the cached probe result, and remediation guidance when the backend is unavailable — e.g. installing bubblewrap or lifting Ubuntu's AppArmor unprivileged-userns restriction). `PUT /v1/sandbox` validates and atomically overwrites one scope, then refreshes every open session's kernel path policy so the edit applies to the very next command; a global-scope write refreshes sessions across all workspaces the daemon hosts.
+
 ### 10. Privileged Host Transfer Boundary (`Upload` & `Download`)
 Tools given the `FS` capability can never reference paths outside the sandbox root. However, the daemon occasionally needs to move files between the host and the sandbox (for example, staging a user-attached file from outside the workspace or exporting a build artifact).
 - **`Upload` (Host $\to$ Sandbox)** and **`Download` (Sandbox $\to$ Host)** are exposed exclusively on the top-level **Sandbox Controller** held by the session orchestrator, keeping the tool-facing `FS` capability strictly jailed.

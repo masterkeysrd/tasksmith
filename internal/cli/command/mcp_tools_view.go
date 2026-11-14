@@ -79,7 +79,7 @@ var mcpToolList = trail.FC("MCPToolList", func(props mcpToolListProps) trail.Nod
 			Icon:        mcpToolIcon(scheme, tool.Allowed),
 			CellNodes: []trail.Node{
 				nil,
-				mcpBadgeNode(scheme, mcpToolBadge(tool), mcpAllowedColor(scheme, tool.Allowed)),
+				mcpBadgeNode(mcpToolBadge(tool), mcpAllowedColor(scheme, tool.Allowed)),
 			},
 		}
 	}

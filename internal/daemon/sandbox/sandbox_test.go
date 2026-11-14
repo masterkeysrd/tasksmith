@@ -1268,3 +1268,30 @@ func TestModeNativeLinkedGitWorktreeCommit(t *testing.T) {
 		t.Fatalf("expected <main-repo>/.git/config write to be blocked, stderr=%s", resConfig.Stderr)
 	}
 }
+
+func TestAvailabilityMatchesProbe(t *testing.T) {
+	avail := Availability()
+
+	if want := nativeBackendName(); avail.Backend != want {
+		t.Errorf("backend = %q, want %q", avail.Backend, want)
+	}
+	if probeErr := NativeAvailable(); probeErr != nil {
+		if avail.Available {
+			t.Errorf("available = true while probe reports %v", probeErr)
+		}
+		if avail.Error == "" {
+			t.Errorf("expected probe error detail when unavailable")
+		}
+	} else {
+		if !avail.Available {
+			t.Errorf("available = false while probe succeeded")
+		}
+		if avail.Error != "" || avail.Remediation != "" {
+			t.Errorf("successful probe should carry no error/remediation, got %+v", avail)
+		}
+	}
+
+	if second := Availability(); second != avail {
+		t.Errorf("Availability must be cached: first=%+v second=%+v", avail, second)
+	}
+}

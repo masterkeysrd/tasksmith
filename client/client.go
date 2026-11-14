@@ -605,6 +605,33 @@ func (c *Client) RemovePermissionRule(ctx context.Context, req api.PermissionRul
 	return &out, nil
 }
 
+// GetSandbox retrieves the workspace's sandbox posture: stored sandbox.json
+// scopes, their effective merge, host kernel backend diagnostics, and the
+// resolved path rules.
+func (c *Client) GetSandbox(ctx context.Context) (*api.SandboxResponse, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.SandboxResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/sandbox", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateSandbox overwrites one scope's sandbox settings (global or project)
+// and returns the refreshed sandbox posture.
+func (c *Client) UpdateSandbox(ctx context.Context, req api.UpdateSandboxRequest) (*api.SandboxResponse, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.SandboxResponse
+	if err := c.doJSON(ctx, http.MethodPut, "/v1/sandbox", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // CreateSession creates a new session in workspace.
 func (c *Client) CreateSession(ctx context.Context, req api.CreateSessionRequest) (*api.Session, error) {
 	if err := c.requireCWD(); err != nil {

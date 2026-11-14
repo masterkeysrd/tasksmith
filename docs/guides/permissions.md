@@ -225,6 +225,8 @@ While `permissions.json` decides *whether* a tool call needs your approval, `san
 
 Both files are written atomically with owner-only (`0600`) permissions, and TaskSmith refuses to let tools or sandboxed commands modify them — a sandboxed process can never loosen its own next invocation. Edits apply to running sessions on the next workspace reload (`/workspace reload`). Repository-committed manifests (`WORKSPACE.md`, `.agents/`) may only narrow these settings, never widen them.
 
+You can also edit either scope interactively from the REPL with `/sandbox`: a tabbed editor showing the host kernel backend's health (with remediation guidance when sandboxing is unavailable), the posture knobs with their effective values and lock reasons, `excludedCommands` management, and a read-only view of the fully resolved path and network rules. See the [CLI Reference](../reference/cli.md#sandbox-editor-sandbox).
+
 ### Unsandboxed Command Execution
 
 Some commands genuinely need host access the kernel sandbox withholds — `git commit` with GPG signing (needs `~/.gnupg`), `git push` over SSH (needs `~/.ssh`), or a client talking to the Docker daemon socket. TaskSmith offers three controlled ways across that boundary, all gated by `allowUnsandboxed` (default `true` in trusted workspaces, always `false` in restricted ones) and never available in read-only sessions:

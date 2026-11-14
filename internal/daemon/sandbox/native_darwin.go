@@ -13,6 +13,15 @@ import (
 
 const darwinSandboxExecBin = "/usr/bin/sandbox-exec"
 
+// nativeBackendName identifies the macOS kernel sandbox backend.
+func nativeBackendName() string { return "seatbelt" }
+
+// nativeAvailabilityRemediation returns guidance for a failed Seatbelt probe.
+// sandbox-exec ships with macOS, so a failing probe means the daemon itself
+// runs inside a restricted context (a sandboxed parent, IDE, or CI runner)
+// that offers no user-side fix; sessions simply degrade to local isolation.
+func nativeAvailabilityRemediation(_ error) string { return "" }
+
 // checkNativeAvailable verifies that the macOS Seatbelt binary exists and can
 // actually apply a sandbox profile in this environment. A parent process that
 // is itself Seatbelt-sandboxed (IDE/CI runners) or otherwise restricted keeps

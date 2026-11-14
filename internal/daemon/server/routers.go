@@ -217,6 +217,8 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/permissions", w.getPermissions),
 		PostRoute("/v1/permissions", w.postPermissionRule),
 		DeleteRoute("/v1/permissions", w.deletePermissionRule),
+		GetRoute("/v1/sandbox", w.getSandbox),
+		PutRoute("/v1/sandbox", w.putSandbox),
 		GetRoute("/v1/workspace/trust", w.getTrustStatus),
 		PostRoute("/v1/workspace/trust", w.postTrustFolder),
 		DeleteRoute("/v1/workspace/trust", w.deleteTrustFolder),
@@ -521,6 +523,29 @@ func (w *workspaceRouter) deletePermissionRule(rw http.ResponseWriter, r *http.R
 		return
 	}
 	WriteJSON(rw, http.StatusOK, perms)
+}
+
+func (w *workspaceRouter) getSandbox(rw http.ResponseWriter, r *http.Request) {
+	resp, err := w.b.GetSandbox(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
+}
+
+func (w *workspaceRouter) putSandbox(rw http.ResponseWriter, r *http.Request) {
+	req, err := DecodeJSON[api.UpdateSandboxRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	resp, err := w.b.UpdateSandbox(r.Context(), RequestWorkspace(r), req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
 }
 
 type mcpRouter struct {

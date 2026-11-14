@@ -18,6 +18,26 @@ var linuxBwrapCandidatePaths = []string{
 	"/usr/local/bin/bwrap",
 }
 
+// nativeBackendName identifies the Linux kernel sandbox backend.
+func nativeBackendName() string { return "bubblewrap" }
+
+// nativeAvailabilityRemediation classifies a failed Bubblewrap probe into
+// actionable guidance: a missing binary is an install problem, while a bwrap
+// that exists yet cannot create namespaces is almost always Ubuntu 24.04+
+// restricting unprivileged user namespaces via AppArmor (or a container
+// without userns support).
+func nativeAvailabilityRemediation(err error) string {
+	if strings.Contains(err.Error(), "binary not found") {
+		return "Install bubblewrap, e.g. \"sudo apt-get install bubblewrap\" (Debian/Ubuntu), " +
+			"\"sudo dnf install bubblewrap\" (Fedora), or \"bubblewrap\" via your distribution's package manager."
+	}
+	return "Bubblewrap cannot create user namespaces on this host. On Ubuntu 24.04+ this is " +
+		"usually AppArmor restricting unprivileged user namespaces; enable them with " +
+		"\"sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\" (persisted via " +
+		"/etc/sysctl.d/), or run TaskSmith inside a container configured with unprivileged " +
+		"user namespace support."
+}
+
 // checkNativeAvailable verifies that the Linux Bubblewrap (bwrap) binary
 // exists and can actually create a sandbox here. Unprivileged containers
 // without user namespaces and AppArmor-restricted hosts (Ubuntu 24.04+) keep

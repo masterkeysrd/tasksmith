@@ -163,6 +163,17 @@ func (a *App) Press(k key.Key) string {
 	return a.Text()
 }
 
+// Type delivers one printable-key event per rune, then returns the resulting
+// text, mirroring [Env.Type] for apps that drive an inline input field.
+func (a *App) Type(text string) string {
+	a.t.Helper()
+	out := ""
+	for _, r := range text {
+		out = a.Press(key.Key{Code: r, Text: string(r)})
+	}
+	return out
+}
+
 // StartApp boots node with a running trail loop in a background goroutine, which is
 // what [trail.Run] does. Prefer [NewApp] unless the component depends on the loop
 // actually running (timers, scheduled macro tasks, Static output).

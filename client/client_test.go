@@ -96,6 +96,12 @@ func TestNewAndValidation(t *testing.T) {
 	if _, err := emptyCWDClient.RemovePermissionRule(ctx, api.PermissionRuleRequest{}); !errors.Is(err, ErrEmptyWorkspace) {
 		t.Errorf("RemovePermissionRule empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
 	}
+	if _, err := emptyCWDClient.GetSandbox(ctx); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("GetSandbox empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.UpdateSandbox(ctx, api.UpdateSandboxRequest{}); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("UpdateSandbox empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
 	if _, err := emptyCWDClient.CreateSession(ctx, api.CreateSessionRequest{}); !errors.Is(err, ErrEmptyWorkspace) {
 		t.Errorf("CreateSession empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
 	}
@@ -277,6 +283,43 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		_ = json.NewEncoder(w).Encode(api.PermissionsResponse{
 			Project: api.Permissions{},
+		})
+	})
+	mux.HandleFunc("GET /v1/sandbox", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.SandboxResponse{
+			Global:    api.SandboxSettings{Mode: api.SandboxNative},
+			Project:   api.SandboxSettings{},
+			Effective: api.SandboxSettings{Mode: api.SandboxNative},
+			Availability: api.SandboxAvailability{
+				Available: true,
+				Backend:   "seatbelt",
+			},
+			ResolvedPaths: api.SandboxResolvedPaths{WorkDir: "/ws"},
+		})
+	})
+	mux.HandleFunc("PUT /v1/sandbox", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		var req api.UpdateSandboxRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		if req.Scope != api.ScopeProject && req.Scope != api.ScopeGlobal {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "bad_request", Message: "unsupported scope"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.SandboxResponse{
+			Project:      req.Settings,
+			Effective:    req.Settings,
+			Availability: api.SandboxAvailability{Available: true, Backend: "seatbelt"},
 		})
 	})
 
@@ -468,6 +511,30 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	})
 	if err != nil || len(delResp.Project.Allow) != 0 {
 		t.Errorf("RemovePermissionRule = (%+v, %v)", delResp, err)
+	}
+
+	sbx, err := c.GetSandbox(ctx)
+	if err != nil || sbx.Effective.Mode != api.SandboxNative || !sbx.Availability.Available || sbx.Availability.Backend != "seatbelt" {
+		t.Errorf("GetSandbox = (%+v, %v)", sbx, err)
+	}
+
+	updResp, err := c.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope:    api.ScopeProject,
+		Settings: api.SandboxSettings{Mode: api.SandboxLocal},
+	})
+	if err != nil || updResp.Project.Mode != api.SandboxLocal || updResp.Effective.Mode != api.SandboxLocal {
+		t.Errorf("UpdateSandbox = (%+v, %v)", updResp, err)
+	}
+
+	if _, err := c.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope: "unknown-scope",
+	}); err == nil {
+		t.Errorf("UpdateSandbox invalid scope expected error, got nil")
+	} else {
+		var sbxAPIErr *api.APIError
+		if !errors.As(err, &sbxAPIErr) || sbxAPIErr.StatusCode != http.StatusBadRequest {
+			t.Errorf("UpdateSandbox invalid scope error = %v, want 400 APIError", err)
+		}
 	}
 
 	if s, err := c.CreateSession(ctx, api.CreateSessionRequest{Title: "Test"}); err != nil || s.ID != "s1" {

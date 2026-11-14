@@ -1633,7 +1633,7 @@ func TestMCPInspectorMenuForStatus(t *testing.T) {
 
 	// The pending server leads with the action that unblocks it.
 	labels := []string{}
-	for _, item := range mcpMenuFor(pending, mcpMenuActions{}) {
+	for _, item := range mcpMenuFor(pending) {
 		labels = append(labels, item.Label)
 	}
 	wantPending := []string{"Authenticate", "Reconnect", "Back to servers"}
@@ -1642,7 +1642,7 @@ func TestMCPInspectorMenuForStatus(t *testing.T) {
 	}
 
 	labels = labels[:0]
-	for _, item := range mcpMenuFor(connected, mcpMenuActions{}) {
+	for _, item := range mcpMenuFor(connected) {
 		labels = append(labels, item.Label)
 	}
 	wantConnected := []string{"View tools (2)", "Run prompt (2)", "Attach resource (2)", "Reconnect"}
@@ -1652,7 +1652,7 @@ func TestMCPInspectorMenuForStatus(t *testing.T) {
 
 	// A server that discovered nothing offers only a retry.
 	labels = labels[:0]
-	for _, item := range mcpMenuFor(api.MCPServer{Name: "ghost", Status: api.MCPStatusError}, mcpMenuActions{}) {
+	for _, item := range mcpMenuFor(api.MCPServer{Name: "ghost", Status: api.MCPStatusError}) {
 		labels = append(labels, item.Label)
 	}
 	if !reflect.DeepEqual(labels, []string{"Reconnect"}) {
@@ -1664,7 +1664,7 @@ func TestMCPInspectorMenuForStatus(t *testing.T) {
 	oauthConnected := connected
 	oauthConnected.AuthType = api.MCPAuthOAuth2
 	labels = labels[:0]
-	for _, item := range mcpMenuFor(oauthConnected, mcpMenuActions{}) {
+	for _, item := range mcpMenuFor(oauthConnected) {
 		labels = append(labels, item.Label)
 	}
 	wantOAuth := []string{"View tools (2)", "Run prompt (2)", "Attach resource (2)", "Authenticate", "Reconnect"}
@@ -2816,11 +2816,18 @@ func transcriptText() string {
 	for _, item := range *state.Items {
 		switch data := item.Data.(type) {
 		case store.ErrorData:
-			builder.WriteString(data.Title + ": " + data.Message + "\n")
+			builder.WriteString(data.Title)
+			builder.WriteString(": ")
+			builder.WriteString(data.Message)
+			builder.WriteString("\n")
 		case store.NoticeData:
-			builder.WriteString(data.Text + "\n")
+			builder.WriteString(data.Text)
+			builder.WriteString("\n")
 		case store.CommandData:
-			builder.WriteString(data.Command + " " + data.Output + "\n")
+			builder.WriteString(data.Command)
+			builder.WriteString(" ")
+			builder.WriteString(data.Output)
+			builder.WriteString("\n")
 		}
 	}
 	return builder.String()

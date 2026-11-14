@@ -77,6 +77,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/changes`** | | *(none)* | Opens the interactive changes browser to inspect tracked file modifications, diffs, and hashes. |
 | **`/revert`** | | `[path] [entry_id]` | Reverts uncommitted file mutations for a specific file, change entry, or the entire session. |
 | **`/permissions`** | `/perm`, `/perms` | *(none)* | Opens the interactive permissions browser to inspect and edit project and global allow/deny rules. |
+| **`/sandbox`** | | *(none)* | Opens the interactive sandbox configuration editor to inspect host kernel sandboxing and edit project/global isolation settings. See [Sandbox Editor](#sandbox-editor-sandbox). |
 | **`/tasks`** | | *(none)* | Opens the background task manager to inspect running commands and stream task logs. |
 | **`/subagents`** | `/subagent` | *(none)* | Opens the interactive subagent browser to inspect running and completed subagents, view live outputs, or terminate tasks. |
 | **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. Requires pending permissions and questions to be resolved first. |
@@ -488,6 +489,29 @@ When TaskSmith is launched for the first time in an unconfigured directory, or w
 | `Tab` | Setup Wizard | Toggles between options (such as trust scope `Folder` vs `Parent`, or provider scope `User` vs `Workspace`). |
 | `Space` | Setup Wizard | Toggles selection checkbox for individual tools or MCP servers on the tools screen. |
 | `Esc` | Setup Wizard | Navigates back to the previous screen or exits the setup wizard. |
+
+### Sandbox Editor (`/sandbox`)
+
+A three-tab editor over the workspace's sandbox settings, backed by the daemon's `/v1/sandbox` API. Project-scope changes persist to `$XDG_DATA_HOME/tasksmith/workspaces/<hash>/sandbox.json` and Global-scope changes to `~/.config/tasksmith/sandbox.json`. Changes apply to the selected scope (`Project` or `Global`) immediately and take effect for sessions created afterwards; the currently active session keeps its backend, shown on the status banner. The scope selector renders inline in the tab strip (`scope: [Project] · Global`) on the two editable tabs, and an in-flight write shows as `· saving…` in the strip, so rows never shift vertically.
+
+| Tab | Content |
+| :--- | :--- |
+| **Policy** (`1 Policy`) | A live status banner — active session backend, host kernel backend health (`✔ … available` / `⚠ … unavailable` with the availability error and a word-wrapped `Fix: <remediation>` line, e.g. the Ubuntu 24.04 AppArmor unprivileged-userns restriction), and workspace trust — above an aligned table of the scope's settings (`Setting`, `Effective`, `<Scope> override`). The `mode` row cycles `native → local → inherit`; the `failIfUnavailable`, `allowUnsandboxed`, and `autoAllowBash` posture knobs show effective values with the scope's own override (`true`/`false`/`inherited`). Knobs pinned by the *other* scope or the workspace trust floor show `🔒 locked (<reason>)` and refuse edits; a scope is never locked by its own settings, and the Global scope is never locked, so every lock can be undone where it was written. A fixed two-row detail footer under the table shows the highlighted row's description, JSON key, and lock guidance. |
+| **Exclusions** (`2 Exclusions (<n>)`) | The scope's `excludedCommands` patterns; add (`a`), edit in place (`e`), and remove (`d`) entries through a guided inline input. The list windows with the viewport when it grows long, and in Project scope a read-only `Inherited from Global (<n>)` section shows Global patterns. The tab warns whenever effective `allowUnsandboxed` is off, since excluded commands still run sandboxed then. |
+| **Effective** (`3 Effective`) | Read-only, scrollable view of the effective merge: posture (mode, fail-if-unavailable, allow-unsandboxed, auto-allow bash, network mode with allowed/denied domains, union of excluded commands) plus filesystem rules (working directory and the canonical `allowWrite`, `denyWrite`, `denyRead`, `allowRead` path rules, home-shortened, with empty lists collapsing to `none`). A `lines X-Y of Z` footer tracks the viewport. |
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `Tab` / `Shift+Tab` / `←` / `→` / `1` `2` `3` | Sandbox Editor | Switch tab (forward / reverse / direct). |
+| `s` | Policy / Exclusions | Switch the edited scope between `Project` and `Global`. |
+| `↑` / `↓` / `k` / `j` / `Ctrl+P` / `Ctrl+N` | Policy / Exclusions | Move the row cursor. |
+| `Space` / `Enter` / `t` | Policy | Cycle the scope's default mode (`native → local → inherit`) or toggle the highlighted posture knob (an unset knob toggles from its effective value). |
+| `x` / `Backspace` / `Delete` | Policy | Clear the mode or highlighted posture-knob override so the scope inherits again. |
+| `a` | Exclusions | Start adding an excluded-command pattern (inline input; `Enter` submits, `Esc` cancels). |
+| `e` | Exclusions | Edit the highlighted pattern in place (inline input seeded with the pattern). |
+| `d` / `Backspace` / `Delete` | Exclusions | Remove the highlighted pattern. |
+| `↑` / `↓` / `k` / `j` / `PgUp` / `PgDn` / `Space` / `g` / `G` | Effective | Scroll the viewport (line / page / top / bottom). |
+| `Esc` | Sandbox Editor | Close the editor and return to the composer. |
 
 ---
 
