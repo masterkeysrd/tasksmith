@@ -219,3 +219,97 @@ func TestBuiltinInitCommandResolves(t *testing.T) {
 		t.Fatalf("agents-md reference missing: %v", err)
 	}
 }
+
+// TestBuiltinSandboxPermissionReferences guards Task 7 of the sandbox plan:
+// both customization skills must sync their sandbox-and-permissions reference
+// through EnsureBuiltinDir, resolve on the main agent, and stay readable under
+// the embedded fallback when the mirror is unavailable.
+func TestBuiltinSandboxPermissionReferences(t *testing.T) {
+	setupTestXDG(t)
+	ws, err := Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := ws.Catalog()
+
+	resolved, err := cat.ResolveAgent("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	carrying := map[string]bool{}
+	for _, sk := range resolved.Skills {
+		carrying[sk.Metadata.Name] = true
+	}
+	for _, name := range []string{"tasksmith-customizations", "cli-customizations"} {
+		if !carrying[name] {
+			t.Fatalf("main agent does not carry skill %q", name)
+		}
+	}
+
+	builtinDir, err := EnsureBuiltinDir()
+	if err != nil {
+		t.Fatalf("EnsureBuiltinDir: %v", err)
+	}
+	for _, skill := range []string{"tasksmith-customizations", "cli-customizations"} {
+		path := filepath.Join(builtinDir, "skills", skill, "references", "sandbox-and-permissions.md")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("synced %s reference missing: %v", skill, err)
+		}
+		text := string(data)
+		if !strings.Contains(text, "sandbox.json") || !strings.Contains(text, "permissions.json") {
+			t.Fatalf("%s reference lacks sandbox.json/permissions.json guidance", skill)
+		}
+		if strings.Contains(text, "docs/guides/") {
+			t.Fatalf("%s reference contains repo-only docs/guides/ path unavailable in user workspaces", skill)
+		}
+	}
+	tsRef, err := os.ReadFile(filepath.Join(builtinDir, "skills", "tasksmith-customizations", "references", "sandbox-and-permissions.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, replOnly := range []string{"`/sandbox`", "`/permissions`", "`/workspace reload`"} {
+		if strings.Contains(string(tsRef), replOnly) {
+			t.Fatalf("tasksmith-customizations reference must stay client-agnostic; found %s", replOnly)
+		}
+	}
+
+	sk, ok := cat.GetSkill("tasksmith-customizations")
+	if !ok {
+		t.Fatal("tasksmith-customizations skill missing")
+	}
+	text, err := sk.Def.Render(&warp.SkillRenderOptions{
+		Workspace: cat.WorkspaceSpec(),
+		Project:   cat.Project(),
+	})
+	if err != nil || !strings.Contains(text, "references/sandbox-and-permissions.md") {
+		t.Fatalf("tasksmith-customizations render: %v", err)
+	}
+
+	// Embedded fallback: block the XDG data mirror and confirm both skills
+	// still resolve and render the new reference from embedded resources.
+	root := t.TempDir()
+	dataHome := filepath.Join(root, "blocked")
+	if err := os.WriteFile(dataHome, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	xdg.ClearCache()
+	fallback, err := Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"tasksmith-customizations", "cli-customizations"} {
+		fbSk, ok := fallback.Catalog().GetSkill(name)
+		if !ok {
+			t.Fatalf("embedded fallback missing skill %q", name)
+		}
+		fbText, err := fbSk.Def.Render(&warp.SkillRenderOptions{
+			Workspace: fallback.Catalog().WorkspaceSpec(),
+			Project:   fallback.Catalog().Project(),
+		})
+		if err != nil || !strings.Contains(fbText, "references/sandbox-and-permissions.md") {
+			t.Fatalf("fallback render for %s: %v", name, err)
+		}
+	}
+}

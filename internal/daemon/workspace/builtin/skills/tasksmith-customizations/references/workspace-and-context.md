@@ -99,6 +99,8 @@ Shared analysis skills and commands.
 
 TaskSmith evaluates these workspace patterns against the called tool before permission modes and allow rules using WARP's resource-level policy matcher, which supports short names, `namespace/name`, and fully qualified tool patterns as well as `readOnly`, `ask`, `dangerous`, and `openWorld` actions; passing the policy does not automatically grant execution. A workspace `ask` action forces approval unless a matching user allow rule grants the plan. Agent tool policies are resolved separately and combined with the workspace ceiling; see `agents.md`.
 
+Policies are a monotonic ceiling only: `WORKSPACE.md` and `.agents/` manifests can narrow what a session may do, but they can never widen the user's `sandbox.json` isolation posture or `permissions.json` rules. For those layers' schemas, merge semantics, and the escape-hatch namespaces, see `sandbox-and-permissions.md`.
+
 ## Workspace example
 
 ```markdown

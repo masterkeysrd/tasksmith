@@ -4,10 +4,10 @@ kind: Skill
 metadata:
   name: tasksmith-customizations
   displayName: TaskSmith Customizations
-  description: Author, configure, and maintain TaskSmith workspace resources including Rules, Skills, Agents, Commands, Decisions, Tools, MCP servers, Model Providers, Plugins, and WORKSPACE.md / AGENTS.md files.
+  description: Author, configure, and maintain TaskSmith workspace resources including Rules, Skills, Agents, Commands, Decisions, Tools, MCP servers, Model Providers, Plugins, and WORKSPACE.md / AGENTS.md files, plus daemon-side sandbox and permission configuration (sandbox.json isolation posture and permissions.json rules).
 spec:
-  useWhen: "Creating, editing, or configuring TaskSmith rules (*.rule.md), skills (SKILL.md), agents (*.agent.md), commands (*.command.md), decisions (*.decision.md), custom tools (*.tool.md), MCP servers, model providers (*.provider.yaml), plugins (PLUGIN.md or PLUGIN.yaml), WORKSPACE.md, or AGENTS.md."
-  keywords: [rule, rules, skill, agent, subagent, command, decision, tool, mcp, provider, plugin, workspace.md, agents.md]
+  useWhen: "Creating, editing, or configuring TaskSmith rules (*.rule.md), skills (SKILL.md), agents (*.agent.md), commands (*.command.md), decisions (*.decision.md), custom tools (*.tool.md), MCP servers, model providers (*.provider.yaml), plugins (PLUGIN.md or PLUGIN.yaml), WORKSPACE.md, or AGENTS.md; or configuring sandboxing, host path access (allowWrite/denyWrite/denyRead/allowRead), network domain filtering (open/allowlist/disabled), excludedCommands, or permission allow/deny rules."
+  keywords: [rule, rules, skill, agent, subagent, command, decision, tool, mcp, provider, plugin, workspace.md, agents.md, sandbox, sandbox.json, permissions, permissions.json, allowwrite, denywrite, denyread, allowread, allowlist, excludedcommands, network, isolation]
 ---
 
 # TaskSmith Customizations
@@ -55,5 +55,6 @@ Never move a credential out of another tool's store, such as a CLI keyring, into
 | Plugins | `references/workspace-and-context.md` | Repository root `PLUGIN.md` or `PLUGIN.yaml` |
 | Workspace and project context | `references/workspace-and-context.md` | `WORKSPACE.md`, `AGENTS.md` |
 | AGENTS.md authoring | `references/agents-md.md` | Repository root or project `AGENTS.md` |
+| Sandbox & permissions configuration | `references/sandbox-and-permissions.md` | `sandbox.json`, `permissions.json`, `WORKSPACE.md` `spec.policies.tools` |
 
 Discovery is not the same as execution: TaskSmith resolves and injects Rule resources and connects the MCP servers its definitions declare, but it does not currently evaluate Decision resources. See the references for the actual runtime behavior and schemas.

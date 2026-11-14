@@ -4,18 +4,19 @@ kind: Skill
 metadata:
   name: cli-customizations
   displayName: CLI Customizations
-  description: Configure TaskSmith's interactive CLI settings such as the REPL status line composition and the color theme by editing their XDG config files or driving the /statusline view.
+  description: Configure TaskSmith's interactive CLI settings such as the REPL status line composition and the color theme by editing their XDG config files or driving the /statusline view, and drive the interactive /sandbox and /permissions editors, --sandbox startup flag, and ! shell mode.
 spec:
-  useWhen: "The user asks to change, hide, reorder, or configure the status line, status bar segments, compact mode, colors, or theme, or asks how the interactive CLI is customized."
-  keywords: [statusline, status line, status bar, segment, compact, theme, colors, cli settings, appearance]
+  useWhen: "The user asks to change, hide, reorder, or configure the status line, status bar segments, compact mode, colors, or theme; asks how the interactive CLI is customized; or wants to inspect or change sandboxing, isolation posture, excluded commands, or permission allow/deny rules from inside the REPL via /sandbox, /permissions, --sandbox, or ! commands."
+  keywords: [statusline, status line, status bar, segment, compact, theme, colors, cli settings, appearance, sandbox, /sandbox, permissions, /permissions, --sandbox, shell mode, ! command, excluded commands]
 ---
 
 # CLI Customizations
 
 TaskSmith's interactive CLI keeps user-facing appearance settings in small JSON files under
-`$XDG_CONFIG_HOME/tasksmith/`. Two surfaces exist today: the REPL status line and the color
-theme. Prefer the in-app view when the user is inside the REPL; edit the JSON file directly when
-working non-interactively or applying a workspace-wide default.
+`$XDG_CONFIG_HOME/tasksmith/` and exposes safety-relevant posture through dedicated in-app
+views. Surfaces today: the REPL status line, the color theme, the `/sandbox` editor, and the
+`/permissions` rule browser. Prefer the in-app view when the user is inside the REPL; edit the
+JSON file directly when working non-interactively or applying a workspace-wide default.
 
 ## Status line
 
@@ -39,6 +40,29 @@ Quick rules:
 Colors come from `$XDG_CONFIG_HOME/tasksmith/theme.json`. It is optional; when absent, the
 built-in theme applies. Only edit it when the user explicitly asks about colors or theming, and
 never invent color keys — mirror the structure of an existing theme file.
+
+## Sandbox & permissions
+
+`/sandbox` opens a three-tab editor over the workspace's isolation posture (`1 Policy`,
+`2 Exclusions`, `3 Effective`); `/permissions` (aliases `/perm`, `/perms`) browses and edits the
+project and global allow/deny rule lists. `--sandbox native|local` selects the kernel backend for
+sessions the client creates, and `!command` on an empty composer line runs a shell command
+directly through the daemon. Full keybindings, scope semantics, and when to prefer the view over
+editing `sandbox.json` by hand live in `references/sandbox-and-permissions.md` — read it before
+driving either view.
+
+Quick rules:
+
+- Sandbox edits save per scope (Project → `$XDG_DATA_HOME/tasksmith/workspaces/<hash>/sandbox.json`,
+  Global → `~/.config/tasksmith/sandbox.json`). Saving through `/sandbox` live-refreshes open
+  sessions' runtime sandbox policies (filesystem paths, network posture and proxy domain lists,
+  `allowUnsandboxed`, `autoAllowBash`, and `excludedCommands`), whereas hand-edits on disk need
+  `/workspace reload`. Only the `mode` backend (`native` vs `local`) is fixed at session creation
+  and applies to sessions created afterwards.
+- Never edit `sandbox.json` or `permissions.json` with file tools: both stores are write-denied
+  to tools by design. Drive the views or hand the user the exact JSON snippet instead.
+- The permission mode badge in the status line is safety-relevant; pair posture changes with it
+  when explaining what will and won't prompt.
 
 ## Etiquette
 
