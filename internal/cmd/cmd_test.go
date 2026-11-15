@@ -29,6 +29,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -276,20 +277,82 @@ func TestDaemonStatusStartAndStopCommands(t *testing.T) {
 	}
 }
 
-func feedMockREPLInput(b *mock.Backend, lines ...string) {
+func waitForMockCondition(ctx context.Context, cond func() bool) bool {
+	if cond() {
+		return true
+	}
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+			if cond() {
+				return true
+			}
+		}
+	}
+}
+
+func composerText(surface string) string {
+	lines := strings.Split(surface, "\n")
+	bottom := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "───") && strings.Trim(trimmed, "─") == "" {
+			if bottom == -1 {
+				bottom = i
+				continue
+			}
+			return strings.Join(lines[i+1:bottom], "\n")
+		}
+	}
+	return ""
+}
+
+func feedMockREPLInput(ctx context.Context, b *mock.Backend, lines ...string) {
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		// Wait until the REPL renders its initial frame so UseEffect has
+		// attached composer focus and key listeners before events arrive.
+		if !waitForMockCondition(ctx, func() bool {
+			return b.LastFrame().Surface != nil && strings.Contains(composerText(testutils.SurfaceText(b)), ">")
+		}) {
+			return
+		}
+
 		for _, line := range lines {
 			for _, r := range line {
 				b.PostEvent(&backend.RawKeyEvent{
 					Key: key.Key{Code: r, Text: string(r)},
 				})
-				time.Sleep(2 * time.Millisecond)
 			}
-			b.PostEvent(&backend.RawKeyEvent{
-				Key: key.Key{Code: key.KeyEnter},
-			})
-			time.Sleep(50 * time.Millisecond)
+			if !waitForMockCondition(ctx, func() bool {
+				_, _, restore, _ := b.Counts()
+				return restore > 0 || strings.Contains(composerText(testutils.SurfaceText(b)), line)
+			}) {
+				return
+			}
+
+			// Retry Enter if the async slash-command completion query was
+			// still in flight and swallowed the key press.
+			for {
+				b.PostEvent(&backend.RawKeyEvent{
+					Key: key.Key{Code: key.KeyEnter},
+				})
+				attemptCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+				submitted := waitForMockCondition(attemptCtx, func() bool {
+					_, _, restore, _ := b.Counts()
+					return restore > 0 || !strings.Contains(composerText(testutils.SurfaceText(b)), line)
+				})
+				cancel()
+				if submitted {
+					break
+				}
+				if ctx.Err() != nil {
+					return
+				}
+			}
 		}
 	}()
 }
@@ -303,13 +366,15 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	}
 
 	// 1. Verify starting REPL and running slash commands without sending a prompt creates 0 sessions
+	ctx1, cancel1 := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel1()
 	b1 := mock.New(80, 24)
-	feedMockREPLInput(b1,
+	feedMockREPLInput(ctx1, b1,
 		"/mode plan",
 		"/new claude-opus-4-6",
 		"/exit",
 	)
-	if err := cli.Run(context.Background(), cli.Options{
+	if err := cli.Run(ctx1, cli.Options{
 		Client:    c,
 		Workspace: wsDir,
 		Backend:   b1,
@@ -338,9 +403,11 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
+	ctx2, cancel2 := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel2()
 	b2 := mock.New(80, 24)
-	feedMockREPLInput(b2, "/exit")
-	if err := cli.Run(context.Background(), cli.Options{
+	feedMockREPLInput(ctx2, b2, "/exit")
+	if err := cli.Run(ctx2, cli.Options{
 		Client:    c,
 		Workspace: wsDir,
 		SessionID: sess.ID,
@@ -375,12 +442,14 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		socket:    sockPath,
 	}
 
+	ctx3, cancel3 := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel3()
 	var bufActive bytes.Buffer
 	cmdActive := &cobra.Command{}
 	cmdActive.SetOut(&bufActive)
-	cmdActive.SetContext(context.Background())
+	cmdActive.SetContext(ctx3)
 	b3 := mock.New(80, 24)
-	feedMockREPLInput(b3, "/exit")
+	feedMockREPLInput(ctx3, b3, "/exit")
 
 	if err := runREPL(cmdActive, rootOpts, &replOptions{sessionID: sess.ID, backend: b3}); err != nil {
 		t.Fatalf("runREPL active session: %v", err)
@@ -395,12 +464,14 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		}
 	}
 
+	ctx4, cancel4 := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel4()
 	var bufDraft bytes.Buffer
 	cmdDraft := &cobra.Command{}
 	cmdDraft.SetOut(&bufDraft)
-	cmdDraft.SetContext(context.Background())
+	cmdDraft.SetContext(ctx4)
 	b4 := mock.New(80, 24)
-	feedMockREPLInput(b4, "/exit")
+	feedMockREPLInput(ctx4, b4, "/exit")
 
 	if err := runREPL(cmdDraft, rootOpts, &replOptions{backend: b4}); err != nil {
 		t.Fatalf("runREPL draft session: %v", err)
