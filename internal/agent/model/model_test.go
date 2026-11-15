@@ -278,6 +278,3 @@ func TestCreateProvider_Antigravity_BearerFile(t *testing.T) {
 		t.Fatal("expected non-nil provider")
 	}
 }
-
-
-

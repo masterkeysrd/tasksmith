@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/loom/llm"
-	loomantigravity "github.com/masterkeysrd/loom/llm/antigravity"
 	"github.com/masterkeysrd/loom/llm/anthropic"
+	loomantigravity "github.com/masterkeysrd/loom/llm/antigravity"
 	"github.com/masterkeysrd/loom/llm/genai"
 	"github.com/masterkeysrd/loom/llm/ollama"
 	"github.com/masterkeysrd/loom/llm/openai"
