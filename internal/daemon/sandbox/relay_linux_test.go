@@ -40,6 +40,16 @@ func TestRelayServeArgumentValidation(t *testing.T) {
 	}
 }
 
+func TestBringLoopbackUpWhenAlreadyUp(t *testing.T) {
+	iface, err := net.InterfaceByName("lo")
+	if err != nil || iface.Flags&net.FlagUp == 0 {
+		t.Skipf("loopback interface lo is not already up: iface=%v err=%v", iface, err)
+	}
+	if err := bringLoopbackUp(); err != nil {
+		t.Fatalf("bringLoopbackUp() with lo already up returned error: %v", err)
+	}
+}
+
 // TestRelayServeBridgesTCPToUnixSocket exercises the exact child-side flow:
 // an HTTP client configured with the relay's loopback port as its proxy
 // reaches a minimal HTTP-proxy responder through the Unix socket, which is

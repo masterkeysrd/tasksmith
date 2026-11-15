@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
@@ -75,6 +76,12 @@ func RelayServe(ctx context.Context, unixSocket string, port int) error {
 // answers, then execs the real target in place. When the target exits the
 // process group is killed, which tears the relay server down with it.
 func RunSandboxRelay(unixSocket string, port int, target string, args []string) error {
+	// Keep Start and Exec on the same OS thread: Linux evaluates Pdeathsig
+	// against the thread that forked the helper, and Exec tears down every
+	// other thread in the thread group before launching target.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if err := bringLoopbackUp(); err != nil {
 		return err
 	}

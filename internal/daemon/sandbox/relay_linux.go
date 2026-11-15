@@ -6,18 +6,22 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
-// bringLoopbackUp brings the loopback interface up inside the current network
-// namespace with a single netlink RTM_SETLINK request. A fresh namespace
-// created by bwrap --unshare-net has lo administratively down, which makes
-// every 127.0.0.1 connect fail with ENETUNREACH; the sandbox relay needs lo
-// to accept the child's proxy connections. Using netlink directly avoids a
-// dependency on iproute2 or nsenter inside the sandbox.
+// bringLoopbackUp ensures the loopback interface is up inside the current
+// network namespace. Bubblewrap with --unshare-net configures lo (127.0.0.1/8
+// and IFF_UP) before dropping capabilities, so unprivileged sandboxed children
+// lack CAP_NET_ADMIN for RTM_SETLINK; return early when lo is already up. When
+// lo is still down (e.g. a bare unshared namespace), raise it with a netlink
+// RTM_SETLINK request so the relay can bind 127.0.0.1 without iproute2.
 func bringLoopbackUp() error {
+	if iface, err := net.InterfaceByName("lo"); err == nil && iface.Flags&net.FlagUp != 0 {
+		return nil
+	}
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_ROUTE)
 	if err != nil {
 		return fmt.Errorf("sandbox: open netlink socket: %w", err)
