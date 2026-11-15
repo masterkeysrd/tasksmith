@@ -878,11 +878,9 @@ func TestStatusLineCommandDoesNotCorruptLayoutOrSegments(t *testing.T) {
 		t.Fatalf("expected initial statusline segments with separators, got:\n%s", initial)
 	}
 
-	// Type /statusline and press Enter. The slash-command completion popup
-	// resolves asynchronously and swallows Enter while a query for the
-	// current draft is still in flight. The candidate row can already be
-	// painted from the previous keystroke's result, so seeing the settled
-	// description does not guarantee the final query has landed.
+	// Type /statusline and press Enter. Wait until the /statusline query itself
+	// has settled (no /stats sibling from earlier /stat prefix results), then
+	// submit, retrying Enter once if an async frame transition still swallowed it.
 	editorOpen := func(text string) bool {
 		return strings.Contains(text, "Status line configuration")
 	}
@@ -890,12 +888,11 @@ func TestStatusLineCommandDoesNotCorruptLayoutOrSegments(t *testing.T) {
 		app.Press(key.Key{Code: ch, Text: string(ch)})
 	}
 	app.WaitFor(func(text string) bool {
-		return strings.Contains(text, "Configure the REPL status line segments")
+		return strings.Contains(text, "Configure the REPL status line segments") &&
+			!strings.Contains(text, "/stats")
 	})
 	app.Press(key.Key{Code: key.KeyEnter})
 	if !strings.Contains(app.WaitUntil(editorOpen, 500*time.Millisecond), "Status line configuration") {
-		// The Enter landed mid-query and was swallowed by design; the local
-		// completion query has settled by now, so submitting again takes.
 		app.Press(key.Key{Code: key.KeyEnter})
 	}
 

@@ -3,6 +3,7 @@ package testutils
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
@@ -102,6 +103,30 @@ func TestAppWaitForResolvesAsynchronousUpdate(t *testing.T) {
 	})
 	if !strings.Contains(got, "eventually") {
 		t.Fatalf("WaitFor returned %q", got)
+	}
+}
+
+func TestAppWaitForPumpsFramesOnNewApp(t *testing.T) {
+	asyncLabel := trail.SimpleFC("AsyncLabel", func() trail.Node {
+		text, setText := kitex.UseState("pending")
+		kitex.UseEffect(func() {
+			go func() {
+				time.Sleep(15 * time.Millisecond)
+				setText("ready")
+			}()
+		}, []any{})
+		return label(labelProps{text()})
+	})
+
+	app := NewApp(t, asyncLabel(), 40, 5)
+	if got := app.Text(); !strings.Contains(got, "pending") {
+		t.Fatalf("initial Text() = %q, want pending", got)
+	}
+	got := app.WaitFor(func(text string) bool {
+		return strings.Contains(text, "ready")
+	})
+	if !strings.Contains(got, "ready") {
+		t.Fatalf("WaitFor returned %q, want ready", got)
 	}
 }
 

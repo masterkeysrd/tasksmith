@@ -223,14 +223,20 @@ func (a *App) AwaitFrame(timeout time.Duration) string {
 // returns the last text seen. It never fails the test, so callers can assert with
 // their own message. Use [App.WaitFor] to fail fast with the last frame included.
 func (a *App) WaitUntil(cond func(string) bool, timeout time.Duration) string {
+	frameText := func() string {
+		if a.Instance != nil {
+			a.Frame()
+		}
+		return SurfaceText(a.Backend)
+	}
 	deadline := time.Now().Add(timeout)
-	text := SurfaceText(a.Backend)
+	text := frameText()
 	for time.Now().Before(deadline) {
 		if cond(text) {
 			return text
 		}
 		time.Sleep(waitInterval)
-		text = SurfaceText(a.Backend)
+		text = frameText()
 	}
 	return text
 }
