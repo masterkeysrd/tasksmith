@@ -40,14 +40,38 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+homebrew_casks:
+  - name: tasksmith
+    binaries:
+      - tasksmith
+    directory: Casks
+    homepage: "https://github.com/masterkeysrd/tasksmith"
+    description: "Extensible, daemon-backed AI coding agent for the terminal with OS-level sandboxing"
+    license: "Apache-2.0"
+    skip_upload: auto
+    commit_msg_template: "chore(brew): update {{ .ProjectName }} cask for {{ .Tag }}"
+    repository:
+      owner: masterkeysrd
+      name: tasksmith
+      branch: main
+    hooks:
+      post:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/tasksmith"]
+          end
+
 changelog:
   sort: asc
   filters:
     exclude:
       - "^docs:"
       - "^test:"
+      - "^chore\\(brew\\):"
 
 release:
+  extra_files:
+    - glob: ./scripts/install.sh
   footer: >-
 
     ---

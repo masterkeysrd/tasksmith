@@ -7,40 +7,21 @@ The **Permission & Guard Engine** is the security enforcement subsystem in TaskS
 ## 1. Architectural Overview
 
 ```mermaid
-flowchart TD
-    subgraph Invocation ["Tool Invocation"]
-        ToolCall["Tool Call Request\n(bash, edit, write, view, web_fetch)"]
-    end
+flowchart LR
+    Call(["Tool Call"]) --> Mode["1. Session Mode\ndefault · plan · auto"]
+    Mode --> Path["2. Path Guard\nWorkspace boundary"]
+    Path --> Shell["3. Shell AST Guard\nCompound syntax check"]
+    Shell --> Rules["4. Rule Engine\ndeny → allow → ask"]
 
-    subgraph EvaluationPipeline ["Layered Permission Pipeline"]
-        ModeCheck{"Session Mode Check\n(default | plan | auto)"}
-        PathGuard{"Path Confinement (guard)\nWithin Workspace Boundary?"}
-        ShellGuard{"Shell AST Inspection (shellguard)\nCompound Syntax Analysis"}
-        RuleEngine{"Rule Matching Hierarchy\n(deny -> allow -> ask)"}
-    end
+    Rules -->|allow| Exec(["Execute in Sandbox"])
+    Rules -->|ask| Prompt["CLI Approval Prompt"]
+    Prompt -->|Approve| Exec
 
-    subgraph Resolution ["Resolution & Dispatch"]
-        AutoExecute["Auto-Approved\n(Execute in Sandbox)"]
-        UserPrompt["Interactive Prompt\n(CLI Approval Request)"]
-        Reject["Access Denied\n(Return Security Error)"]
-    end
-
-    ToolCall --> ModeCheck
-    ModeCheck -->|Plan Mode & Mutating Tool| Reject
-    ModeCheck -->|Allowed by Mode| PathGuard
-
-    PathGuard -->|Path Traversal / Escape| Reject
-    PathGuard -->|Path Confined| ShellGuard
-
-    ShellGuard -->|Destructive / Blocked Pattern| Reject
-    ShellGuard -->|Syntactically Safe| RuleEngine
-
-    RuleEngine -->|Explicit Deny| Reject
-    RuleEngine -->|Explicit Allow| AutoExecute
-    RuleEngine -->|Explicit Ask / Default| UserPrompt
-
-    UserPrompt -->|User Approves (once, session, workspace)| AutoExecute
-    UserPrompt -->|User Denies| Reject
+    Mode -.->|Plan mutation| Deny(["Access Denied"])
+    Path -.->|Path escape| Deny
+    Shell -.->|Unsafe AST| Deny
+    Rules -.->|deny| Deny
+    Prompt -.->|Deny| Deny
 ```
 
 ---
@@ -65,6 +46,15 @@ File manipulation tools (`view`, `edit`, `write`, `glob`) use workspace boundari
 - **Boundary Validation**: Traversal attempts (`../../etc/passwd`) or symlinks resolving to external files are immediately blocked at the guard layer before reaching the sandbox filesystem capability.
 
 ### 4. Scoped Approvals & Persistence
+
+```mermaid
+flowchart LR
+    Prompt["CLI Approval Prompt"] -->|once| Once["Single In-Flight Call"]
+    Prompt -->|session| Sess["In-Memory Session Store"]
+    Prompt -->|workspace| WS["Workspace State\nworkspaces/<hash>/permissions.json"]
+    Prompt -->|global| Glob["Global Config\n~/.config/tasksmith/permissions.json"]
+```
+
 When a tool invocation requires explicit user approval, the interactive prompt allows the user to scope their decision:
 - **`once`**: Applies exclusively to the single in-flight tool call.
 - **`session`**: Stored in-memory for the duration of the active CLI session, auto-approving matching invocations until exit.

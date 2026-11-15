@@ -7,47 +7,21 @@ The **Agent Execution Harness** (`internal/daemon/harness`) is the core executio
 ## 1. Architectural Overview
 
 ```mermaid
-flowchart TD
-    subgraph InputLayer ["Turn Ingestion"]
-        UserTurn["User Prompt / Slash Command"]
-        ContextBuild["Context Assembly & State Evaluation"]
-    end
+flowchart LR
+    Start(["Turn Start"]) --> Cmd["command\nSlash Expansion"]
+    Cmd --> Inbox["inbox\nQueue & Rules"]
+    Inbox --> Agent["agent\nStreaming LLM"]
+    Inbox -->|Queue Drained| End(["Turn End"])
 
-    subgraph ExecutionGraph ["Stateful Execution Graph (Loom)"]
-        EntryRouter{"Should Compact?"}
-        CompactNode["Compaction Node\n(In-Chat Distillation & State Replacement)"]
-        InboxNode["Inbox / Queue Node\n(Command & Message Dequeuing)"]
-        AgentNode["Agent Node\n(Streaming LLM Inference & Reasoning)"]
-        ToolEval{"Requires Tool Calls?"}
-        ToolsNode["Tools Node\n(Container Execution & Output Capture)"]
-        PostToolRouter{"Context Exceeds Trigger?"}
-    end
+    Agent -->|Tool Calls| Tools["tools\nSandbox Execution"]
+    Agent -.->|Drain Next| Cmd
 
-    subgraph Suspension ["Interactive Suspension Boundary"]
-        PermGate{"Permission or Question Required?"}
-        SuspendState["Harness Suspended\n(State Checkpointed to Journal)"]
-        UserResolve["User Grants / Answers via CLI"]
-    end
-
-    UserTurn --> ContextBuild --> EntryRouter
-    EntryRouter -->|Manual / Over Budget| CompactNode
-    EntryRouter -->|Normal Flow| InboxNode
-    CompactNode -->|Auto-Compacted| AgentNode
-    CompactNode -->|Manual Complete| Finish["Emit Final Turn Response"]
-    InboxNode --> AgentNode
-    AgentNode --> ToolEval
-    ToolEval -->|No (Final Response)| Finish
-    ToolEval -->|Yes| PermGate
-
-    PermGate -->|Approval Needed| SuspendState
-    SuspendState --> UserResolve
-    UserResolve -->|Resume Execution| ToolsNode
-
-    PermGate -->|Approved / Allowed| ToolsNode
-    ToolsNode --> PostToolRouter
-    PostToolRouter -->|Exceeds Trigger| CompactNode
-    PostToolRouter -->|Within Budget| InboxNode
-    ToolsNode -->|Tool Results Feedback| AgentNode
+    Tools -.->|Feedback| Inbox
+    Tools -.->|Over Trigger| Compact["compact\nIn-Chat Summary"]
+    Inbox -->|Over Trigger| Compact
+    Start -->|Manual /compact| Compact
+    Compact -->|Auto| Agent
+    Compact -->|Manual| End
 ```
 
 ---
@@ -56,11 +30,21 @@ flowchart TD
 
 ### 1. Graph-Driven Turn Loop
 The harness structures agent turns as a directed execution graph built on Loom's graph runtime:
-- **Node Pipeline**: Inbound turns transition through dedicated graph nodes—`command` (slash command expansion), `inbox` (queued message assembly), `agent` (LLM invocation), and `tools` (tool execution).
-- **Autonomous Feedback Loop**: When the model emits tool calls, the `tools` node executes them inside the session's sandbox container, formats stdout/stderr and structured content, and feeds the outputs directly back into the `agent` node for subsequent reasoning steps. The loop continues autonomously until the model satisfies the objective or halts.
+- **Node Pipeline**: Inbound turns transition through dedicated graph nodes—`command` (slash command expansion), `inbox` (queued message assembly), `agent` (LLM invocation), `tools` (tool execution), and `compact` (context distillation).
+- **Autonomous Feedback Loop**: When the model emits tool calls, the `tools` node executes them inside the session's sandbox container, formats stdout/stderr and structured content, and feeds the outputs back through `inbox` into the `agent` node for subsequent reasoning steps. The loop continues autonomously until the model satisfies the objective and the session queue drains.
 - **Ambient Injection**: The `inbox` and `tools` nodes additionally resolve workspace rule triggers against incoming messages and executed tool batches, appending hidden system reminders to the history (see [Ambient Context Injection](#5-ambient-context-injection-rules-skills--system-reminders)).
 
 ### 2. Interactive Suspension & Resumption
+
+```mermaid
+flowchart LR
+    Batch["Tool Call Batch"] --> Gate{"Auth or Question?"}
+    Gate -->|Allowed| Exec["Execute in Sandbox"]
+    Gate -->|Needs Input| Checkpoint["Checkpoint State\n(waiting_permission / waiting_question)"]
+    Checkpoint --> Resolve["User Grants / Answers in CLI"]
+    Resolve -.->|Resume at tools| Exec
+```
+
 AI agents often encounter sensitive actions or require user clarification mid-turn:
 - **Zero-Block Suspension**: Calls that require authorization or trigger an interactive prompt (`ask_question`) remain pending, while other allowed calls in the same batch execute before the harness suspends.
 - **Durable Checkpointing**: The graph state, unfulfilled tool calls, and pending questions are serialized to the session journal, placing the session in `waiting_permission` or `waiting_question` state.

@@ -4,6 +4,29 @@ TaskSmith provides a rich, responsive Terminal User Interface (TUI) built for au
 
 ---
 
+## Installation
+
+Install prebuilt binaries on macOS or Linux via **Homebrew**:
+
+```bash
+brew tap masterkeysrd/tasksmith https://github.com/masterkeysrd/tasksmith
+brew install masterkeysrd/tasksmith/tasksmith
+```
+
+Install via the **shell installer** (installs to `~/.local/bin` with SHA-256 checksum verification):
+
+```bash
+curl -fsSL https://github.com/masterkeysrd/tasksmith/releases/latest/download/install.sh | sh
+```
+
+Or install from source using **Go 1.26+**:
+
+```bash
+go install github.com/masterkeysrd/tasksmith/cmd/tasksmith@latest
+```
+
+---
+
 ## Starting TaskSmith
 
 ### Launching in a Project Directory

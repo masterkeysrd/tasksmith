@@ -28,12 +28,17 @@ flowchart TD
     end
 
     subgraph Providers ["Upstream Provider Clients"]
+        direction TB
         Anthropic["Anthropic"]
         OpenAI["OpenAI"]
         Ollama["Ollama"]
         TypeSafe["TypeSafe"]
         GenAI["Google GenAI"]
         Antigravity["Antigravity"]
+
+        Anthropic ~~~ TypeSafe
+        OpenAI ~~~ GenAI
+        Ollama ~~~ Antigravity
     end
 
     WS1 & WS2 -->|Same Config Hash| Pool

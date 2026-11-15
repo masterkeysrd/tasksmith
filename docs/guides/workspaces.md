@@ -172,27 +172,17 @@ For detailed information on authentication schemes, provider manifests, and lazy
 When TaskSmith is launched in a directory for the first time, it performs a deterministic security check before creating any session or accessing repository configuration:
 
 ```mermaid
-flowchart TD
-    A["Launch tasksmith in directory"] --> T{"Trusted in trust.json?"}
-    T -->|"No / Changed"| TS["1. Trust Prompt"]
-    T -->|"Yes"| C{"WORKSPACE.md / .agents present?"}
-    TS -->|"Trust"| C
-    TS -->|"Restricted"| R["Restricted Session\n(Read-only, no project tools/MCPs/.env)"]
-    TS -->|"Exit"| X["Exit CLI"]
-    C -->|"Yes (Team Config)"| V{"Credentials Resolvable?"}
-    V -->|"Yes"| H["Session Home"]
-    V -->|"No"| CR["Credentials Only"] --> H
-    C -->|"No (Unconfigured)"| G{"Global Providers Available?"}
-    G -->|"Yes"| PS["2. Provider Source\n(Reuse Global or Configure Workspace)"]
-    G -->|"No"| PP["2b. Provider & Scope"]
-    PS -->|"Global"| MD["4. Default Mode"]
-    PS -->|"Workspace"| PP
-    PP --> CRD["3. Credentials\n(Real-time verification)"] --> MD
-    MD --> TL["5. Tools & MCPs\n(Exclude tools / global MCPs)"]
-    TL --> RV["6. Review & Write\n(Review manifests and write configuration)"]
-    RV --> I{"AGENTS.md Exists?"}
-    I -->|"No"| OI["Offer /init\n(Run system:init to scaffold instructions)"] --> H
-    I -->|"Yes"| H
+flowchart LR
+    Launch(["Launch tasksmith"]) --> Trust["Trust Gate\ntrust.json"]
+    Trust -->|Trusted| Config["Workspace Config?\nWORKSPACE.md · .agents"]
+    Trust -.->|Restricted| Restrict(["Restricted Session\nNo repo tools · MCPs · .env"])
+    Trust -.->|Exit| Exit(["Exit CLI"])
+
+    Config -->|Configured| Creds["Credentials\nReady?"]
+    Config -->|Unconfigured| Setup(["Launch /setup Wizard"])
+
+    Creds -->|Yes| Home(["Session Home"])
+    Creds -->|Missing| Prompt["Prompt Credentials"] --> Home
 ```
 
 ### 1. Trust Model (`trust.json`)
@@ -212,6 +202,17 @@ To protect your system from executing untrusted scripts, MCP servers, or environ
 ### 2. Interactive Setup Wizard (`/setup`)
 
 The setup wizard can be re-run at any time using the `/setup` slash command. It provides a cohesive configuration hub:
+
+```mermaid
+flowchart LR
+    S1["1. Provider\nSource"] -->|Workspace| S2["2. Provider\n& Scope"]
+    S2 --> S3["3. Verify\nCredentials"]
+    S3 --> S4["4. Mode &\nTool Toggles"]
+    S1 -.->|Reuse Global| S4
+    S4 --> S5["5. Review\n& Write"]
+    S5 -->|AGENTS.md present| Home(["Session Home"])
+    S5 -.->|No AGENTS.md| Init["Offer /init"] --> Home
+```
 
 1. **Provider Source**: Choose whether to inherit shared model providers from `~/.config/tasksmith/` or configure project-specific settings.
 2. **Provider & Scope**: Select provider preset (e.g., Anthropic, OpenAI, Ollama, Gemini) and target persistence scope:

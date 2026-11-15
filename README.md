@@ -74,13 +74,26 @@ Built-in driver support and presets include:
 ## Quick Start
 
 ### Prerequisites
-- **Go**: Version 1.26 or later
 - **Operating System**: macOS or Linux
+- **Go**: Version 1.26 or later *(only required when installing via `go install` or building from source)*
 - **Optional**: [ripgrep](https://github.com/BurntSushi/ripgrep) for ultra-fast code search, [Ollama](https://ollama.com) for local offline inference
 
 ### 1. Installation
 
-Install via `go install`:
+Install via **Homebrew** (macOS & Linux):
+
+```bash
+brew tap masterkeysrd/tasksmith https://github.com/masterkeysrd/tasksmith
+brew install masterkeysrd/tasksmith/tasksmith
+```
+
+Install via **Shell script** (macOS & Linux — installs to `~/.local/bin` and verifies SHA-256 checksums):
+
+```bash
+curl -fsSL https://github.com/masterkeysrd/tasksmith/releases/latest/download/install.sh | sh
+```
+
+Install via **`go install`**:
 
 ```bash
 go install github.com/masterkeysrd/tasksmith/cmd/tasksmith@latest
