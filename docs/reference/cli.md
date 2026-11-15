@@ -32,7 +32,7 @@ The following flags apply to `tasksmith` and all of its subcommands:
 | Flag | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--workspace <path>` | `-w` | `.` (current directory) | Path to the target workspace root directory. Discovers `WORKSPACE.md` and `.agents/`. |
-| `--socket <path>` | | `/tmp/tsd-<uid>/b.sock` | Explicit path to the Brain daemon Unix domain socket. |
+| `--socket <path>` | | `$XDG_RUNTIME_DIR/tasksmith/brain.sock` | Explicit path to the Brain daemon Unix domain socket. When `XDG_RUNTIME_DIR` is unset, defaults to `~/.local/state/tasksmith/run/brain.sock`. |
 | `--version` | | | Print the client build version and exit. |
 | `--help` | `-h` | | Print help and usage information for any command. |
 
@@ -52,7 +52,7 @@ The following flags are accepted by `tasksmith` and `tasksmith repl` only — `t
 
 | Flag | Subcommand | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `--lock <path>` | `daemon serve` | `/tmp/tsd-<uid>/daemon.lock` | Override path for the daemon process lockfile. |
+| `--lock <path>` | `daemon serve` | `$XDG_RUNTIME_DIR/tasksmith/brain.lock` | Override path for the daemon process lockfile. |
 
 ---
 
@@ -531,9 +531,9 @@ TaskSmith adheres to the XDG Base Directory Specification for state persistence,
 | **Workspace Metadata** | `~/.local/share/tasksmith/workspaces/<hash>/workspace.json` | Workspace schema version and binary version for automated upgrade migrations. | Permanent |
 | **Workspace DB** | `~/.local/share/tasksmith/workspaces/<hash>/tasksmith.db` | SQLite database storing turn journals, messages, and session state (`$XDG_DATA_HOME`). | Permanent |
 | **Project Rules** | `~/.local/share/tasksmith/workspaces/<hash>/permissions.json` | Project-scoped persistent permission allow and deny rules. | Permanent |
-| **Fallback Socket** | `~/.local/share/tasksmith/daemon.sock` | Fallback Unix domain socket path when `/tmp` runtime dir is unavailable. | Ephemeral |
-| **Runtime Socket** | `/tmp/tsd-<uid>/b.sock` | Active Unix domain IPC socket used by CLI and daemon (`$XDG_RUNTIME_DIR`). | Ephemeral |
-| **Process Lock** | `/tmp/tsd-<uid>/daemon.lock` | File lock ensuring a single background daemon runs per user. | Ephemeral |
+| **Runtime Socket** | `$XDG_RUNTIME_DIR/tasksmith/brain.sock` | Active Unix domain IPC socket used by CLI and daemon. | Ephemeral |
+| **Fallback Socket** | `~/.local/state/tasksmith/run/brain.sock` | Socket location when `XDG_RUNTIME_DIR` is unset (runtime home resolves under `$XDG_STATE_HOME`). | Ephemeral |
+| **Process Lock** | `$XDG_RUNTIME_DIR/tasksmith/brain.lock` | File lock ensuring a single background daemon runs per user. | Ephemeral |
 | **Daemon Logs** | `~/.local/state/tasksmith/logs/daemon.jsonl` | Structured JSON Lines log file with daily rolling rotation (`$XDG_STATE_HOME`). | Permanent |
 | **Workspace Root** | `<workspace-root>/WORKSPACE.md` | Workspace declaration, project boundaries, defaults, and security policies. | Permanent |
 | **Workspace Env** | `<workspace-root>/.env` | Workspace-scoped secrets and environment variables. | Permanent |

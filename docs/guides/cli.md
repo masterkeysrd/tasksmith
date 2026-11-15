@@ -25,7 +25,7 @@ tasksmith -w ~/projects/backend-api
 
 TaskSmith separates its terminal interface from its core execution engine:
 - The **Brain Daemon** manages workspace indexing, session state, background tasks, tool sandboxes, and provider connections.
-- When you run `tasksmith`, the CLI automatically checks for a running daemon on the standard Unix domain socket (`~/.local/share/tasksmith/daemon.sock`).
+- When you run `tasksmith`, the CLI automatically checks for a running daemon on the standard Unix domain socket (`$XDG_RUNTIME_DIR/tasksmith/brain.sock`).
 - If no daemon is active, the CLI automatically spawns a detached background daemon process (`tasksmith daemon serve`) and establishes a persistent IPC connection before opening the UI.
 - If you exit the CLI, long-running background tasks and session states remain safely managed by the daemon.
 

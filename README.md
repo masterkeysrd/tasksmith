@@ -30,22 +30,22 @@ Unlike monolithic AI coding tools tied to a single vendor or unconfined host she
 ## Key Features
 
 ### 🖥️ Client-Daemon IPC & Real-Time Event Multiplexing
-- **Persistent Background Daemon**: The daemon runs as an on-demand, headless service communicating over a local Unix domain socket (`~/.local/state/tasksmith/daemon.sock`).
+- **Persistent Background Daemon**: The daemon runs as an on-demand, headless service communicating over a local Unix domain socket (`$XDG_RUNTIME_DIR/tasksmith/brain.sock`, falling back to `~/.local/state/tasksmith/run/brain.sock` when `XDG_RUNTIME_DIR` is unset).
 - **Multiplexed SSE Bus**: Real-time token streaming, tool call start/finish events, interactive permission requests, and background task progress are streamed via Server-Sent Events (`/v1/events`).
 - **Seamless Session Resumption**: Detach from a long-running turn or open multiple terminal windows against the same workspace with instantaneous state synchronization.
 - **Durable Turn Journaling**: Backed by a transactional SQLite journal that ensures conversation turns and session history survive daemon restarts.
 
 ### 🌐 Triple-Role Model Gateway
 TaskSmith completely decouples agents and skills from specific AI vendors by routing across three cognitive workload roles:
-- **System 2 (`completion`)**: Multi-turn conversational reasoning, tool dispatch, and code generation.
-- **System 1 (`decision`)**: Calibrated probabilistic classification, security gate checks, and workflow branch routing.
-- **System 3 (`embedding`)**: Dense vector generation for codebase indexing, semantic search, and long-term memory.
+- **System 2 (`completion`)**: Multi-turn conversational reasoning, tool dispatch, and code generation — the role the agent harness drives today.
+- **System 1 (`decision`)**: Calibrated probabilistic classification, security gate checks, and workflow branch routing. The gateway exposes native decision routing plus a structured-output fallback adapter, and the `decision` role is declarable on providers and models; harness-side consumers (e.g., rule `triggers.decision`) are planned and currently surface a diagnostic when declared.
+- **System 3 (`embedding`)**: Dense vector generation for codebase indexing, semantic search, and long-term memory. Embedding models are first-class catalog entries routable through the gateway; the indexing loops that will consume them are planned.
 
 Built-in driver support and presets include:
 - **OpenAI**: Native support for Chat Completions (`/v1/chat/completions`) and the modern Responses API (`/v1/responses`) with **Zero Data Retention (`store: false`)** by default, client-side encrypted reasoning continuity, native server-side tools (`webSearch`, `codeInterpreter`, `fileSearch`), and compatible endpoints (vLLM, LiteLLM, OpenRouter, Together AI).
-- **Anthropic**: Frontier reasoning (`claude-sonnet-5`, `claude-opus-5`), extended thinking (`type: effort`), and automated prompt prefix caching.
-- **Ollama**: 100% offline local inference (`qwen3.8`, `nimble-v3`, `nomic-embed-text`) with zero API token costs and zero data egress.
-- **Google GenAI**: Frontier Gemini models with 1M+ token context windows, native multimodal ingestion, and `text-embedding-004`.
+- **Anthropic**: Frontier reasoning (`claude-sonnet-5-5`, `claude-opus-5-5`), extended thinking (`type: effort`), and automated prompt prefix caching.
+- **Ollama**: 100% offline local inference (`qwen3.8`, `nemotron-3.5-lightning`, `ornith-1.5`) with zero API token costs and zero data egress.
+- **Google GenAI**: Frontier Gemini models (`gemini-4-hydrogen`) with 1M+ token context windows and native multimodal ingestion.
 - **TypeSafe**: Sub-50ms native System 1 deterministic decisions (`jev-latest`) at fractional cost.
 - **Antigravity**: Enterprise model gateway with managed thinking effort tiers.
 
@@ -74,7 +74,7 @@ Built-in driver support and presets include:
 ## Quick Start
 
 ### Prerequisites
-- **Go**: Version 1.24 or later
+- **Go**: Version 1.26 or later
 - **Operating System**: macOS or Linux
 - **Optional**: [ripgrep](https://github.com/BurntSushi/ripgrep) for ultra-fast code search, [Ollama](https://ollama.com) for local offline inference
 
@@ -128,9 +128,9 @@ If the project has not been initialized yet, TaskSmith's interactive Setup Wizar
 TaskSmith provides a rich terminal interface designed for continuous pair programming:
 
 ```text
- ╭─ TaskSmith v2.4.0 ────────────────────────────────────────── default ──╮
- │ Workspace: acme-platform [main]               Model: openai/gpt-5.5    │
- ╰────────────────────────────────────────────────────────────────────────╯
+ ╭─ TaskSmith v0.0.3 ─────────────────────────────────────────── default ──╮
+ │ Workspace: acme-platform [main]              Model: openai/gpt-6.1-sol  │
+ ╰─────────────────────────────────────────────────────────────────────────╯
 ```
 
 ### Essential Slash Commands
@@ -142,7 +142,7 @@ TaskSmith provides a rich terminal interface designed for continuous pair progra
 | `/effort` | Set Thinking Effort | Select a model-supported thinking intensity. |
 | `/budget` | Set Thinking Budget | Set a supported thinking-token budget. |
 | `/thinking` | Toggle Thinking | Turn thinking on or off when supported. |
-| `/mode` | Permission Mode | Switch operational mode (`default`, `plan`, `auto`) or press `Shift+Tab`. |
+| `/mode` | Permission Mode | Switch operational mode (`default`, `accept_edits`, `plan`, `ask`, `auto`) or press `Shift+Tab`. |
 | `/changes` | Review Diff | Inspect unified syntax-highlighted diffs of files modified in the session. |
 | `/revert` | Rollback Turn | Atomically restore modified files to their pre-turn state on disk. |
 | `/tasks` | Background Tasks | View and manage running background shell processes and compilers. |
