@@ -2,3 +2,7 @@
 env.sh
 # Added by goreleaser init:
 dist/
+# Documentation site build & dependencies
+site/node_modules/
+site/doc_build/
+site/.rspress/

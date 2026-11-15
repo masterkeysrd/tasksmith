@@ -18,11 +18,16 @@ flowchart TD
         RuntimePool["Workspace Runtime Pool\n(Content-Addressable by Root Path)"]
 
         subgraph RuntimeInstance ["Workspace Runtime Instance"]
+            direction TB
             SessCoord["Session Coordinator\n(State Machine & Store Orchestration)"]
             Timeline["Timeline & Snapshot Engine\n(Unified Diffs & Reverts)"]
             Journal["Durable SQLite Journal\n(Event Log & Turn History)"]
             PermMgr["Permission & Guard Manager\n(AST & Path Policies)"]
             MCPMgr["MCP Manager\n(Per-Workspace Connections & OAuth)"]
+
+            SessCoord ~~~ Journal
+            Timeline ~~~ PermMgr
+            Journal & PermMgr ~~~ MCPMgr
         end
 
         Gateways["Pooled Provider Gateways\n(Shared by Fingerprint)"]
