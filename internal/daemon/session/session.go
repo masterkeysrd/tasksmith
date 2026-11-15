@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/masterkeysrd/loom/tool"
@@ -336,6 +337,10 @@ type Session struct {
 	// session lock.
 	turnIDs   []string
 	turnStart time.Time
+
+	// quotaInFlight keeps at most one quota read running so the post-turn
+	// refresh and the rate-limit refresh cannot publish duplicate events.
+	quotaInFlight atomic.Bool
 
 	workspace  *workspace.Workspace   `json:"-"`
 	gateway    func() gateway.Gateway `json:"-"`

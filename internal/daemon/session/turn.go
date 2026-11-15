@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -751,6 +752,12 @@ func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 			SessionID: s.ID,
 			Error:     err.Error(),
 		})
+		// A rate limit means the quota window just changed; start the fresh
+		// read immediately. The deferred finishTurn refresh above is then
+		// dropped by the in-flight guard instead of publishing twice.
+		if gateway.IsRateLimited(err) {
+			s.publishQuota()
+		}
 	}
 	s.notifyParentUpdate()
 	if s.parent != nil && !canceled {
@@ -1001,6 +1008,11 @@ func (s *Session) finishTurn(status string) {
 	}
 
 	elapsed := time.Since(start)
+	// The quota window moved no matter how short the turn was, so refresh
+	// before the fast-turn shortcut below skips the timeline entry. When the
+	// failure path already started a refresh, the in-flight guard drops this
+	// one instead of publishing a duplicate event.
+	s.publishQuota()
 	if status == api.TurnStatusDone && elapsed < minTurnSummary {
 		return
 	}
@@ -1017,6 +1029,7 @@ func (s *Session) finishTurn(status string) {
 			rec.OutputTokens = usage.Tokens.Output
 			rec.CostNano = usage.CostNano
 			rec.Unpriced = usage.UnpricedCalls > 0
+			rec.QuotaBilled = usage.Calls > 0 && usage.QuotaCalls == usage.Calls
 		}
 	}
 

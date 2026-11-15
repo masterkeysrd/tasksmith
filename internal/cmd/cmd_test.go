@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -106,6 +107,8 @@ func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
 func (g *fakeGateway) Quota(context.Context, models.Model) (*api.ModelQuota, error) {
 	return nil, nil
 }
+
+func (g *fakeGateway) QuotaCapable(models.Model) bool { return false }
 
 func (g *fakeGateway) Close() error { return nil }
 
@@ -298,8 +301,8 @@ func waitForMockCondition(ctx context.Context, cond func() bool) bool {
 func composerText(surface string) string {
 	lines := strings.Split(surface, "\n")
 	bottom := -1
-	for i := len(lines) - 1; i >= 0; i-- {
-		trimmed := strings.TrimSpace(lines[i])
+	for i, line := range slices.Backward(lines) {
+		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "───") && strings.Trim(trimmed, "─") == "" {
 			if bottom == -1 {
 				bottom = i

@@ -17,6 +17,9 @@ type Model struct {
 	// Name is the display name.
 	Name  string
 	Label string
+	// Description is a short human-readable summary of what the model is good
+	// at, contributed by the built-in profile layer.
+	Description string
 	// ProviderType is the provider kind ("anthropic", "openai", "genai", ...).
 	// It is needed by Configure to apply provider-specific rules.
 	ProviderType string
@@ -34,6 +37,9 @@ type Model struct {
 	Aliases []string
 	// Source records where the model's data came from.
 	Source Source
+	// QuotaBilled reports that the model carries no per-token pricing and its
+	// provider reports subscription/quota capacity.
+	QuotaBilled bool
 }
 
 // SupportsCompletion reports whether the model can serve chat completion. An
@@ -79,6 +85,7 @@ func (m Model) ToAPI() api.Model {
 		Provider:     m.ID.Provider(),
 		Name:         m.Name,
 		Label:        cmp.Or(m.Label, m.Name),
+		Description:  m.Description,
 		ContextLimit: m.Limits.Context,
 		OutputLimit:  m.Limits.Output,
 		Capabilities: api.ModelCapabilities{
@@ -106,6 +113,7 @@ func (m Model) ToAPI() api.Model {
 		})
 	}
 	out.ThinkingDefault = m.DefaultThinking()
+	out.QuotaBilled = m.QuotaBilled
 	if p := m.Pricing; p != nil {
 		pricing := *p
 		pricing.Tiers = slices.Clone(p.Tiers)

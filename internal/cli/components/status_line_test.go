@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -308,5 +309,39 @@ func TestContextSegment(t *testing.T) {
 	out = renderNode(t, ContextSegment(SegmentProps{Separator: " · "}))
 	if !strings.Contains(out, "109.5k/400.0k (27%)") {
 		t.Fatalf("expected '109.5k/400.0k (27%%)' in ContextSegment, got:\n%s", out)
+	}
+}
+
+func TestUsageSegmentQuota(t *testing.T) {
+	store.ResetSession()
+	defer store.ResetSession()
+
+	store.SetSession(&api.Session{ID: "sess-quota-test"})
+	store.SetSessionModelInfo(&api.Model{ID: "pool/gemini", Name: "Gemini", QuotaBilled: true}, nil)
+	store.SetUsage(api.SessionUsage{
+		SessionID: "sess-quota-test",
+		Totals:    api.UsageGroup{Calls: 4, QuotaCalls: 4, Tokens: api.UsageTokens{Input: 2_000_000, Output: 4_900}},
+	})
+
+	// Billed but no reading yet: tokens only, never a dollar figure.
+	out := renderNode(t, UsageSegment(SegmentProps{}))
+	if strings.Contains(out, "$") {
+		t.Fatalf("quota-billed segment showed a cost before the first reading:\n%s", out)
+	}
+	if !strings.Contains(out, "↑2.0M ↓4.9k") {
+		t.Fatalf("expected token counters, got:\n%s", out)
+	}
+
+	// With a reading: remaining capacity plus reset countdown, no cost.
+	store.SetQuota(api.ModelQuota{
+		Model: "pool/gemini", RemainingFraction: 0.94,
+		ResetAt: time.Now().Add(3*time.Hour + 40*time.Minute),
+	})
+	out = renderNode(t, UsageSegment(SegmentProps{}))
+	if strings.Contains(out, "$") {
+		t.Fatalf("quota-billed segment showed a cost:\n%s", out)
+	}
+	if !strings.Contains(out, "94% (↻ 3h") || !strings.Contains(out, "↑2.0M ↓4.9k") {
+		t.Fatalf("expected quota badge with countdown and tokens, got:\n%s", out)
 	}
 }

@@ -19,7 +19,7 @@ import (
 func (r *Registry) registerUsageCommand() {
 	r.Register(Command{
 		Name:        "usage",
-		Usage:       "/usage [session|workspace|global]",
+		Usage:       "/usage [session|workspace|global|quotas]",
 		Description: "Browse token usage, cost, cache and tool metrics",
 		Handler:     handleUsage,
 	})
@@ -31,14 +31,19 @@ const (
 	usageTabSession usageTab = iota
 	usageTabWorkspace
 	usageTabGlobal
+	usageTabQuotas
 )
 
-var usageTabNames = []string{"Session", "Workspace", "Global"}
+var usageTabNames = []string{"Session", "Workspace", "Global", "Quotas"}
+
+// statsTabNames bounds the /stats browser, which has no quota windows of its
+// own: quota capacity is a cost concept and lives in /usage only.
+var statsTabNames = usageTabNames[:3]
 
 func handleUsage(args []string) error {
 	tab := usageTabSession
 	if len(args) > 1 {
-		return fmt.Errorf("usage: /usage [session|workspace|global]")
+		return fmt.Errorf("usage: /usage [session|workspace|global|quotas]")
 	}
 	if len(args) == 1 {
 		switch strings.ToLower(strings.TrimSpace(args[0])) {
@@ -47,8 +52,10 @@ func handleUsage(args []string) error {
 			tab = usageTabWorkspace
 		case "global":
 			tab = usageTabGlobal
+		case "quotas":
+			tab = usageTabQuotas
 		default:
-			return fmt.Errorf("unknown usage view %q (expected session, workspace or global)", args[0])
+			return fmt.Errorf("unknown usage view %q (expected session, workspace, global or quotas)", args[0])
 		}
 	}
 	store.EnqueueSlot(store.SlotItem{
@@ -65,12 +72,13 @@ type usageBrowserProps struct {
 	tab    usageTab
 }
 
-// usageFetch is the load state of the Workspace and Global tabs.
+// usageFetch is the load state of the Workspace, Global, and Quotas tabs.
 type usageFetch struct {
 	key     string
 	loading bool
 	err     string
 	summary *api.UsageSummary
+	quotas  []api.ModelQuota
 }
 
 // usageViewRows is how many lines of a usage view are visible at once.
@@ -89,17 +97,34 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 	fetch, setFetch := kitex.UseState(usageFetch{})
 
 	// Subscribing to the live totals re-renders the Session tab on every
-	// usage_updated event.
+	// usage_updated event, and the live quota reading re-renders the Quotas
+	// tab as the daemon pushes quota_updated events.
 	_ = store.UseUsageTotals()
+	_ = store.UseQuota()
 
 	currentKey := fmt.Sprintf("%d/%s/%d/%d", tab(), group(), rangeIdx(), tick())
 	kitex.UseEffectCleanup(func() func() {
-		if tab() == usageTabSession {
-			return nil
-		}
 		c := store.Client()
 		if c == nil {
 			setFetch(usageFetch{key: currentKey, err: "Client unavailable."})
+			return nil
+		}
+		if tab() == usageTabQuotas {
+			setFetch(usageFetch{key: currentKey, loading: true})
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			key := currentKey
+			go func() {
+				defer cancel()
+				quotas, err := fetchModelQuotas(ctx, c)
+				if err != nil {
+					setFetch(usageFetch{key: key, err: err.Error()})
+					return
+				}
+				setFetch(usageFetch{key: key, quotas: quotas})
+			}()
+			return cancel
+		}
+		if tab() == usageTabSession {
 			return nil
 		}
 		scope := api.UsageScopeWorkspace
@@ -129,6 +154,15 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 			lines = []usageLine{{Text: "No active session.", Style: lineDim}}
 		} else {
 			lines = sessionLines(store.GetUsage(), now)
+		}
+	case tab() == usageTabQuotas:
+		switch {
+		case fetch().key != currentKey || fetch().loading:
+			lines = []usageLine{{Text: "Loading quotas...", Style: lineDim}}
+		case fetch().err != "":
+			lines = []usageLine{{Text: "Could not load quotas: " + fetch().err, Style: lineWarn}}
+		default:
+			lines = quotaLines(fetch().quotas, store.GetQuota(), store.GetSession().ActiveModelID(), now)
 		}
 	case fetch().key != currentKey || fetch().loading:
 		lines = []usageLine{{Text: "Loading usage...", Style: lineDim}}
@@ -160,6 +194,9 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 		case k.MatchString("3"):
 			setTab(usageTabGlobal)
 			setOffset(0)
+		case k.MatchString("4"):
+			setTab(usageTabQuotas)
+			setOffset(0)
 		case k.MatchString("t"):
 			setRangeIdx((rangeIdx() + 1) % len(usageRanges))
 			setOffset(0)
@@ -174,7 +211,7 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 		case k.MatchString("pgdown", "space", "f", "ctrl+d", "ctrl+f"):
 			setOffset(min(maxOffset, pos+usageViewRows))
 		default:
-			if tab() == usageTabSession {
+			if tab() != usageTabWorkspace && tab() != usageTabGlobal {
 				return
 			}
 			for _, g := range usageGroupKeys {
@@ -198,6 +235,10 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
 		case lineWarn:
 			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Warning)
+		case lineDanger:
+			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Error)
+		case lineGood:
+			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Success)
 		}
 		return st
 	}
@@ -238,7 +279,7 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 		{Key: "↑/↓", Label: "Scroll"},
 		{Key: "r", Label: "Refresh"},
 	}
-	if tab() != usageTabSession {
+	if tab() == usageTabWorkspace || tab() == usageTabGlobal {
 		bindings = append(bindings,
 			uicomponents.KeyBinding{Key: "m/p/a/u/i/d", Label: "Group by"},
 			uicomponents.KeyBinding{Key: "t", Label: "Range"},
@@ -268,8 +309,39 @@ func usageTabBar(active usageTab, by api.UsageGroupBy, rng usageRange) string {
 		parts = append(parts, label)
 	}
 	bar := strings.Join(parts, "  ")
-	if active != usageTabSession {
+	if active == usageTabWorkspace || active == usageTabGlobal {
 		bar += fmt.Sprintf("    group: %s · range: %s", by, rng.Key)
 	}
 	return bar
+}
+
+// quotaClient lists the models and quotas the Quotas tab needs.
+type quotaClient interface {
+	ListModels(ctx context.Context) ([]api.Model, error)
+	GetModelQuota(ctx context.Context, model string) (*api.ModelQuota, error)
+}
+
+// fetchModelQuotas reads the live quota of every quota-billed model. Providers
+// that stop reporting a window for a model (or fail) simply drop out of the
+// listing rather than blocking it.
+func fetchModelQuotas(ctx context.Context, c quotaClient) ([]api.ModelQuota, error) {
+	models, err := c.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []api.ModelQuota
+	for _, m := range models {
+		if !m.QuotaBilled || !m.Capabilities.SupportsCompletion() {
+			continue
+		}
+		if ctx.Err() != nil {
+			return out, ctx.Err()
+		}
+		q, err := c.GetModelQuota(ctx, m.ID)
+		if err != nil || q == nil {
+			continue
+		}
+		out = append(out, *q)
+	}
+	return out, nil
 }

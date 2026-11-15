@@ -99,10 +99,17 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 
 	if sess := cli.ActiveSession(); sess != nil && sess.ID != "" {
 		usage := cli.ActiveUsage()
+		// Only subscription-billed models have a window to show: a per-token
+		// model must never pay a quota round trip at exit, and a priced model
+		// on a quota-capable provider still has no window. A failed fetch
+		// falls back to the reading the store already holds.
 		var quota *api.ModelQuota
-		if sess.Model != nil {
+		if sess.Model != nil && sess.Model.QuotaBilled {
+			quota = cli.ActiveQuota()
 			qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-			quota, _ = c.GetModelQuota(qctx, sess.Model.ID)
+			if fresh, err := c.GetModelQuota(qctx, sess.Model.ID); err == nil && fresh != nil {
+				quota = fresh
+			}
 			cancel()
 		}
 		summary := cli.FormatExitSummary(cli.ExitSummaryInput{

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
@@ -104,6 +105,44 @@ func usageText(usage store.UsageTotals) string {
 	}
 	return fmt.Sprintf("%s · ↑%s ↓%s", format.FormatCostNano(usage.CostNano, usage.UnpricedCalls > 0),
 		format.Tokens(int(usage.InputTokens)), format.Tokens(int(usage.OutputTokens)))
+}
+
+// quotaUsageText renders usage for a subscription-billed model as remaining
+// capacity with a reset countdown (e.g. "94% (↻ 3h40m) · ↑2.0M ↓4.9k"). The
+// countdown is omitted when the provider did not report a reset time.
+func quotaUsageText(quota store.QuotaState, usage store.UsageTotals, now time.Time) string {
+	if quota.Known {
+		badge := fmt.Sprintf("%d%%", quota.RemainingPct)
+		if !quota.ResetAt.IsZero() {
+			if until := quota.ResetAt.Sub(now); until > 0 {
+				badge = fmt.Sprintf("%d%% (↻ %s)", quota.RemainingPct, format.Duration(until, format.Compact()))
+			}
+		}
+		if usage.Calls == 0 {
+			return badge
+		}
+		return fmt.Sprintf("%s · ↑%s ↓%s", badge,
+			format.Tokens(int(usage.InputTokens)), format.Tokens(int(usage.OutputTokens)))
+	}
+	// Subscription-billed but no reading yet: tokens only, never a dollar
+	// figure that would be false for this billing mode.
+	if usage.Calls == 0 {
+		return ""
+	}
+	return fmt.Sprintf("↑%s ↓%s", format.Tokens(int(usage.InputTokens)), format.Tokens(int(usage.OutputTokens)))
+}
+
+// quotaUsageColor picks the emphasis for a quota badge: error at empty,
+// warning when under a fifth of the window remains.
+func quotaUsageColor(scheme *theme.Scheme, quota store.QuotaState) color.Color {
+	switch {
+	case quota.RemainingPct <= 0:
+		return scheme.Color.Text.Error
+	case quota.RemainingPct < 20:
+		return scheme.Color.Text.Warning
+	default:
+		return scheme.Color.Text.Secondary
+	}
 }
 
 // modelText renders "<model> · <thinking>".
@@ -304,18 +343,30 @@ var ContextSegment = trail.FC("ContextSegment", func(props SegmentProps) trail.N
 
 // UsageSegment shows the session cost with input and output tokens (e.g. "$0.42 · ↑128.4k ↓8.3k")
 // once the session has recorded LLM calls. A leading "≥" marks costs that are
-// a lower bound because some calls had no pricing.
+// a lower bound because some calls had no pricing. For subscription-billed
+// models it shows remaining quota with a reset countdown instead of a cost.
 var UsageSegment = trail.FC("UsageSegment", func(props SegmentProps) trail.Node {
 	scheme := theme.UseTheme()
 	usage := store.UseUsageTotals()
+	quota := store.UseQuota()
+	billed := store.UseSession(func(s store.SessionState) bool {
+		return s.ModelQuotaBilled
+	})
+	now := useQuotaClock()
 	text := props.Text
-	if text == "" {
+	col := scheme.Color.Text.Secondary
+	if billed {
+		col = quotaUsageColor(scheme, quota)
+		if text == "" {
+			text = quotaUsageText(quota, usage, now)
+		}
+	} else if text == "" {
 		text = usageText(usage)
 	}
 	if text == "" {
 		return nil
 	}
-	return segment(props, statusText(text, scheme.Color.Text.Secondary, false), text, scheme.Color.Text.Secondary)
+	return segment(props, statusText(text, col, false), text, scheme.Color.Text.Secondary)
 })
 
 // ModelSegment shows "<model> · <thinking>" once session model info is ready.
@@ -372,6 +423,11 @@ var DefaultStatusLine = trail.SimpleFC("DefaultStatusLine", func() trail.Node {
 	mode := store.UseMode()
 	ctx := store.UseContext()
 	usage := store.UseUsageTotals()
+	quota := store.UseQuota()
+	quotaBilled := store.UseSession(func(s store.SessionState) bool {
+		return s.ModelQuotaBilled
+	})
+	quotaNow := useQuotaClock()
 	ready := store.UseSession(func(s store.SessionState) bool {
 		return s.Ready
 	})
@@ -403,7 +459,12 @@ var DefaultStatusLine = trail.SimpleFC("DefaultStatusLine", func() trail.Node {
 		modelCompact = modelTextCompact(modelLabel)
 	}
 
-	plan := planStatusLine(winSize.Width, cfg.Compact, cfg.Segments, hintText, modeStr, ctxFull, ctxCompact, usageText(usage), modelFull, modelCompact)
+	usageStr := usageText(usage)
+	if quotaBilled {
+		usageStr = quotaUsageText(quota, usage, quotaNow)
+	}
+
+	plan := planStatusLine(winSize.Width, cfg.Compact, cfg.Segments, hintText, modeStr, ctxFull, ctxCompact, usageStr, modelFull, modelCompact)
 
 	if len(cfg.Segments) == 0 {
 		return StatusLine(StatusLineProps{})

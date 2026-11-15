@@ -1087,3 +1087,77 @@ func TestActiveModelIDFollowsResolvedModelChanges(t *testing.T) {
 		t.Fatalf("active model = %q, want the model the session last switched to", got)
 	}
 }
+
+func TestQuotaFollowsModel(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	SetSession(&api.Session{ID: "s1"})
+	SetSessionModelInfo(&api.Model{ID: "pool/a", Name: "A", QuotaBilled: true}, nil)
+	if !GetSession().ModelQuotaBilled {
+		t.Fatal("quota-billed model should flag the session")
+	}
+	if GetQuota() != nil {
+		t.Fatalf("no reading expected yet, got %+v", GetQuota())
+	}
+
+	// A reading for another model must not leak into this session's badge.
+	SetQuota(api.ModelQuota{Model: "pool/other", RemainingFraction: 0.5})
+	if GetQuota() != nil {
+		t.Fatal("foreign-model reading was accepted")
+	}
+
+	reset := time.Now().Add(time.Hour)
+	SetQuota(api.ModelQuota{Model: "pool/a", Provider: "pool", RemainingFraction: 0.94, ResetAt: reset, Account: "dev@example.com"})
+	q := GetQuota()
+	if q == nil || q.Provider != "pool" || quotaPercent(q.RemainingFraction) != 94 || !q.ResetAt.Equal(reset) || q.Account != "dev@example.com" {
+		t.Fatalf("quota reading = %+v", q)
+	}
+
+	// Switching to a per-token model clears the window entirely.
+	SetSessionModelInfo(&api.Model{ID: "openai/gpt", Name: "GPT"}, nil)
+	if GetSession().ModelQuotaBilled || GetQuota() != nil {
+		t.Fatalf("stale quota after switching to a priced model: %+v", GetSession().Quota)
+	}
+}
+
+func TestQuotaClearedOnActiveSessionModelSwitch(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	SetSession(&api.Session{ID: "s1"})
+	SetSessionModelInfo(&api.Model{ID: "pool/a", Name: "A", QuotaBilled: true}, nil)
+	SetQuota(api.ModelQuota{Model: "pool/a", Provider: "pool", RemainingFraction: 0.9})
+
+	// An update for the same session carrying a different quota-billed model
+	// (as /model or SwitchSession delivers via UpdateSession) must drop the
+	// previous model's window so the new model's prefetch can run.
+	SetSession(&api.Session{ID: "s1", Model: &api.Model{ID: "pool/b", Name: "B", QuotaBilled: true}})
+	if GetQuota() != nil {
+		t.Fatalf("stale pool/a window survived switch to pool/b: %+v", GetQuota())
+	}
+	if !GetSession().ModelQuotaBilled {
+		t.Fatal("new model should stay flagged quota-billed")
+	}
+
+	// Re-applying the same model keeps a settled reading.
+	SetQuota(api.ModelQuota{Model: "pool/b", Provider: "pool", RemainingFraction: 0.5})
+	SetSession(&api.Session{ID: "s1", Model: &api.Model{ID: "pool/b", Name: "B", QuotaBilled: true}})
+	if GetQuota() == nil {
+		t.Fatal("re-applying the same model dropped its reading")
+	}
+}
+
+func TestDraftSessionClearsQuota(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	SetSession(&api.Session{ID: "s1"})
+	SetSessionModelInfo(&api.Model{ID: "pool/a", Name: "A", QuotaBilled: true}, nil)
+	SetQuota(api.ModelQuota{Model: "pool/a", Provider: "pool", RemainingFraction: 0.9})
+
+	NewDraftSession("")
+	if GetSession().ModelQuotaBilled || GetQuota() != nil {
+		t.Fatalf("draft session kept quota state: billed=%v quota=%+v", GetSession().ModelQuotaBilled, GetQuota())
+	}
+}

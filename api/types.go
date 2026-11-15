@@ -395,6 +395,7 @@ type Model struct {
 	Provider        string               `json:"provider,omitempty"`
 	Name            string               `json:"name"`
 	Label           string               `json:"label,omitempty"`
+	Description     string               `json:"description,omitempty"`
 	Aliases         []string             `json:"aliases,omitempty"`
 	Thinking        []ThinkingCapability `json:"thinking,omitempty"`
 	ThinkingDefault *ThinkingSetting     `json:"thinking_default,omitempty"`
@@ -402,12 +403,18 @@ type Model struct {
 	OutputLimit     int                  `json:"output_limit,omitempty"`
 	Capabilities    ModelCapabilities    `json:"capabilities"`
 	Pricing         *ModelPricing        `json:"pricing,omitempty"`
+	// QuotaBilled reports that the model's provider reports subscription/quota
+	// capacity instead of per-token spend, so cost readouts should show
+	// remaining capacity rather than a dollar figure.
+	QuotaBilled bool `json:"quota_billed,omitempty"`
 }
 
 // ModelQuota reports the remaining subscription/quota capacity for a model.
 // It is only returned for providers that bill by quota rather than per token.
 type ModelQuota struct {
 	Model string `json:"model"`
+	// Provider is the workspace provider name the quota was read from.
+	Provider string `json:"provider,omitempty"`
 	// RemainingFraction is the available capacity between 0.0 and 1.0.
 	RemainingFraction float64 `json:"remaining_fraction"`
 	// ResetAt is when the quota window resets; zero when unknown.

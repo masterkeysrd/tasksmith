@@ -53,6 +53,7 @@ const (
 	EventCompactionStarted   EventType = "compaction_started"
 	EventContextUpdated      EventType = "context_updated"
 	EventUsageUpdated        EventType = "usage_updated"
+	EventQuotaUpdated        EventType = "quota_updated"
 	EventError               EventType = "error"
 )
 
@@ -332,6 +333,12 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		var p UsageUpdatedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal usage_updated payload: %w", err)
+		}
+		e.Payload = p
+	case EventQuotaUpdated:
+		var p QuotaUpdatedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal quota_updated payload: %w", err)
 		}
 		e.Payload = p
 	case EventError:

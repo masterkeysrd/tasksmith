@@ -57,7 +57,7 @@ func TestMetricsMiddlewareTieredCost(t *testing.T) {
 		},
 	}
 	rec := &captureRecorder{}
-	mw := metricsLLMMiddleware(m, rec)
+	mw := metricsLLMMiddleware(m, rec, false)
 	next := streamOf(
 		message.AssistantChunk{},
 		message.AssistantChunk{Metrics: &message.TokenMetrics{
@@ -91,7 +91,7 @@ func TestMetricsMiddlewareTieredCost(t *testing.T) {
 
 func TestMetricsMiddlewareUnpricedAndErrors(t *testing.T) {
 	rec := &captureRecorder{}
-	mw := metricsLLMMiddleware(models.Model{ID: "p/m"}, rec)
+	mw := metricsLLMMiddleware(models.Model{ID: "p/m"}, rec, false)
 
 	ok := streamOf(message.AssistantChunk{Metrics: &message.TokenMetrics{Tokens: message.TokenDetails{Input: 10, Output: 5}}})
 	if err := drain(t, mw(ok), context.Background()); err != nil {
@@ -132,7 +132,7 @@ func TestMetricsMiddlewareUnpricedAndErrors(t *testing.T) {
 
 func TestMetricsMiddlewareConsumerStopsEarly(t *testing.T) {
 	rec := &captureRecorder{}
-	mw := metricsLLMMiddleware(models.Model{ID: "p/m"}, rec)
+	mw := metricsLLMMiddleware(models.Model{ID: "p/m"}, rec, false)
 	resp, err := mw(streamOf(message.AssistantChunk{}, message.AssistantChunk{}))(context.Background(), &llm.Request{})
 	if err != nil {
 		t.Fatal(err)

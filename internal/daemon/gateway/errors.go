@@ -78,12 +78,16 @@ func formatProviderError(err error) error {
 	return err
 }
 
-func errorEnrichingLLMMiddleware() llm.Middleware {
+// errorEnrichingLLMMiddleware builds the error middleware. readQuota, when
+// non-nil, supplies the model's live quota so a rate-limited call can state
+// objective facts about when capacity returns instead of just relaying the
+// provider's message.
+func errorEnrichingLLMMiddleware(readQuota quotaReader) llm.Middleware {
 	return func(next llm.Streamer) llm.Streamer {
 		return func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
 			resp, err := next(ctx, req)
 			if err != nil {
-				return nil, formatProviderError(err)
+				return nil, enrichRateLimit(ctx, formatProviderError(err), readQuota)
 			}
 			if resp == nil {
 				return nil, nil
@@ -91,7 +95,8 @@ func errorEnrichingLLMMiddleware() llm.Middleware {
 			wrappedStream := func(yield func(message.AssistantChunk, error) bool) {
 				for chunk, sErr := range resp {
 					if sErr != nil {
-						if !yield(chunk, formatProviderError(sErr)) {
+						enriched := enrichRateLimit(ctx, formatProviderError(sErr), readQuota)
+						if !yield(chunk, enriched) {
 							return
 						}
 					} else {

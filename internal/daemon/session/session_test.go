@@ -389,6 +389,14 @@ func (p *fakeProvider) recordedTurns() []capturedTurn {
 
 type fakeGateway struct {
 	provider *fakeProvider
+
+	mu         sync.Mutex
+	quotaCalls int
+	quotaResp  *api.ModelQuota
+	quotaErr   error
+	// quotaDelay holds a quota read open so tests can make the turn-end and
+	// rate-limit refreshes overlap.
+	quotaDelay time.Duration
 }
 
 func newFakeGateway(p *fakeProvider) *fakeGateway {
@@ -430,9 +438,34 @@ func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
 	return profile.Profile{}, false
 }
 
-func (g *fakeGateway) Quota(context.Context, models.Model) (*api.ModelQuota, error) {
-	return nil, nil
+func (g *fakeGateway) Quota(ctx context.Context, _ models.Model) (*api.ModelQuota, error) {
+	g.mu.Lock()
+	delay, resp, err := g.quotaDelay, g.quotaResp, g.quotaErr
+	g.quotaCalls++
+	g.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return resp, err
 }
+
+func (g *fakeGateway) quotaCallCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.quotaCalls
+}
+
+func (g *fakeGateway) setQuota(resp *api.ModelQuota, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.quotaResp, g.quotaErr = resp, err
+}
+
+func (g *fakeGateway) QuotaCapable(models.Model) bool { return false }
 
 func (g *fakeGateway) Close() error {
 	return nil

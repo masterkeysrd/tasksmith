@@ -23,10 +23,18 @@ File: `$XDG_CONFIG_HOME/tasksmith/statusline.json` (created by `/statusline` sav
 | `hint` | keyboard hint or the Ctrl+C cancel prompt | `shift+tab cycle mode • /help commands` |
 | `mode` | permission mode badge | `plan` |
 | `context` | context window usage | `109.5k/400.0k (27%)`, compact: `27%` |
-| `usage` | session cost with input/output tokens | `$0.42 · ↑128.4k ↓8.3k` |
+| `usage` | session cost with input/output tokens; for subscription-billed (quota) models, remaining capacity with a reset countdown instead of a cost | `$0.42 · ↑128.4k ↓8.3k` or `94% (↻ 3h40m) · ↑2.0M ↓4.9k` |
 | `model` | model and thinking effort | `gpt-5 · high`, compact: `gpt-5` |
 
 IDs are matched case-insensitively after trimming.
+
+## Quota-billed models
+
+When the active model is billed against a provider quota window rather than per token, the `usage`
+segment shows remaining capacity instead of a dollar figure: `94% (↻ 3h40m)`. The countdown ticks
+locally between daemon pushes, and the badge is colored amber under 20% remaining and red at
+empty. Until the first reading arrives, only the token counters render — a cost would be false for
+this billing mode.
 
 ## Validation rules
 

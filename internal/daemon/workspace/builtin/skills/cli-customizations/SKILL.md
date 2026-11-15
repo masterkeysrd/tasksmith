@@ -4,10 +4,10 @@ kind: Skill
 metadata:
   name: cli-customizations
   displayName: CLI Customizations
-  description: Configure TaskSmith's interactive CLI settings such as the REPL status line composition and the color theme by editing their XDG config files or driving the /statusline view, and drive the interactive /sandbox and /permissions editors, --sandbox startup flag, and ! shell mode.
+  description: Configure TaskSmith's interactive CLI settings such as the REPL status line composition and the color theme by editing their XDG config files or driving the /statusline view, drive the interactive /sandbox and /permissions editors, --sandbox startup flag, and ! shell mode, and explain the /model picker columns, quota windows, and the /usage Quotas tab for subscription-billed providers.
 spec:
-  useWhen: "The user asks to change, hide, reorder, or configure the status line, status bar segments, compact mode, colors, or theme; asks how the interactive CLI is customized; or wants to inspect or change sandboxing, isolation posture, excluded commands, or permission allow/deny rules from inside the REPL via /sandbox, /permissions, --sandbox, or ! commands."
-  keywords: [statusline, status line, status bar, segment, compact, theme, colors, cli settings, appearance, sandbox, /sandbox, permissions, /permissions, --sandbox, shell mode, ! command, excluded commands]
+  useWhen: "The user asks to change, hide, reorder, or configure the status line, status bar segments, compact mode, colors, or theme; asks how the interactive CLI is customized; wants to inspect or change sandboxing, isolation posture, excluded commands, or permission allow/deny rules from inside the REPL via /sandbox, /permissions, --sandbox, or ! commands; or asks about quota windows, subscription-billed models, the /usage Quotas tab, or what the /model picker's context, alias, and pricing/quota columns mean."
+  keywords: [statusline, status line, status bar, segment, compact, theme, colors, cli settings, appearance, sandbox, /sandbox, permissions, /permissions, --sandbox, shell mode, ! command, excluded commands, quota, quotas, /usage, /model, subscription, rate limit, pricing, billing]
 ---
 
 # CLI Customizations
@@ -15,8 +15,9 @@ spec:
 TaskSmith's interactive CLI keeps user-facing appearance settings in small JSON files under
 `$XDG_CONFIG_HOME/tasksmith/` and exposes safety-relevant posture through dedicated in-app
 views. Surfaces today: the REPL status line, the color theme, the `/sandbox` editor, and the
-`/permissions` rule browser. Prefer the in-app view when the user is inside the REPL; edit the
-JSON file directly when working non-interactively or applying a workspace-wide default.
+`/permissions` rule browser, plus the `/model` picker and `/usage` browser for model billing.
+Prefer the in-app view when the user is inside the REPL; edit the JSON file directly when working
+non-interactively or applying a workspace-wide default.
 
 ## Status line
 
@@ -40,6 +41,22 @@ Quick rules:
 Colors come from `$XDG_CONFIG_HOME/tasksmith/theme.json`. It is optional; when absent, the
 built-in theme applies. Only edit it when the user explicitly asks about colors or theming, and
 never invent color keys — mirror the structure of an existing theme file.
+
+## Model billing: /model picker and quota windows
+
+The `/model` picker groups models by provider and shows three columns: the label, a capacity
+cell (`"400.0k ctx · @fast, @default"` — context window and typed aliases), and a billing cell
+(`"quota"` for subscription-billed providers, `"$3/$15 /M"` for per-token pricing, blank when
+unknown). A muted footer under the list describes the highlighted model, and filtering matches
+labels, aliases, ids, provider names, and billing cells.
+
+For subscription-billed models the status line's `usage` segment switches to a quota badge
+(`94% (↻ 3h12m) · 12.3k tok` — see `references/statusline.md`), turn and exit summaries omit
+dollar cost, and `/usage` gains a fourth tab, `4 Quotas`, listing one bar per quota window with
+percent remaining (gauged red under 20%, yellow under 50%, green from 50% up), a reset countdown,
+and shared-pool grouping. Quota readings update live from
+daemon events; `/usage quotas` also accepts the tab as an argument. Never claim a dollar cost for
+a quota-billed call, and never invent a reset time the provider did not report.
 
 ## Sandbox & permissions
 

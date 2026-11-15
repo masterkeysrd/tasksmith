@@ -182,10 +182,10 @@ var statsBrowser = trail.FC("StatsBrowser", func(props statsBrowserProps) trail.
 		case k.MatchString("esc", "escape", "q"):
 			store.RemoveSlot(props.slotID)
 		case k.MatchString("tab", "right", "l"):
-			setTab((tab() + 1) % usageTab(len(usageTabNames)))
+			setTab((tab() + 1) % usageTab(len(statsTabNames)))
 			setOffset(0)
 		case k.MatchString("left", "shift+tab", "h"):
-			setTab((tab() + usageTab(len(usageTabNames)) - 1) % usageTab(len(usageTabNames)))
+			setTab((tab() + usageTab(len(statsTabNames)) - 1) % usageTab(len(statsTabNames)))
 			setOffset(0)
 		case k.MatchString("1"):
 			setTab(usageTabSession)
@@ -223,6 +223,10 @@ var statsBrowser = trail.FC("StatsBrowser", func(props statsBrowserProps) trail.
 			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
 		case lineWarn:
 			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Warning)
+		case lineDanger:
+			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Error)
+		case lineGood:
+			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Success)
 		}
 		return st
 	}
@@ -302,7 +306,7 @@ func metricsAgg(ms []metrics.Metric, fn metrics.AggFunc) []api.MetricsAggregate 
 // active range.
 func statsTabBar(active usageTab, rng usageRange) string {
 	var parts []string
-	for i, name := range usageTabNames {
+	for i, name := range statsTabNames {
 		label := fmt.Sprintf("%d %s", i+1, name)
 		if usageTab(i) == active {
 			label = "[" + label + "]"

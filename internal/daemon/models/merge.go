@@ -57,6 +57,7 @@ func mergeModel(layers ...Model) Model {
 		out.ID = firstNonEmptyID(out.ID, l.ID)
 		out.Name = firstNonEmpty(out.Name, l.Name)
 		out.Label = firstNonEmpty(out.Label, l.Label)
+		out.Description = firstNonEmpty(out.Description, l.Description)
 		out.ProviderType = firstNonEmpty(out.ProviderType, l.ProviderType)
 
 		out.Limits.Context = firstNonZero(out.Limits.Context, l.Limits.Context)

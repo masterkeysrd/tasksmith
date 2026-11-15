@@ -184,6 +184,7 @@ type conversationHooks struct {
 	onRemoveSlot       func(slotID string)
 	onPublishStream    func(state StreamState)
 	onUsage            func(usage api.SessionUsage)
+	onQuota            func(quota api.ModelQuota)
 	onContext          func(ctx api.ContextState)
 	onSessionUpdated   func(sess api.Session)
 	onTimelineMetadata func(entry api.TimelineEntry)
@@ -279,6 +280,7 @@ func newConversationAccumulator() *conversationAccumulator {
 			stream.Set(func(StreamState) StreamState { return state })
 		},
 		onUsage: SetUsage,
+		onQuota: SetQuota,
 		onContext: func(c api.ContextState) {
 			session.Set(func(s SessionState) SessionState {
 				s.Context = c
@@ -629,6 +631,18 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			acc.baseCalls = p.Usage.Totals.Calls
 			acc.callInput, acc.callOutput = 0, 0
 			acc.publishLocked()
+		}
+
+	case api.EventQuotaUpdated:
+		p, ok := event.Payload.(api.QuotaUpdatedEvent)
+		if !ok {
+			return
+		}
+		if acc.sessionID != "" && p.SessionID != acc.sessionID {
+			return
+		}
+		if acc.hooks.onQuota != nil {
+			acc.hooks.onQuota(p.Quota)
 		}
 
 	case api.EventContextUpdated:

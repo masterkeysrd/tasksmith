@@ -48,6 +48,65 @@ func (b *fakeBase) GetProfile(id string) (profile.Profile, bool) {
 	return p, ok
 }
 
+// quotaFakeBase additionally answers the catalog's quota capability check:
+// every model under the "pool" provider reports subscription capacity.
+type quotaFakeBase struct {
+	fakeBase
+}
+
+func (b *quotaFakeBase) QuotaCapable(m Model) bool {
+	return m.ID.Provider() == "pool"
+}
+
+func TestCatalogStampsQuotaBilled(t *testing.T) {
+	cat := testCatalogFromProviders(
+		&warp.ModelProvider{
+			BaseResource: warp.BaseResource{APIVersion: warp.APIVersion, Kind: warp.KindModelProvider, Metadata: warp.Metadata{Name: "pool"}},
+			Spec: warp.ModelProviderSpec{
+				Type:   "antigravity",
+				Models: []warp.ProviderModel{{ID: "free"}, {ID: "paid"}},
+			},
+		},
+		&warp.ModelProvider{
+			BaseResource: warp.BaseResource{APIVersion: warp.APIVersion, Kind: warp.KindModelProvider, Metadata: warp.Metadata{Name: "openai"}},
+			Spec:         warp.ModelProviderSpec{Type: "openai", Models: []warp.ProviderModel{{ID: "gpt"}}},
+		},
+	)
+	c, err := Build(cat, &quotaFakeBase{fakeBase: fakeBase{profiles: map[ID]profile.Profile{
+		"pool/paid": {Pricing: profile.Pricing{Input: 1}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	free, _ := c.Get("pool/free")
+	if !free.QuotaBilled {
+		t.Fatal("nil-priced model on a quota provider must be quota-billed")
+	}
+	paid, _ := c.Get("pool/paid")
+	if paid.QuotaBilled {
+		t.Fatal("a priced model stays per-token billed even on a quota provider")
+	}
+	gpt, _ := c.Get("openai/gpt")
+	if gpt.QuotaBilled {
+		t.Fatal("model on a non-quota provider must not be quota-billed")
+	}
+
+	// The lazy fallback (an alias resolving to an unlisted model) applies the
+	// same billing rule as the listed path.
+	unlisted, ok := c.Get("pool/held-back")
+	if !ok {
+		t.Fatal("unlisted model on a known provider should resolve lazily")
+	}
+	if !unlisted.QuotaBilled {
+		t.Fatal("unlisted nil-priced model on a quota provider must be quota-billed")
+	}
+	openaiUnlisted, ok := c.Get("openai/held-back")
+	if !ok || openaiUnlisted.QuotaBilled {
+		t.Fatalf("unlisted model on a non-quota provider must stay per-token: %+v", openaiUnlisted)
+	}
+}
+
 func TestCatalogLazyAndListedOnly(t *testing.T) {
 	cat := testCatalogFromProviders(&warp.ModelProvider{
 		BaseResource: warp.BaseResource{

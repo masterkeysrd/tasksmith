@@ -83,6 +83,35 @@ func TestFormatExitSummaryQuotaRow(t *testing.T) {
 	}
 }
 
+func TestFormatExitSummaryQuotaRowEdgeCases(t *testing.T) {
+	// A reset moment already past must not render a "(↻ 0ms)" countdown.
+	out := FormatExitSummary(ExitSummaryInput{
+		SessionID: "sess-123",
+		Usage:     sampleUsage(),
+		Quota: &api.ModelQuota{
+			Model:             "antigravity/gemini",
+			RemainingFraction: 0.5,
+			ResetAt:           time.Now().Add(-90 * time.Second),
+		},
+	})
+	if strings.Contains(out, "0ms") || strings.Contains(out, "↻") {
+		t.Errorf("expired reset rendered a countdown:\n%s", out)
+	}
+	if !strings.Contains(out, "50%") {
+		t.Errorf("percentage missing:\n%s", out)
+	}
+
+	// An out-of-range fraction is clamped, never shown raw.
+	out = FormatExitSummary(ExitSummaryInput{
+		SessionID: "sess-123",
+		Usage:     sampleUsage(),
+		Quota:     &api.ModelQuota{Model: "antigravity/gemini", RemainingFraction: 1.4},
+	})
+	if !strings.Contains(out, "100%") {
+		t.Errorf("fraction above 1.0 not clamped to 100%%:\n%s", out)
+	}
+}
+
 func TestFormatExitSummaryUnpricedAndEmpty(t *testing.T) {
 	u := sampleUsage()
 	u.Totals.CostNano = 0

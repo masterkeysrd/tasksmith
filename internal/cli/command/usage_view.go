@@ -1,7 +1,9 @@
 package command
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +20,10 @@ const (
 	lineHeading
 	lineDim
 	lineWarn
+	// lineDanger marks a critical reading (quota gauge red band).
+	lineDanger
+	// lineGood marks a healthy reading (quota gauge green band).
+	lineGood
 )
 
 type usageLine struct {
@@ -268,6 +274,12 @@ func sessionInsights(u api.SessionUsage) []insight {
 			Hint:     "Add a cost entry for the model in the workspace manifest so costs are exact.",
 		})
 	}
+	if t.QuotaCalls > 0 {
+		out = append(out, insight{
+			Headline: plural(t.QuotaCalls, "call was", "calls were") + " subscription-billed",
+			Hint:     "Those calls draw on the provider's quota window instead of per-token billing; check /usage quotas for remaining capacity.",
+		})
+	}
 	return append(out, toolInsights(u.Tools)...)
 }
 
@@ -338,9 +350,7 @@ func sessionLines(u api.SessionUsage, now time.Time) []usageLine {
 		out = append(out, modelLines(u.Models)...)
 	}
 	out = append(out, cacheLines(u, now)...)
-	if t.UnpricedCalls > 0 {
-		out = append(out, usageLine{Text: fmt.Sprintf("≥ %d of %d calls had no pricing data, so costs are a lower bound.", t.UnpricedCalls, t.Calls), Style: lineDim})
-	}
+	out = append(out, billingNotes(t, false)...)
 	out = append(out, toolLines(u.Tools)...)
 	return append(out, insightLines(sessionInsights(u))...)
 }
@@ -506,10 +516,191 @@ func summaryLines(s api.UsageSummary, rangeLabel string) []usageLine {
 		out = append(out, usageLine{})
 		out = append(out, tl...)
 	}
-	if t.UnpricedCalls > 0 {
-		out = append(out, usageLine{}, usageLine{Text: fmt.Sprintf("≥ %d of %d calls had no pricing data, so costs are a lower bound.", t.UnpricedCalls, t.Calls), Style: lineDim})
-	}
+	out = append(out, billingNotes(t, true)...)
 	return append(out, insightLines(summaryInsights(s))...)
+}
+
+// billingNotes renders the dim footnotes explaining how calls were billed:
+// a lower-bound warning when some calls had no pricing, and a factual note
+// when some calls drew on a subscription quota window instead of tokens.
+func billingNotes(t api.UsageGroup, blank bool) []usageLine {
+	var out []usageLine
+	note := func(text string) {
+		if blank {
+			out = append(out, usageLine{})
+		}
+		out = append(out, usageLine{Text: text, Style: lineDim})
+	}
+	if t.UnpricedCalls > 0 {
+		note(fmt.Sprintf("≥ %d of %d calls had no pricing data, so costs are a lower bound.", t.UnpricedCalls, t.Calls))
+	}
+	if t.QuotaCalls > 0 {
+		note(fmt.Sprintf("%d of %d calls were subscription-billed and cost no tokens.", t.QuotaCalls, t.Calls))
+	}
+	return out
+}
+
+// quotaBarWidth is the cell width of a quota bar in the Quotas tab.
+const quotaBarWidth = 20
+
+// quotaBar renders remaining capacity as a block bar, e.g. "██████████░░░░░░░░░░".
+func quotaBar(pct int) string {
+	filled := min(max(pct, 0), 100) * quotaBarWidth / 100
+	return strings.Repeat("█", filled) + strings.Repeat("░", quotaBarWidth-filled)
+}
+
+// Quota gauge bands: a window under a fifth full is critical, under half is
+// running low, and half or more reads as healthy.
+const (
+	quotaDangerPct = 20
+	quotaWarnPct   = 50
+)
+
+// quotaGaugeStyle colors a quota row by how much of its window remains:
+// red under 20%, yellow under 50%, green from 50% up.
+func quotaGaugeStyle(pct int) lineStyle {
+	switch {
+	case pct < quotaDangerPct:
+		return lineDanger
+	case pct < quotaWarnPct:
+		return lineWarn
+	default:
+		return lineGood
+	}
+}
+
+// quotaLines renders the Quotas tab: one bar per quota window, grouped so
+// models sharing the same window (identical reset time and account) appear
+// once under a shared-pool heading. A live reading from quota_updated events
+// overrides the initial fetch for its pool, and the model the active session
+// runs on is marked regardless of whether a reading has arrived yet.
+func quotaLines(quotas []api.ModelQuota, live *api.ModelQuota, activeModelID string, now time.Time) []usageLine {
+	if len(quotas) == 0 {
+		return []usageLine{{Text: "No quota-billed models in this workspace.", Style: lineDim}}
+	}
+
+	sorted := overlayQuota(quotas, live)
+	slices.SortStableFunc(sorted, func(a, b api.ModelQuota) int {
+		if c := strings.Compare(a.Provider, b.Provider); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Account, b.Account); c != 0 {
+			return c
+		}
+		if c := a.ResetAt.Compare(b.ResetAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Model, b.Model)
+	})
+
+	var out []usageLine
+	out = append(out, usageLine{Text: "Subscription quota windows", Style: lineHeading})
+
+	previousPool := ""
+	for i, q := range sorted {
+		pct := min(max(int(q.RemainingFraction*100), 0), 100)
+		style := quotaGaugeStyle(pct)
+
+		pool := quotaPoolKey(q)
+		if pool != previousPool {
+			if i > 0 {
+				out = append(out, usageLine{})
+			}
+			out = append(out, usageLine{Text: quotaPoolHeading(q, sorted), Style: lineDim})
+			// A shared pool refills all its models at once, so the countdown
+			// is stated once under its heading instead of after every row.
+			if reset := quotaResetText(q, now); reset != "" {
+				out = append(out, usageLine{Text: " " + strings.Repeat(" ", quotaBarWidth+2) + reset, Style: lineDim})
+			}
+			previousPool = pool
+		}
+
+		line := fmt.Sprintf("  %s %3d%%  %s", quotaBar(pct), pct, q.Model)
+		if activeModelID != "" && q.Model == activeModelID {
+			line += " · current"
+		}
+		out = append(out, usageLine{Text: line, Style: style})
+	}
+	return out
+}
+
+// overlayQuota returns a copy of quotas with a live quota_updated reading
+// applied. A shared pool is one budget, so the fresh remaining fraction and
+// reset time replace every model in the reading's pool, not just the model
+// the reading names. The reading is ignored when no fetched row matches it.
+func overlayQuota(quotas []api.ModelQuota, live *api.ModelQuota) []api.ModelQuota {
+	if live == nil || strings.TrimSpace(live.Model) == "" {
+		return quotas
+	}
+	out := make([]api.ModelQuota, len(quotas))
+	copy(out, quotas)
+	idx := -1
+	for i := range out {
+		if out[i].Model == live.Model {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return quotas
+	}
+	pool := quotaPoolKey(out[idx])
+	for i := range out {
+		if quotaPoolKey(out[i]) != pool {
+			continue
+		}
+		out[i].RemainingFraction = live.RemainingFraction
+		if !live.ResetAt.IsZero() {
+			out[i].ResetAt = live.ResetAt
+		}
+	}
+	return out
+}
+
+// quotaPoolKey identifies the window several models may share: the same reset
+// moment and account under one provider means the same pool. Models without a
+// reported reset time get per-model keys — without one, independent windows
+// would merge into a false shared pool.
+func quotaPoolKey(q api.ModelQuota) string {
+	if q.ResetAt.IsZero() {
+		return q.Provider + "\x00" + q.Account + "\x00" + q.Model
+	}
+	return q.Provider + "\x00" + q.Account + "\x00" + q.ResetAt.UTC().Format(time.RFC3339)
+}
+
+// quotaPoolHeading names a quota pool after its provider and account. A pool
+// holding several models is called out as shared so the repetition reads as
+// one budget, not several.
+func quotaPoolHeading(q api.ModelQuota, all []api.ModelQuota) string {
+	share := 0
+	key := quotaPoolKey(q)
+	for _, other := range all {
+		if quotaPoolKey(other) == key {
+			share++
+		}
+	}
+	label := cmp.Or(strings.TrimSpace(q.Provider), "provider")
+	if q.Account != "" {
+		label += " · " + q.Account
+	}
+	if share > 1 {
+		label += fmt.Sprintf(" (shared pool · %d models)", share)
+	}
+	return label
+}
+
+// quotaResetText describes when a window refills; empty when the provider did
+// not report a reset time.
+func quotaResetText(q api.ModelQuota, now time.Time) string {
+	if q.ResetAt.IsZero() {
+		return ""
+	}
+	reset := q.ResetAt.Local()
+	until := reset.Sub(now)
+	if until <= 0 {
+		return "resets now"
+	}
+	return fmt.Sprintf("resets in %s at %s", format.Duration(until, format.Compact()), reset.Format("15:04"))
 }
 
 func derefGroup(g *api.UsageGroup) api.UsageGroup {

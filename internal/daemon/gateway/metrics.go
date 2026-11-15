@@ -17,8 +17,16 @@ import (
 // metricsLLMMiddleware records one llm_call metric record for every request
 // that flows through the model, including failed and canceled ones. Cost is
 // estimated here because loom attaches it outside the middleware chain.
-func metricsLLMMiddleware(m models.Model, rec metrics.Recorder) llm.Middleware {
+//
+// quotaBilled marks an unpriced model whose provider reports subscription
+// quota. Those calls have no price by design, so they must not be counted as
+// a pricing gap in usage readouts.
+func metricsLLMMiddleware(m models.Model, rec metrics.Recorder, quotaBilled bool) llm.Middleware {
 	profile := m.Profile()
+	billing := metrics.BillingToken
+	if quotaBilled {
+		billing = metrics.BillingQuota
+	}
 	return func(next llm.Streamer) llm.Streamer {
 		return func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
 			start := time.Now()
@@ -69,6 +77,7 @@ func metricsLLMMiddleware(m models.Model, rec metrics.Recorder) llm.Middleware {
 				}
 				call.CostTier = est.Tier
 				call.Priced = m.Pricing != nil && est.Priced
+				call.Billing = billing
 				if err := metrics.RecordLLMCall(ctx, rec, call); err != nil {
 					log.Warn("failed to record llm call metrics", log.String("error", err.Error()))
 				}

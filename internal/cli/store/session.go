@@ -39,6 +39,14 @@ type SessionState struct {
 	Subagents *[]api.Session
 	Ready     bool
 
+	// ModelQuotaBilled reports the active model is billed against a
+	// subscription window rather than per token, so usage readouts show
+	// remaining capacity instead of a dollar figure.
+	ModelQuotaBilled bool
+	// Quota is the most recent quota reading for the active model, pushed by
+	// the daemon after each turn and on rate limits. nil until first known.
+	Quota *api.ModelQuota
+
 	// SandboxMode is the sandbox isolation backend the active or draft session
 	// runs under ("native" or "local").
 	SandboxMode api.SandboxMode
@@ -755,6 +763,14 @@ func SetSession(sess *api.Session) {
 		if sess == nil || s.Session == nil || s.Session.ID != sess.ID {
 			s.Usage = api.SessionUsage{}
 		}
+		quotaBilled := sess != nil && sess.Model != nil && sess.Model.QuotaBilled
+		// A reading belongs to one model's window: switching between two
+		// quota-billed models must drop the previous window just as switching
+		// to or from a per-token model does.
+		if quotaBilled != s.ModelQuotaBilled || (quotaBilled && modelIdentifier(sess.Model) != s.ModelID) {
+			s.Quota = nil
+		}
+		s.ModelQuotaBilled = quotaBilled
 		s.Session = sess
 		if sess != nil {
 			s.ModelID = modelIdentifier(sess.Model)
@@ -790,6 +806,13 @@ func SetSession(sess *api.Session) {
 		}
 		return s
 	})
+
+	if state := GetSession(); state.ModelQuotaBilled && state.Quota == nil {
+		sessMu.Lock()
+		c := activeClient
+		sessMu.Unlock()
+		refreshQuotaSoon(c)
+	}
 }
 
 // loadSessionUsage fetches the persisted usage of a session so that totals
@@ -802,6 +825,72 @@ func loadSessionUsage(parent context.Context, c *client.Client, sessionID string
 		return
 	}
 	SetUsage(usage)
+}
+
+// quotaPrefetchMu guards the in-flight flag so a model switch or a busy
+// session_updated stream never stacks duplicate quota requests.
+var quotaPrefetchMu sync.Mutex
+var quotaPrefetchInFlight bool
+
+// refreshQuotaSoon schedules one background quota fetch for a subscription-billed
+// model that has no reading yet. The guard lives inside the goroutine so the
+// caller never holds a lock, and loadModelQuota re-checks the active model so
+// a busy session_updated stream never stacks duplicate requests.
+func refreshQuotaSoon(c *client.Client) {
+	if c == nil {
+		return
+	}
+	go loadModelQuota(context.Background(), c)
+}
+
+// loadModelQuota fetches the active model's quota once so the status line can
+// show a subscription window before the first turn pushes an update. Models
+// billed per token are skipped: they have no window to show. When another
+// read is already in flight (typically for a model the user just switched
+// away from), this waits briefly for it to finish and then fetches for the
+// current model, so a fast model switch never leaves the new window blank.
+func loadModelQuota(parent context.Context, c *client.Client) {
+	claimed := false
+	for attempt := 0; attempt < 40 && !claimed; attempt++ {
+		state := GetSession()
+		if !state.ModelQuotaBilled || state.Quota != nil || state.ActiveModelID() == "" {
+			return
+		}
+		quotaPrefetchMu.Lock()
+		if !quotaPrefetchInFlight {
+			quotaPrefetchInFlight = true
+			claimed = true
+		}
+		quotaPrefetchMu.Unlock()
+		if !claimed {
+			time.Sleep(125 * time.Millisecond)
+		}
+	}
+	if !claimed {
+		return
+	}
+	defer func() {
+		quotaPrefetchMu.Lock()
+		quotaPrefetchInFlight = false
+		quotaPrefetchMu.Unlock()
+	}()
+
+	state := GetSession()
+	if !state.ModelQuotaBilled || state.Quota != nil {
+		return
+	}
+	id := state.ActiveModelID()
+	if id == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	quota, err := c.GetModelQuota(ctx, id)
+	if err != nil || quota == nil {
+		return
+	}
+	SetQuota(*quota)
 }
 
 // SetUsage stores usage as the active session's usage when it belongs to that session.
@@ -818,6 +907,7 @@ func SetUsage(usage api.SessionUsage) {
 type UsageTotals struct {
 	Calls         int64
 	UnpricedCalls int64
+	QuotaCalls    int64
 	CostNano      int64
 	InputTokens   int64
 	OutputTokens  int64
@@ -827,8 +917,59 @@ type UsageTotals struct {
 func UseUsageTotals() UsageTotals {
 	return UseSession(func(s SessionState) UsageTotals {
 		t := s.Usage.Totals
-		return UsageTotals{Calls: t.Calls, UnpricedCalls: t.UnpricedCalls, CostNano: t.CostNano, InputTokens: t.Tokens.Input, OutputTokens: t.Tokens.Output}
+		return UsageTotals{Calls: t.Calls, UnpricedCalls: t.UnpricedCalls, QuotaCalls: t.QuotaCalls, CostNano: t.CostNano, InputTokens: t.Tokens.Input, OutputTokens: t.Tokens.Output}
 	})
+}
+
+// SetQuota records a quota reading for the active session's model. A reading
+// for a different model is ignored, since showing another model's window would
+// be a false fact.
+func SetQuota(quota api.ModelQuota) {
+	session.Set(func(s SessionState) SessionState {
+		if id := s.ActiveModelID(); id != "" && quota.Model != "" && id != quota.Model {
+			return s
+		}
+		reading := quota
+		s.Quota = &reading
+		return s
+	})
+}
+
+// QuotaState is the comparable snapshot of quota shown in the status line.
+type QuotaState struct {
+	Known bool
+	// RemainingPct is whole percent of the window still available (0-100).
+	RemainingPct int
+	// ResetAt is when the window refills; zero when the provider did not say.
+	ResetAt time.Time
+	// Account is the authenticated identity behind the window, when known.
+	Account string
+}
+
+// UseQuota subscribes a component to the active model's quota reading.
+func UseQuota() QuotaState {
+	return UseSession(func(s SessionState) QuotaState {
+		if !s.ModelQuotaBilled || s.Quota == nil {
+			return QuotaState{}
+		}
+		return QuotaState{
+			Known:        true,
+			RemainingPct: quotaPercent(s.Quota.RemainingFraction),
+			ResetAt:      s.Quota.ResetAt,
+			Account:      s.Quota.Account,
+		}
+	})
+}
+
+// GetQuota returns the active model's latest quota reading, or nil.
+func GetQuota() *api.ModelQuota {
+	return GetSession().Quota
+}
+
+// quotaPercent clamps a remaining fraction to a whole percentage.
+func quotaPercent(fraction float64) int {
+	pct := int(fraction * 100)
+	return min(max(pct, 0), 100)
 }
 
 // GetUsage returns the active session's usage snapshot.
@@ -1054,12 +1195,23 @@ func SetModelInfo(label, thinking string) {
 func SetSessionModelInfo(model *api.Model, setting *api.ThinkingSetting) {
 	label, thinking := modelDisplay(model, setting)
 	session.Set(func(s SessionState) SessionState {
+		quotaBilled := model != nil && model.QuotaBilled
+		if quotaBilled != s.ModelQuotaBilled || quotaBilled && modelIdentifier(model) != s.ModelID {
+			s.Quota = nil
+		}
+		s.ModelQuotaBilled = quotaBilled
 		s.ModelID = modelIdentifier(model)
 		s.ModelLabel = label
 		s.Thinking = thinking
 		s.Ready = true
 		return s
 	})
+	if state := GetSession(); state.ModelQuotaBilled && state.Quota == nil {
+		sessMu.Lock()
+		c := activeClient
+		sessMu.Unlock()
+		refreshQuotaSoon(c)
+	}
 }
 
 // SetActiveModelID records the identifier of the model the current label refers
@@ -1505,6 +1657,10 @@ func NewDraftSession(modelOverride string) {
 		s.Subagents = nil
 		s.Usage = api.SessionUsage{}
 		s.SandboxMode = draftSandboxMode()
+		// A draft has no resolved model yet: any window carried over from the
+		// previous session belongs to a model this draft may never run.
+		s.ModelQuotaBilled = false
+		s.Quota = nil
 		return s
 	})
 
@@ -1754,14 +1910,22 @@ func updateDraftModel(ctx context.Context, c *client.Client, cfg api.SessionConf
 		}
 	}
 	label, thinking := modelDisplay(model, cfg.Thinking)
+	quotaBilled := model != nil && model.QuotaBilled
 	session.Set(func(s SessionState) SessionState {
 		if s.Session == nil && s.Config.Agent == cfg.Agent && s.Config.Model == cfg.Model && reflect.DeepEqual(s.Config.Thinking, cfg.Thinking) {
+			if quotaBilled != s.ModelQuotaBilled || (quotaBilled && modelIdentifier(model) != s.ModelID) {
+				s.Quota = nil
+			}
+			s.ModelQuotaBilled = quotaBilled
 			s.ModelID = modelIdentifier(model)
 			s.ModelLabel, s.Thinking = label, thinking
 			s.Context = api.ContextState{}
 		}
 		return s
 	})
+	if state := GetSession(); state.ModelQuotaBilled && state.Quota == nil {
+		refreshQuotaSoon(c)
+	}
 }
 
 // ReloadWorkspace instructs the daemon to reload workspace resources from disk

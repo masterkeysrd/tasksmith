@@ -22,10 +22,18 @@ func (t UsageTokens) Total() int64 { return t.Input + t.Output }
 
 // UsageGroup aggregates LLM calls. Key identifies the group and is empty for totals.
 type UsageGroup struct {
-	Key           string      `json:"key,omitempty"`
-	Calls         int64       `json:"calls"`
-	UnpricedCalls int64       `json:"unpriced_calls"`
-	Tokens        UsageTokens `json:"tokens"`
+	Key   string `json:"key,omitempty"`
+	Calls int64  `json:"calls"`
+	// UnpricedCalls counts calls whose model carries no pricing data, so
+	// CostNano is a lower bound. Quota-billed calls land in QuotaCalls
+	// instead: they have no price by design, which is not a missing price.
+	// Rows whose model is unknown (nil pricing) fall back to the per-token
+	// classification, so legacy records keep counting as unpriced.
+	UnpricedCalls int64 `json:"unpriced_calls"`
+	// QuotaCalls counts calls billed against a subscription/quota window
+	// rather than per token. They contribute no cost.
+	QuotaCalls int64       `json:"quota_calls,omitempty"`
+	Tokens     UsageTokens `json:"tokens"`
 	// CostNano is the frozen cost in nano-USD (1e-9 USD).
 	CostNano int64 `json:"cost_nano"`
 	// CostCacheReadNano and CostCacheWriteNano are the cache parts of CostNano.
@@ -207,6 +215,16 @@ type UsageUpdatedEvent struct {
 }
 
 func (UsageUpdatedEvent) EventType() string { return string(EventUsageUpdated) }
+
+// QuotaUpdatedEvent represents the payload for an [EventQuotaUpdated] event.
+// It carries the latest quota reading for the model a session is running on,
+// emitted after a turn completes and whenever a call is rate limited.
+type QuotaUpdatedEvent struct {
+	SessionID string     `json:"session_id"`
+	Quota     ModelQuota `json:"quota"`
+}
+
+func (QuotaUpdatedEvent) EventType() string { return string(EventQuotaUpdated) }
 
 // UsageRequest selects a [UsageSummary]. Zero values select the default:
 // workspace scope, grouped by model, over the last 30 days.

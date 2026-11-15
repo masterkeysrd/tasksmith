@@ -20,6 +20,9 @@ type LLMCall struct {
 	Cost     Cost   // nano-USD
 	CostTier string // empty = base pricing
 	Priced   bool
+	// Billing is [BillingQuota] for subscription-billed calls and
+	// [BillingToken] (or empty) otherwise.
+	Billing string
 
 	Duration   time.Duration
 	TTFT       time.Duration
@@ -53,6 +56,7 @@ func RecordLLMCall(ctx context.Context, r Recorder, c LLMCall) error {
 			AttrPurpose, string(c.Purpose),
 			AttrCostTier, c.CostTier,
 			AttrPriced, strconv.FormatBool(c.Priced),
+			AttrBilling, c.Billing,
 			AttrErrorKind, c.ErrorKind,
 		),
 	}

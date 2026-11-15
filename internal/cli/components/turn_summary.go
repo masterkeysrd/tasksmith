@@ -37,8 +37,10 @@ func FormatTurnSummary(rec api.TurnCompletedRecord, entryID string, at time.Time
 	parts := []string{lead}
 	if rec.InputTokens > 0 || rec.OutputTokens > 0 {
 		parts = append(parts, fmt.Sprintf("↑%s ↓%s", format.Tokens(int(rec.InputTokens)), format.Tokens(int(rec.OutputTokens))))
-		parts = append(parts, format.FormatCostNano(rec.CostNano, rec.Unpriced))
-	} else if rec.CostNano > 0 || rec.Unpriced {
+		if !rec.QuotaBilled {
+			parts = append(parts, format.FormatCostNano(rec.CostNano, rec.Unpriced))
+		}
+	} else if !rec.QuotaBilled && (rec.CostNano > 0 || rec.Unpriced) {
 		parts = append(parts, format.FormatCostNano(rec.CostNano, rec.Unpriced))
 	}
 	if !at.IsZero() {

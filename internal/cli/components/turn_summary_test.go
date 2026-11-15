@@ -39,6 +39,18 @@ func TestFormatTurnSummary(t *testing.T) {
 	if !strings.Contains(zeroCost, "$0.00") {
 		t.Errorf("zero cost turn with tokens must show $0.00, got %q", zeroCost)
 	}
+
+	// A subscription-billed turn never shows a cost, not even a lower bound.
+	quota := FormatTurnSummary(api.TurnCompletedRecord{
+		Status: api.TurnStatusDone, ElapsedMs: 5_000, InputTokens: 100, OutputTokens: 50,
+		Unpriced: true, QuotaBilled: true,
+	}, "entry-quota", at)
+	if strings.Contains(quota, "$") || strings.Contains(quota, "≥") {
+		t.Errorf("quota-billed turn claimed a cost: %q", quota)
+	}
+	if !strings.Contains(quota, "↑100 ↓50") {
+		t.Errorf("quota-billed turn lost its token counters: %q", quota)
+	}
 }
 
 func TestTurnVerbsRotate(t *testing.T) {

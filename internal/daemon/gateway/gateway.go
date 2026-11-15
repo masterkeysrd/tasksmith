@@ -127,6 +127,7 @@ func (g *gatewayImpl) Quota(ctx context.Context, m models.Model) (*api.ModelQuot
 
 	q := &api.ModelQuota{
 		Model:             string(m.ID),
+		Provider:          inst.cfg.Name,
 		RemainingFraction: info.RemainingFraction,
 	}
 	if reset, perr := info.ParsedResetTime(); perr == nil && !reset.IsZero() {
@@ -136,6 +137,35 @@ func (g *gatewayImpl) Quota(ctx context.Context, m models.Model) (*api.ModelQuot
 		q.Account = account
 	}
 	return q, nil
+}
+
+// quotaBilled reports whether calls on this provider should be booked against
+// a subscription window: the provider must report quota, and the model must
+// carry no per-token price. A priced model that also reports quota is still
+// billed per token, so its cost stays meaningful.
+func (inst *providerInstance) quotaBilled(m models.Model) bool {
+	if inst == nil || inst.authErr != nil || inst.llmProv == nil || m.Pricing != nil {
+		return false
+	}
+	_, ok := inst.llmProv.(llm.QuotaProvider)
+	return ok
+}
+
+// QuotaCapable reports whether the model's provider implements
+// [llm.QuotaProvider]. It is a pure capability check and never contacts the
+// provider, so it is safe to call while projecting a model catalog.
+func (g *gatewayImpl) QuotaCapable(m models.Model) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if g.closed {
+		return false
+	}
+	inst, ok := g.providers[m.ID.Provider()]
+	if !ok || inst.authErr != nil || inst.llmProv == nil {
+		return false
+	}
+	_, ok = inst.llmProv.(llm.QuotaProvider)
+	return ok
 }
 
 func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConfig) (*llm.Model, error) {
@@ -164,7 +194,7 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 	}
 	p := m.Profile()
 	model = model.WithProfile(&p)
-	model = model.WithMiddleware(errorEnrichingLLMMiddleware())
+	model = model.WithMiddleware(errorEnrichingLLMMiddleware(g.quotaReaderFor(m)))
 	if mw := openAIResponsesOptionsMiddleware(inst.openaiResponsesOpts); mw != nil {
 		model = model.WithMiddleware(mw)
 	}
@@ -176,7 +206,7 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 	}
 	model = model.WithMiddleware(validateRequestMiddleware(m))
 	model = model.WithMiddleware(llm.DeferredToolsMiddleware(nil), llm.InlineToolsMiddleware(nil))
-	model = model.WithMiddleware(metricsLLMMiddleware(m, g.cfg.Metrics))
+	model = model.WithMiddleware(metricsLLMMiddleware(m, g.cfg.Metrics, inst.quotaBilled(m)))
 	return model, nil
 }
 

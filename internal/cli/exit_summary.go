@@ -115,11 +115,14 @@ func exitCostRow(in ExitSummaryInput, scheme *theme.Scheme, paint paintFunc) (st
 	duration := format.DurationMilis(in.Usage.Totals.DurationMS)
 
 	if q := in.Quota; q != nil {
-		pct := q.RemainingFraction * 100
-		value := fmt.Sprintf("%.0f%%", pct)
+		pct := min(max(int(q.RemainingFraction*100), 0), 100)
+		value := fmt.Sprintf("%d%%", pct)
 		if !q.ResetAt.IsZero() {
-			until := q.ResetAt.Sub(time.Now().UTC())
-			value += paint(scheme.Color.Text.Muted, fmt.Sprintf(" (↻ %s)", format.Duration(until)))
+			// A reset moment already past means the window refilled; showing
+			// "(↻ 0ms)" would read as a broken countdown.
+			if until := q.ResetAt.Sub(time.Now().UTC()); until > 0 {
+				value += paint(scheme.Color.Text.Muted, fmt.Sprintf(" (↻ %s)", format.Duration(until, format.Compact())))
+			}
 		}
 		switch {
 		case pct <= 0:
@@ -131,7 +134,8 @@ func exitCostRow(in ExitSummaryInput, scheme *theme.Scheme, paint paintFunc) (st
 	}
 
 	allUnpriced := in.Usage.Totals.UnpricedCalls > 0 && in.Usage.Totals.UnpricedCalls == in.Usage.Totals.Calls
-	if in.Usage.Totals.Calls == 0 || allUnpriced {
+	allQuota := in.Usage.Totals.Calls > 0 && in.Usage.Totals.QuotaCalls == in.Usage.Totals.Calls
+	if in.Usage.Totals.Calls == 0 || allUnpriced || allQuota {
 		return "Cost", paint(scheme.Color.Text.Muted, fmt.Sprintf("— (%s)", duration))
 	}
 	cost := format.FormatCostNano(in.Usage.Totals.CostNano, in.Usage.Totals.UnpricedCalls > 0)

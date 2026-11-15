@@ -82,7 +82,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/subagents`** | `/subagent` | *(none)* | Opens the interactive subagent browser to inspect running and completed subagents, view live outputs, or terminate tasks. |
 | **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. Requires pending permissions and questions to be resolved first. |
 | **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
-| **`/usage`** | | `[session\|workspace\|global]` | Opens the usage browser slot on the Session, Workspace or Global tab (default: Session). See [Usage Browser](#usage-browser-usage). |
+| **`/usage`** | | `[session\|workspace\|global\|quotas]` | Opens the usage browser slot on the Session, Workspace, Global or Quotas tab (default: Session). See [Usage Browser](#usage-browser-usage). |
 | **`/stats`** | | `[session\|workspace\|global]` | Opens the inference speed browser slot on the Session, Workspace or Global tab (default: Session). See [Stats Browser](#stats-browser-stats). |
 | **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
 | **`/rules`** | | *(none)* | Opens the interactive rules browser to inspect rule status, scope, triggers, and token estimates, and to reload workspace rules. |
@@ -102,12 +102,15 @@ Each row shows:
 
 | Column | Content |
 | :--- | :--- |
-| Label | Model label, falling back to its name and then its id. |
-| Description | Provider, then the model's workspace aliases rendered as `@name`. |
-| Current | The row of the model the session is actually running is suffixed `current`. |
+| Label | Model label, falling back to its name and then its id. Rows are grouped under a muted provider heading. |
+| Capacity | Context window (e.g. `400.0k ctx`) and the model's workspace aliases rendered as `@name`. |
+| Billing | Per-token prices in USD per million tokens (`$3/$15 /M` for input/output), or `quota` for subscription-billed providers. Blank when billing is unknown. |
+
+A muted detail line under the list shows the highlighted model's description, and the row of the
+model the session is actually running is suffixed `current`.
 
 - **Active model before a choice**: a fresh draft session has no model of its own, yet it already resolves to the workspace or agent default. That resolved model is marked `current`, and a session configured with an alias is marked on the model the alias resolves to.
-- **Search**: the filter box matches the label, description, and id, so typing an alias name narrows the list to the model it names. `/model` argument autocomplete matches aliases the same way and inserts the canonical model id.
+- **Search**: the filter box matches the label, aliases, id, provider name, and billing cell, so typing an alias name narrows the list to the model it names and typing a provider name isolates one provider's group. `/model` argument autocomplete matches aliases the same way and inserts the canonical model id.
 - **Nothing chat-capable**: the picker closes and reports `No chat-capable models available.`
 
 ### Thinking Controls (`/effort`, `/budget`, `/thinking`)
@@ -552,7 +555,7 @@ renders on the left of the line, the remaining ones on the right separated by ` 
 | `hint` | Shortcut hint or the Ctrl+C cancel prompt | — |
 | `mode` | Permission mode badge | — |
 | `context` | Context window usage, e.g. `109.5k/400.0k (27%)` | `27%` |
-| `usage` | Session usage as `<cost> · ↑<input> ↓<output>` (for example `$0.42 · ↑128.4k ↓8.3k`) once the session has recorded an LLM call; updates live from `usage_updated` events. `↑` is the total prompt size (including cached tokens) and `↓` is output tokens. A leading `≥` on the cost means some calls had no pricing data. | — |
+| `usage` | Session usage as `<cost> · ↑<input> ↓<output>` (for example `$0.42 · ↑128.4k ↓8.3k`) once the session has recorded an LLM call; updates live from `usage_updated` events. `↑` is the total prompt size (including cached tokens) and `↓` is output tokens. A leading `≥` on the cost means some calls had no pricing data. For quota-billed models the cost is replaced by remaining capacity — `94% (↻ 3h40m)` — updated from `quota_updated` events, amber under 20% and red at 0%; only the token counters render until the first reading arrives. | — |
 | `model` | Model and thinking effort, e.g. `gpt-5 · high` | model name only |
 
 Unknown segment IDs in the config file are dropped and reported; duplicates collapse; an empty
@@ -585,7 +588,7 @@ composition hides it.
 | Element | Format | Source |
 | :--- | :--- | :--- |
 | Spinner statistics | `(<elapsed> · ↑<input> ↓<output>)` | Elapsed time since the turn started streaming. `↑` and `↓` are the tokens sent and received in the turn, summed across its calls (not the context size): the session's token growth since the turn started plus the running usage of the in-flight call (`usage` on the stream chunk, cumulative per call). They start at zero. |
-| Turn summary line | `<Verb> for <elapsed> · ↑<input> ↓<output> · <cost> · done <time>` | `turn_completed` timeline entry written by the daemon when the turn ends. Canceled and failed turns use `Stopped after` and `Failed after`. Completed turns under 5 seconds are skipped. |
+| Turn summary line | `<Verb> for <elapsed> · ↑<input> ↓<output> · <cost> · done <time>` | `turn_completed` timeline entry written by the daemon when the turn ends. Canceled and failed turns use `Stopped after` and `Failed after`. Completed turns under 5 seconds are skipped. The cost part is omitted when every call was subscription-billed. |
 
 ## Usage Browser (`/usage`)
 
@@ -594,17 +597,18 @@ composition hides it.
 | **Session** (`1`) | Total cost; API and wall-clock duration; code changes (lines added and removed); usage by model (uncached input, cache read, cache write, output, cost); prompt cache (requests, share of input from cache, misses, expected rebuilds after compaction, last use); cache read and write cost; tool calls with per-tool calls, errors, denied, canceled, total and slowest time, and lines changed; usage insights. |
 | **Workspace** (`2`) | The selected range for the current workspace: cost and trend versus the previous period, sessions and average cost per session, API duration, code changes and cost per 100 changed lines, tokens, cache, usage grouped by the selected dimension, top sessions by cost, tools, insights. |
 | **Global** (`3`) | The same as Workspace across all workspaces, plus usage by workspace and top sessions across workspaces. |
+| **Quotas** (`4`) | Live quota windows of every quota-billed chat model: a remaining-capacity bar and percentage per model, grouped under a provider · account heading, with one `resets in <countdown> at <HH:MM>` line per window. Models sharing one window (same provider, account, and reset moment) are listed once as a shared pool. The session's model is marked `current`; each row is gauged by remaining capacity — red under 20%, yellow under 50%, green from 50% up. Updates live from `quota_updated` events and `r` re-reads. |
 
 | Key | Action |
 | :--- | :--- |
-| `←` / `→` / `Tab` / `Shift+Tab` / `1` `2` `3` | Switch tab. |
+| `←` / `→` / `Tab` / `Shift+Tab` / `1` `2` `3` `4` | Switch tab. |
 | `↑` / `↓` / `Ctrl+P` / `Ctrl+N` / `PgUp` / `PgDn` / `Ctrl+B` / `Ctrl+F` | Scroll long views. |
 | `m` `p` `a` `u` `i` `d` | Group Workspace and Global tabs by model, provider, agent, purpose, pricing tier, or day (the busiest day is marked with `*`). |
 | `t` | Cycle the range: last 24 hours, 7 days, 30 days, all time (default 30 days). |
 | `r` | Refresh. |
 | `Esc` / `q` | Close. |
 
-Input tokens are shown as uncached, cache read and cache write, which do not overlap. A cost prefixed with `≥` is a lower bound because some calls had no pricing. Insights (large-context share, cache write share, cache misses, compaction share, idle sessions, unpriced models, provider failure rates, tool error, denial and slow-tool rates, spend trend) appear only when a fixed threshold is met. A cache miss is a drop in cache read versus the previous chat call; calls after a compaction are counted as expected rebuilds. The cause of a miss is not guessed: the view shows the time since the previous call.
+Input tokens are shown as uncached, cache read and cache write, which do not overlap. A cost prefixed with `≥` is a lower bound because some calls had no pricing. Subscription-billed calls never count as unpriced: they are reported separately (`N of M calls were subscription-billed`). Insights (large-context share, cache write share, cache misses, compaction share, idle sessions, unpriced models, subscription-billed calls, provider failure rates, tool error, denial and slow-tool rates, spend trend) appear only when a fixed threshold is met. A cache miss is a drop in cache read versus the previous chat call; calls after a compaction are counted as expected rebuilds. The cause of a miss is not guessed: the view shows the time since the previous call.
 
 ## Stats Browser (`/stats`)
 
@@ -644,7 +648,15 @@ All usage endpoints are read-only.
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/v1/quotas?model=<id>` | `ModelQuota` (`model`, `remaining_fraction` 0–1, optional `reset_at` RFC 3339, optional `account`) for quota-billed providers. Returns `204 No Content` when the model's provider does not report quotas; `400` when `model` is missing. |
+| `GET` | `/v1/quotas?model=<id>` | `ModelQuota` (`model`, `provider`, `remaining_fraction` 0–1, optional `reset_at` RFC 3339, optional `account`) for quota-billed providers. Returns `204 No Content` when the model's provider does not report quotas; `400` when `model` is missing. |
+
+Model listings carry the billing facts behind this: each `Model` reports `description` and
+`quota_billed` (`true` when the model has no pricing and its provider bills against a
+subscription window). Sessions on quota-billed models push a `quota_updated` event on the
+session stream carrying the latest `ModelQuota` after every completed turn and whenever a call
+is rate limited, so clients keep the window fresh without polling. A rate-limited call's error
+is enriched with the fresh facts it can prove (e.g. `94% quota remaining · resets in 3h12m at
+18:40`) and never with an invented reset time.
 
 ## MCP HTTP Endpoints
 

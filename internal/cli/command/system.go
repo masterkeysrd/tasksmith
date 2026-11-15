@@ -5,16 +5,20 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/promise"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -208,27 +212,150 @@ var loadingHint = trail.FC("LoadingHint", func(text string) trail.Node {
 
 // modelPickerOptions builds the /model rows from the daemon's model listing.
 // Only models that can serve chat completion are offered, since a session cannot
-// converse with an embedding-only model. Aliases are folded into the description
-// so they both inform the user and answer to the picker's search box.
+// converse with an embedding-only model. Rows are grouped by provider and carry
+// a context/alias cell plus a billing cell (per-token prices or "quota"), so
+// the cost model of each option is visible before selecting it.
 func modelPickerOptions(models []api.Model, currentID string) []uicomponents.Option {
-	opts := make([]uicomponents.Option, 0, len(models))
+	chat := make([]api.Model, 0, len(models))
 	for _, m := range models {
-		if !m.Capabilities.SupportsCompletion() {
-			continue
+		if m.Capabilities.SupportsCompletion() {
+			chat = append(chat, m)
 		}
+	}
+	slices.SortStableFunc(chat, func(a, b api.Model) int {
+		if c := strings.Compare(a.Provider, b.Provider); c != 0 {
+			return c
+		}
+		return strings.Compare(cmp.Or(a.Label, a.Name, a.ID), cmp.Or(b.Label, b.Name, b.ID))
+	})
+
+	opts := make([]uicomponents.Option, 0, len(chat))
+	for _, m := range chat {
 		label := cmp.Or(m.Label, m.Name, m.ID)
-		description := strings.TrimSpace(m.Provider)
-		if aliases := modelAliasRefs(m.Aliases); len(aliases) > 0 {
-			description = strings.Join([]string{description, strings.Join(aliases, ", ")}, " · ")
-		}
+		capacity := modelCapacityCell(m)
 		opts = append(opts, uicomponents.Option{
 			Value:       m.ID,
 			Label:       label,
-			Description: strings.TrimSpace(description),
+			Description: strings.Join(modelAliasRefs(m.Aliases), " "),
+			Search:      m.Provider,
+			Cells:       []string{label, capacity, modelBillingCell(m)},
 			Current:     m.ID == currentID,
 		})
 	}
 	return opts
+}
+
+// modelCapacityCell renders the context window and typed aliases shown in a
+// /model row, e.g. "400k ctx · @fast, @default".
+func modelCapacityCell(m api.Model) string {
+	var parts []string
+	if m.ContextLimit > 0 {
+		parts = append(parts, format.Tokens(m.ContextLimit)+" ctx")
+	}
+	if aliases := modelAliasRefs(m.Aliases); len(aliases) > 0 {
+		parts = append(parts, strings.Join(aliases, ", "))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// modelBillingCell renders how a model is billed: per-token input/output prices
+// per million tokens, or "quota" for subscription-billed providers. An unknown
+// billing model stays blank rather than implying free.
+func modelBillingCell(m api.Model) string {
+	if m.QuotaBilled {
+		return "quota"
+	}
+	if m.Pricing == nil {
+		return ""
+	}
+	return fmt.Sprintf("$%s/$%s /M", trimPrice(m.Pricing.Input), trimPrice(m.Pricing.Output))
+}
+
+// trimPrice renders a per-million price without trailing zeros ("3", "0.1").
+func trimPrice(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// modelPickerColumns sizes the /model list columns from the rows actually
+// listed, like mcpListColumns. OptionList renders a fixed-width column as
+// width minus its two-cell right padding (a right-aligned last column carries
+// no padding), and appends " • current" to the last cell of the highlighted
+// row, so both are measured in. A narrow terminal shrinks the capacity column
+// first and leaves the billing column unmeasured (0) when even that cannot
+// fit, which lets the cells render unsqueezed instead of clipped.
+func modelPickerColumns(opts []uicomponents.Option, termWidth int) []uicomponents.Column {
+	const (
+		cellPadding   = 2
+		currentSuffix = 10 // utf8.RuneCountInString(" • current")
+		minCapacity   = 12
+		maxCapacity   = 34
+		minLabel      = 18
+	)
+	longestCap, longestBill := 0, 0
+	for _, opt := range opts {
+		if len(opt.Cells) > 1 {
+			longestCap = max(longestCap, utf8.RuneCountInString(opt.Cells[1]))
+		}
+		if len(opt.Cells) > 2 {
+			bill := utf8.RuneCountInString(opt.Cells[2])
+			if opt.Current {
+				// The suffix is appended to the cell; an empty cell becomes
+				// just "current".
+				if bill == 0 {
+					bill = currentSuffix - 2
+				} else {
+					bill += currentSuffix
+				}
+			}
+			longestBill = max(longestBill, bill)
+		}
+	}
+	capacity := min(max(longestCap+cellPadding, minCapacity), maxCapacity)
+	billing := longestBill
+	if billing > 0 && termWidth > 0 {
+		if budget := termWidth - minLabel - cellPadding; capacity+billing > budget {
+			capacity = max(minCapacity, budget-billing)
+			if capacity+billing > budget {
+				billing = 0
+			}
+		}
+	}
+	return []uicomponents.Column{
+		{Width: 0, Align: style.TextAlignLeft},
+		{Width: capacity, Align: style.TextAlignLeft},
+		{Width: billing, Align: style.TextAlignRight},
+	}
+}
+
+// modelPickerGroupLabel names the provider group a /model row belongs under.
+func modelPickerGroupLabel(models []api.Model) func(opt uicomponents.Option) string {
+	byID := make(map[string]api.Model, len(models))
+	for _, m := range models {
+		byID[m.ID] = m
+	}
+	return func(opt uicomponents.Option) string {
+		m, ok := byID[opt.Value]
+		if !ok {
+			return ""
+		}
+		return m.Provider
+	}
+}
+
+// modelPickerFooter renders the highlighted model's description as a muted
+// detail line under the list.
+func modelPickerFooter(models []api.Model) func(opt uicomponents.Option) string {
+	byID := make(map[string]api.Model, len(models))
+	for _, m := range models {
+		byID[m.ID] = m
+	}
+	return func(opt uicomponents.Option) string {
+		m, ok := byID[opt.Value]
+		if !ok {
+			return ""
+		}
+		return format.CompactSingleLine(strings.TrimSpace(m.Description), 100)
+	}
 }
 
 // modelAliasRefs renders aliases the way they are typed: with the "@" prefix the
@@ -246,6 +373,7 @@ func modelAliasRefs(aliases []string) []string {
 // ModelPicker renders an interactive model picker querying daemon models via wind.
 var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 	c := store.Client()
+	winSize := trail.UseWindowSize()
 
 	currentModel := store.UseSession(store.SessionState.ActiveModelID)
 
@@ -295,6 +423,9 @@ var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 		store.SetModel(opt.Value)
 	})
 	picker.Filterable = true
+	picker.Columns = modelPickerColumns(opts, winSize.Width)
+	picker.GroupLabel = modelPickerGroupLabel(result.Data)
+	picker.Footer = modelPickerFooter(result.Data)
 	picker.OnCancel = func() {
 		store.RemoveSlot(slotID)
 		store.AppendCommandOutput("/model", "Exited /model command")

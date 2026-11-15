@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -62,8 +63,11 @@ type PickerProps struct {
 	Bindings   []components.KeyBinding // Optional navigation shortcuts rendered inline via KeyboardHint
 	// GroupLabel is forwarded to OptionList to render a muted heading whenever the
 	// grouping changes between adjacent options.
-	GroupLabel     func(opt components.Option) string
-	Filterable     bool
+	GroupLabel func(opt components.Option) string
+	Filterable bool
+	// Footer renders a muted one-line detail for the highlighted option below
+	// the list, e.g. a model description that would not fit in a row.
+	Footer         func(opt components.Option) string
 	OnOpen         func()
 	OnSelect       func(opt components.Option)
 	Keys           map[string]func(opt components.Option)
@@ -100,7 +104,8 @@ func filterOptions(opts []components.Option, query string) []components.Option {
 	for _, opt := range opts {
 		if strings.Contains(strings.ToLower(opt.Label), q) ||
 			strings.Contains(strings.ToLower(opt.Description), q) ||
-			strings.Contains(strings.ToLower(opt.Value), q) {
+			strings.Contains(strings.ToLower(opt.Value), q) ||
+			strings.Contains(strings.ToLower(opt.Search), q) {
 			res = append(res, opt)
 			continue
 		}
@@ -122,6 +127,7 @@ func filterOptions(opts []components.Option, query string) []components.Option {
 // filtering, custom actions, and keyboard navigation.
 var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	scheme := theme.UseTheme()
+	winSize := trail.UseWindowSize()
 
 	cursor, setCursor := kitex.UseState(initialCursor(props.Options))
 	filter, setFilter := kitex.UseState("")
@@ -363,6 +369,22 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		Styles:     optionStyles,
 		GroupLabel: props.GroupLabel,
 	}))
+
+	if props.Footer != nil && len(filtered) > 0 {
+		if detail := strings.TrimSpace(props.Footer(filtered[cur])); detail != "" {
+			// The footer renders with WhiteSpacePre, so it must be clipped to
+			// the terminal width here or a long detail line would wrap.
+			if winSize.Width > 2 {
+				detail = format.CompactSingleLine(detail, winSize.Width-2)
+			}
+			footerStyle := style.S().Margin(1, 0, 0, 0).Foreground(scheme.Color.Text.Muted)
+			rows = append(rows, trail.Box(trail.BoxProps{
+				Style: style.S().FlexDirection(style.FlexRow),
+			}, trail.Span(trail.SpanProps{
+				Style: footerStyle.WhiteSpace(style.WhiteSpacePre),
+			}, trail.Text("  "+detail))))
+		}
+	}
 
 	// Inline prompt mode (confirm or input)
 	switch st.mode {

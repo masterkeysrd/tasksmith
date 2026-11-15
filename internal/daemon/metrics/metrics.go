@@ -74,6 +74,7 @@ const (
 	AttrPurpose    = "purpose"
 	AttrCostTier   = "cost_tier"
 	AttrPriced     = "priced"
+	AttrBilling    = "billing"
 	AttrErrorKind  = "error_kind"
 	AttrTool       = "tool"
 	AttrToolCallID = "tool_call_id"
@@ -81,6 +82,14 @@ const (
 	AttrSource     = "source"
 	AttrChange     = "change"
 	AttrRevert     = "revert"
+)
+
+// Billing modes recorded on llm_call records. A quota-billed call has no price
+// by design rather than a missing one, which is why it is recorded separately
+// from an unpriced per-token call.
+const (
+	BillingToken = "token"
+	BillingQuota = "quota"
 )
 
 // Metric names written by TaskSmith.

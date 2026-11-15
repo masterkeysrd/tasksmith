@@ -30,9 +30,12 @@ type Option struct {
 	Value       string
 	Label       string
 	Description string
-	Cells       []string
-	CellNodes   []trail.Node
-	Current     bool
+	// Search holds row text that should answer the picker's filter box without
+	// being rendered, e.g. a grouping key that only appears as a section heading.
+	Search    string
+	Cells     []string
+	CellNodes []trail.Node
+	Current   bool
 	// Icon renders in the cursor gutter between the selection marker and the first
 	// cell, so a row can carry a status glyph without spending a column on it.
 	Icon trail.Node

@@ -46,6 +46,36 @@ func llmCall(model string, cost int64, priced bool, tier string) metrics.LLMCall
 	}
 }
 
+func TestQuotaCallsSplitFromUnpriced(t *testing.T) {
+	s := newStore(t)
+	ctx := scoped("s1", "")
+
+	quotaCall := llmCall("pool-a", 0, false, "")
+	quotaCall.Billing = metrics.BillingQuota
+	_ = metrics.RecordLLMCall(ctx, s, llmCall("m1", 100, true, ""))
+	_ = metrics.RecordLLMCall(ctx, s, llmCall("m2", 0, false, ""))
+	_ = metrics.RecordLLMCall(ctx, s, quotaCall)
+
+	live := metrics.NewLive(s, nil)
+	u, err := live.SessionUsage(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Totals.Calls != 3 || u.Totals.QuotaCalls != 1 || u.Totals.UnpricedCalls != 1 {
+		t.Fatalf("live totals = %+v, want 3 calls with 1 quota and 1 unpriced", u.Totals)
+	}
+
+	sum, err := s.Summary(context.Background(), "/ws", api.UsageRequest{
+		Scope: api.UsageScopeWorkspace, GroupBy: api.UsageGroupByModel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Totals.QuotaCalls != 1 || sum.Totals.UnpricedCalls != 1 {
+		t.Fatalf("summary totals = %+v, want the same split from SQL aggregation", sum.Totals)
+	}
+}
+
 func TestHelpersWriteNonZeroMeasurementsAndAlwaysDuration(t *testing.T) {
 	s := newStore(t)
 	ctx := scoped("s1", "")

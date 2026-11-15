@@ -45,6 +45,14 @@ type Catalog struct {
 	fold map[string]ID
 }
 
+// QuotaCapability is an optional interface a profile source may implement to
+// report whether a model's provider bills against a subscription window. The
+// gateway implements it, which lets the catalog label models without any
+// network query.
+type QuotaCapability interface {
+	QuotaCapable(m Model) bool
+}
+
 // Build constructs a Catalog using cat for manifest models and profiles for fallback definitions.
 func Build(cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
 	c := &Catalog{
@@ -56,6 +64,7 @@ func Build(cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
 		fold:      make(map[string]ID),
 	}
 	if cat != nil {
+		quotaCapable, _ := profiles.(QuotaCapability)
 		var listedModels []Model
 		for _, p := range cat.Providers() {
 			c.providers[p.Metadata.Name] = p.Spec.Type
@@ -68,6 +77,11 @@ func Build(cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
 					}
 				}
 				merged := Merge(id, p.Spec.Type, &m, base)
+				// A model with no price whose provider reports quota is
+				// subscription-billed: its usage has no dollar cost to show.
+				if quotaCapable != nil {
+					merged.QuotaBilled = merged.Pricing == nil && quotaCapable.QuotaCapable(merged)
+				}
 				listedModels = append(listedModels, merged)
 				c.fold[strings.ToLower(string(id))] = id
 			}
@@ -166,6 +180,12 @@ func (c *Catalog) Get(id ID) (Model, bool) {
 		}
 	}
 	m := Merge(id, c.providers[id.Provider()], nil, base)
+	// Unlisted models carry the same billing rule as listed ones: an alias
+	// resolving to a model the manifest never lists is still subscription-billed
+	// when its provider reports quota capacity and the model has no price.
+	if quotaCapable, ok := c.profiles.(QuotaCapability); ok && quotaCapable != nil {
+		m.QuotaBilled = m.Pricing == nil && quotaCapable.QuotaCapable(m)
+	}
 	c.built.Save(m)
 	return m.Clone(), true
 }

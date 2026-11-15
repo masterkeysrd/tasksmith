@@ -55,7 +55,10 @@ func group(m map[string]*api.UsageGroup, key string) *api.UsageGroup {
 
 func addLLM(g *api.UsageGroup, r Record) {
 	g.Calls++
-	if r.Attr(AttrPriced) != "true" {
+	switch {
+	case r.Attr(AttrBilling) == BillingQuota:
+		g.QuotaCalls++
+	case r.Attr(AttrPriced) != "true":
 		g.UnpricedCalls++
 	}
 	if r.Status != StatusOK {
@@ -296,7 +299,7 @@ func (s *Store) llmGroups(ctx context.Context, base api.MetricsQuery, dim string
 	q := base
 	q.Kind = string(KindLLMCall)
 	q.Aggregates = sumAggregates(llmMetrics...)
-	q.GroupBy = []string{"attr.priced", "status"}
+	q.GroupBy = []string{"attr.priced", "attr.billing", "status"}
 	if dim != "" {
 		q.GroupBy = append([]string{dim}, q.GroupBy...)
 	}
@@ -317,7 +320,9 @@ func (s *Store) llmGroups(ctx context.Context, base api.MetricsQuery, dim string
 		}
 		for _, t := range []*api.UsageGroup{g, &total} {
 			t.Calls += row.Count
-			if row.Group["attr.priced"] != "true" {
+			if row.Group["attr.billing"] == BillingQuota {
+				t.QuotaCalls += row.Count
+			} else if row.Group["attr.priced"] != "true" {
 				t.UnpricedCalls += row.Count
 			}
 			if row.Group["status"] != string(StatusOK) {

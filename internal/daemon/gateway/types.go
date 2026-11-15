@@ -92,6 +92,11 @@ type Gateway interface {
 	// when the model's provider does not report quotas or has no quota data.
 	Quota(ctx context.Context, model models.Model) (*api.ModelQuota, error)
 
+	// QuotaCapable reports whether the model's provider can report quota at
+	// all. It is a cheap capability check (no network), used to label models
+	// as subscription-billed without querying the provider.
+	QuotaCapable(model models.Model) bool
+
 	// Close releases all client resources and connections.
 	Close() error
 }

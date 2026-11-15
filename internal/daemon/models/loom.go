@@ -74,6 +74,7 @@ func fromProfile(base *profile.Profile, id ID, providerType string) Model {
 	}
 	m.Source.BuiltIn = true
 	m.Name = base.Name
+	m.Description = base.Description
 	m.Limits = Limits{
 		Context:    base.Limits.Context,
 		Output:     base.Limits.Output,

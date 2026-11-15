@@ -110,3 +110,9 @@ func ActiveSession() *api.Session {
 func ActiveUsage() api.SessionUsage {
 	return store.GetUsage()
 }
+
+// ActiveQuota returns the store's latest quota reading for the active model,
+// or nil when the model has no subscription window or none was ever read.
+func ActiveQuota() *api.ModelQuota {
+	return store.GetQuota()
+}

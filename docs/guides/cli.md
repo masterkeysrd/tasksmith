@@ -180,7 +180,7 @@ Some built-in commands:
 | `/clear` | `/clear` | Start a fresh session draft. |
 | `/compact` | `/compact [focus]` | Compact conversation history to free context window space, with optional focus instructions. |
 | `/context` | `/context` | Show visual token usage grid and context window breakdown by category. |
-| `/usage` | `/usage [session\|workspace\|global]` | Open the usage browser for the session, the workspace, or all workspaces. |
+| `/usage` | `/usage [session\|workspace\|global\|quotas]` | Open the usage browser for the session, the workspace, all workspaces, or quota windows. |
 | `/stats` | `/stats [session\|workspace\|global]` | Open the inference speed browser: prompt processing and token generation rates per model. |
 | `/workspace` | `/workspace [reload]` | Reload the active workspace resources from disk. |
 | `/exit` | `/exit` (or `/quit`, `/q`) | Exit the REPL. |
@@ -309,12 +309,13 @@ Prompt cache:          12 requests · 79% of input tokens from cache · 2 misses
 Tool calls:            41 total · 38 ok · 1 error · 2 denied · 0 canceled
 ```
 
-- **Tabs** (`1`/`2`/`3` or `←`/`→`): the current session, the current workspace, and all workspaces. `/usage workspace` and `/usage global` open the browser on that tab.
+- **Tabs** (`1`/`2`/`3`/`4` or `←`/`→`): the current session, the current workspace, all workspaces, and quota windows. `/usage workspace`, `/usage global`, and `/usage quotas` open the browser on that tab.
 - **Group by** (`m` model, `p` provider, `a` agent, `u` purpose, `i` pricing tier, `d` day) and **range** (`t`: 24 hours, 7 days, 30 days, all time) apply to the Workspace and Global tabs.
+- **Quotas** (`4`): subscription-billed models show a remaining-capacity bar and percentage, grouped under a provider · account heading, with one reset countdown per window. Models sharing one window are listed once as a shared pool, and the session's model is marked `current`.
 - **Tools** show calls, errors, permission denials, cancellations, total and slowest time, and lines changed per tool.
 - **Insights** such as "40% of cost came from calls above 150k context" or "`bash` failed 40% of its calls" appear only when they apply, each with a short hint.
 
-Input tokens are shown split into **uncached**, **cache read** and **cache write**, so the three never overlap. Cost is estimated from the model's `cost` pricing when the call is made and then frozen, so later price changes don't rewrite history. If a model has no pricing, its calls are **unpriced**: they still count toward calls and tokens, but their cost is unknown, so totals are shown as a lower bound (for example `≥ $1.23`) with a note. Usage survives session deletion.
+Input tokens are shown split into **uncached**, **cache read** and **cache write**, so the three never overlap. Cost is estimated from the model's `cost` pricing when the call is made and then frozen, so later price changes don't rewrite history. If a model has no pricing, its calls are **unpriced**: they still count toward calls and tokens, but their cost is unknown, so totals are shown as a lower bound (for example `≥ $1.23`) with a note. Calls on subscription-billed providers are never counted as unpriced — they draw on a quota window instead, and their remaining capacity is on the Quotas tab. Usage survives session deletion.
 
 ---
 

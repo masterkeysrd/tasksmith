@@ -882,6 +882,24 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			},
 			wantTyp: EventError,
 		},
+		{
+			name: "quota_updated",
+			ev: Event{
+				Type:  EventQuotaUpdated,
+				Topic: SessionStreamTopic("s1"),
+				Payload: QuotaUpdatedEvent{
+					SessionID: "s1",
+					Quota: ModelQuota{
+						Model:             "pool/gemini-pro",
+						Provider:          "pool",
+						RemainingFraction: 0.94,
+						ResetAt:           now,
+						Account:           "dev@example.com",
+					},
+				},
+			},
+			wantTyp: EventQuotaUpdated,
+		},
 	}
 
 	for _, tc := range tests {

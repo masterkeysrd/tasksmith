@@ -33,6 +33,14 @@ func TestFilterOptions(t *testing.T) {
 	if res := filterOptions(opts, "nonexistent"); len(res) != 0 {
 		t.Errorf("nonexistent query expected 0 opts, got %d", len(res))
 	}
+	// Search text answers the filter without being rendered (e.g. a provider
+	// name that only appears as a group heading).
+	withSearch := []uicomponents.Option{
+		{Value: "p/x", Label: "X", Search: "poolprovider"},
+	}
+	if res := filterOptions(withSearch, "poolprov"); len(res) != 1 {
+		t.Errorf("search-field match expected 1 opt, got %+v", res)
+	}
 }
 
 // TestPickerOnOpenFiresOncePerMount guards the mount effect's dependency list.
@@ -96,6 +104,25 @@ func TestPickerSubtitleAndGroups(t *testing.T) {
 	}
 	if n := strings.Count(out, "Workspace MCPs (.agents/mcps)"); n != 1 {
 		t.Errorf("group heading rendered %d times, want 1:\n%s", n, out)
+	}
+}
+
+// TestPickerFooter renders the muted detail line for the highlighted option.
+func TestPickerFooter(t *testing.T) {
+	render := renderComponent(t, 80)
+	out := render(Picker(PickerProps{
+		Title: "Select model:",
+		Options: []uicomponents.Option{
+			{Value: "a", Label: "Alpha"},
+			{Value: "b", Label: "Beta"},
+		},
+		Footer: func(opt uicomponents.Option) string { return "about " + opt.Label },
+	}))
+	if !strings.Contains(out, "about Alpha") {
+		t.Errorf("footer for the highlighted option missing:\n%s", out)
+	}
+	if strings.Contains(out, "about Beta") {
+		t.Errorf("footer rendered for an unhighlighted option:\n%s", out)
 	}
 }
 

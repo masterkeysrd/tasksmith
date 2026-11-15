@@ -115,6 +115,9 @@ type TurnCompletedRecord struct {
 	// Unpriced reports that some calls of the turn had no pricing, so
 	// CostNano is a lower bound.
 	Unpriced bool `json:"unpriced,omitempty"`
+	// QuotaBilled reports that every call of the turn was billed against a
+	// subscription/quota window, so the turn has no meaningful dollar cost.
+	QuotaBilled bool `json:"quota_billed,omitempty"`
 }
 
 // TimelineEntry represents an append-only entry in a session's chronological timeline.
