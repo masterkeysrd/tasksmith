@@ -1,0 +1,356 @@
+package guard
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+)
+
+// DefaultProtectedDirs is the default list of protected workspace directories
+// where write, delete, or exec operations are classified as SafetyUnsafe.
+var DefaultProtectedDirs = []string{".git", ".bare", ".agents"}
+
+// DefaultSensitivePaths is the list of system directory prefixes that are always
+// classified as SafetyUnsafe even for read-only operations.
+var DefaultSensitivePaths = []string{
+	"/etc",
+	"/private/etc",
+	"/System",
+	"/proc",
+	"/sys",
+	"/dev",
+	"/boot",
+	"/root",
+	"/var/root",
+}
+
+// DefaultSensitiveHomeDirs is the list of credential/key directory and file names
+// that are always classified as SafetyUnsafe even for read-only operations.
+var DefaultSensitiveHomeDirs = []string{
+	".ssh",
+	".aws",
+	".gnupg",
+	".kube",
+	".docker",
+	".netrc",
+}
+
+// IsSecretEnvFile reports whether name (a file's base name) is a dotenv secret file
+// (such as ".env" or ".env.local") while allowing safe template suffixes
+// (".example", ".sample", ".template").
+func IsSecretEnvFile(name string) bool {
+	if name == ".env" || strings.HasPrefix(name, ".env.") {
+		if strings.HasSuffix(name, ".example") ||
+			strings.HasSuffix(name, ".sample") ||
+			strings.HasSuffix(name, ".template") {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// IsProtectedPath reports whether targetPath (either workspace-relative or
+// absolute within workspaceDir) resides inside any of the specified protected
+// directories. If protectedDirs is empty, DefaultProtectedDirs is used.
+func IsProtectedPath(targetPath, workspaceDir string, protectedDirs ...string) bool {
+	if len(protectedDirs) == 0 {
+		protectedDirs = DefaultProtectedDirs
+	}
+	cleaned := filepath.Clean(strings.TrimSpace(targetPath))
+	checkPath := cleaned
+	if filepath.IsAbs(cleaned) && workspaceDir != "" {
+		wsClean := filepath.Clean(workspaceDir)
+		if rel, err := filepath.Rel(wsClean, cleaned); err == nil && !strings.HasPrefix(rel, "..") {
+			checkPath = rel
+		}
+	}
+	for part := range strings.SplitSeq(filepath.ToSlash(checkPath), "/") {
+		if slices.Contains(protectedDirs, part) {
+			return true
+		}
+	}
+	return false
+}
+
+// TasksmithSecretPaths returns TaskSmith's own global secret locations under
+// XDG config and data directories ($XDG_CONFIG_HOME/tasksmith/.env,
+// $XDG_DATA_HOME/tasksmith/credentials, and $XDG_DATA_HOME/tasksmith/mcp).
+func TasksmithSecretPaths() []string {
+	var paths []string
+	if configDir, err := xdg.Home(xdg.VarTypeConfig); err == nil && strings.TrimSpace(configDir) != "" {
+		paths = append(paths, filepath.Join(configDir, ".env"))
+	}
+	if dataDir, err := xdg.Home(xdg.VarTypeData); err == nil && strings.TrimSpace(dataDir) != "" {
+		paths = append(paths,
+			filepath.Join(dataDir, "credentials"),
+			filepath.Join(dataDir, "mcp"),
+		)
+	}
+	return paths
+}
+
+// IsSensitivePath reports whether targetPath points to a sensitive system path
+// (e.g. /etc, /proc, /dev), user credential path (e.g. ~/.ssh, ~/.aws), or
+// TaskSmith's own global XDG secret stores.
+func IsSensitivePath(targetPath, homeDir string) bool {
+	cleaned := fsutils.ExpandAndCleanPath(targetPath, "", homeDir)
+	for _, sp := range DefaultSensitivePaths {
+		if fsutils.IsInsideDir(cleaned, sp) {
+			return true
+		}
+	}
+	if homeDir != "" {
+		homeClean := filepath.Clean(homeDir)
+		for _, dir := range DefaultSensitiveHomeDirs {
+			if fsutils.IsInsideDir(cleaned, filepath.Join(homeClean, dir)) {
+				return true
+			}
+		}
+	}
+	for part := range strings.SplitSeq(filepath.ToSlash(cleaned), "/") {
+		if slices.Contains(DefaultSensitiveHomeDirs, part) {
+			return true
+		}
+	}
+	canonical := cleaned
+	if filepath.IsAbs(cleaned) {
+		canonical = fsutils.ResolveDeepestExisting(cleaned)
+	}
+	for _, sp := range TasksmithSecretPaths() {
+		spClean := filepath.Clean(sp)
+		if fsutils.IsInsideDir(cleaned, spClean) {
+			return true
+		}
+		if filepath.IsAbs(spClean) && filepath.IsAbs(canonical) {
+			if fsutils.IsInsideDir(canonical, fsutils.ResolveDeepestExisting(spClean)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TasksmithConfigPaths returns the host locations holding TaskSmith's own
+// runtime configuration: $XDG_CONFIG_HOME/tasksmith/sandbox.json and the
+// per-project workspace store under $XDG_DATA_HOME/tasksmith/workspaces/.
+// Reads stay permitted (the daemon and /sandbox view must read them), but
+// tools and sandboxed processes must never modify them, since they define the
+// isolation and approval posture of the next invocation.
+func TasksmithConfigPaths() []string {
+	var paths []string
+	if configDir, err := xdg.Home(xdg.VarTypeConfig); err == nil && strings.TrimSpace(configDir) != "" {
+		paths = append(paths, filepath.Join(configDir, "sandbox.json"))
+	}
+	if dataDir, err := xdg.Home(xdg.VarTypeData); err == nil && strings.TrimSpace(dataDir) != "" {
+		paths = append(paths, filepath.Join(dataDir, "workspaces"))
+	}
+	return paths
+}
+
+// insideTasksmithConfigPath reports whether cleaned targets a TaskSmith config
+// path itself or a descendant of one, using the deepest-existing resolution so
+// symlinked XDG roots still anchor on the real store.
+func insideTasksmithConfigPath(cleaned string) bool {
+	for _, cp := range TasksmithConfigPaths() {
+		cpClean := filepath.Clean(cp)
+		if fsutils.IsInsideDir(cleaned, cpClean) {
+			return true
+		}
+		if filepath.IsAbs(cpClean) && filepath.IsAbs(cleaned) &&
+			fsutils.IsInsideDir(cleaned, fsutils.ResolveDeepestExisting(cpClean)) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsSensitiveWritePath reports whether targetPath must be treated as sensitive
+// for modification or deletion (as opposed to reading): every path
+// IsSensitivePath covers, plus TaskSmith's own sandbox.json and workspace
+// configuration store, which a tool or sandboxed process must never rewrite.
+func IsSensitiveWritePath(targetPath, homeDir string) bool {
+	if IsSensitivePath(targetPath, homeDir) {
+		return true
+	}
+	cleaned := fsutils.ExpandAndCleanPath(targetPath, "", homeDir)
+	return insideTasksmithConfigPath(cleaned)
+}
+
+// ProtectedWorkspaceWriteFiles lists workspace-root shell and Git startup
+// files whose modification lets a child process inject code into every later
+// execution, so they must stay read-only at the kernel level.
+var ProtectedWorkspaceWriteFiles = []string{".bashrc", ".zshrc", ".profile", ".gitconfig"}
+
+// ProtectedWorkspaceWritePaths returns canonical absolute host paths that
+// native OS sandbox profiles must keep read-only for child processes even
+// when they sit inside the sandbox work directory: the workspace's agent
+// resource directory and manifest (.agents, WORKSPACE.md), Git tampering
+// surfaces (.git/hooks, .git/config), workspace-root shell/Git startup
+// dotfiles, and TaskSmith's own XDG config and data stores (which hold
+// sandbox.json and permissions.json, so a sandboxed process must never be
+// able to escalate its own next invocation).
+//
+// Candidates are returned even when they do not exist yet so a file created
+// mid-session lands behind an already-active kernel rule. Workspace entries
+// anchor on both the logical and symlink-resolved root without dereferencing
+// the leaf, so a planted symlink at a protected location cannot be unlinked
+// and replaced from inside the sandbox.
+func ProtectedWorkspaceWritePaths(workDir string) []string {
+	var paths []string
+	if root := strings.TrimSpace(workDir); root != "" {
+		// Anchor on both the logical and symlink-resolved workspace root so a
+		// protected entry itself (e.g. a repository-planted .git/hooks symlink)
+		// is covered even when its target lives elsewhere; the leaf is never
+		// dereferenced, so unlinking the entry stays a denied write.
+		roots := []string{filepath.Clean(root)}
+		if resolved := fsutils.ResolveDeepestExisting(root); resolved != roots[0] {
+			roots = append(roots, resolved)
+		}
+		for _, root := range roots {
+			paths = append(paths, []string{
+				filepath.Join(root, ".agents"),
+				filepath.Join(root, "WORKSPACE.md"),
+				filepath.Join(root, ".git", "hooks"),
+				filepath.Join(root, ".git", "config"),
+			}...)
+			for _, name := range ProtectedWorkspaceWriteFiles {
+				paths = append(paths, filepath.Join(root, name))
+			}
+		}
+	}
+	if configDir, err := xdg.Home(xdg.VarTypeConfig); err == nil && strings.TrimSpace(configDir) != "" {
+		paths = append(paths, fsutils.ResolveDeepestExisting(configDir))
+	}
+	if dataDir, err := xdg.Home(xdg.VarTypeData); err == nil && strings.TrimSpace(dataDir) != "" {
+		paths = append(paths, fsutils.ResolveDeepestExisting(dataDir))
+	}
+	return paths
+}
+
+// HostCredentialPaths returns canonical absolute host paths holding user or
+// TaskSmith secrets that native OS sandbox profiles must block child processes
+// from reading: every entry in DefaultSensitiveHomeDirs under the user's home
+// directory plus TaskSmith's XDG secret stores.
+//
+// Candidates are returned even when they do not exist yet so secrets created
+// mid-session (e.g. an OAuth login or /setup writing the credential store) land
+// behind an already-active kernel rule. Each candidate is canonicalized via
+// fsutils.ResolveDeepestExisting before overlap detection so a dotfiles
+// workspace whose ~/.ssh symlinks into workDir stays readable while unrelated
+// workspaces mask the resolved target.
+func HostCredentialPaths(workDir string) []string {
+	var candidates []string
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		for _, name := range DefaultSensitiveHomeDirs {
+			candidates = append(candidates, filepath.Join(home, name))
+		}
+	}
+	candidates = append(candidates, TasksmithSecretPaths()...)
+
+	root := fsutils.ResolveDeepestExisting(strings.TrimSpace(workDir))
+	var paths []string
+	seen := make(map[string]struct{}, len(candidates))
+	for _, p := range candidates {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		p = fsutils.ResolveDeepestExisting(p)
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		if pathOverlapsWorkspace(p, root) {
+			continue
+		}
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+func pathOverlapsWorkspace(denied, workDir string) bool {
+	return workDir == "." || workDir == string(filepath.Separator) ||
+		fsutils.IsInsideDir(workDir, denied) || fsutils.IsInsideDir(denied, workDir)
+}
+
+// PathConfig encapsulates the path configuration used by EvaluatePathWithConfig.
+type PathConfig struct {
+	WorkspaceDir  string
+	HomeDir       string
+	ProtectedDirs []string
+	ReadDirs      []string
+	WriteDirs     []string
+}
+
+// EvaluatePathWithConfig resolves targetPath against cfg.WorkspaceDir (and expands ~ with cfg.HomeDir)
+// and classifies its SafetyLevel for the given ActionType:
+//   - Sensitive system or credential paths always return SafetyUnsafe.
+//   - TaskSmith's own sandbox.json and workspace config store return
+//     SafetyUnsafe for any non-read action (reads stay permitted).
+//   - Paths inside cfg.WorkspaceDir return SafetyUnsafe if targeting a protected directory
+//     with a non-read action, or SafetySafe otherwise.
+//   - Paths inside cfg.WriteDirs return SafetySafe for ActionRead, ActionWrite, ActionDelete,
+//     and SafetyUnsafe for other actions.
+//   - Paths inside cfg.ReadDirs return SafetySafe for ActionRead, and SafetyUnsafe for other actions.
+//   - Otherwise (outside cfg.WorkspaceDir, cfg.WriteDirs, cfg.ReadDirs):
+//     returns SafetyOutside for ActionRead, or SafetyUnsafe for non-read actions.
+func EvaluatePathWithConfig(targetPath string, action api.ActionType, cfg PathConfig) (string, api.SafetyLevel) {
+	resolved := fsutils.ExpandAndCleanPath(targetPath, cfg.WorkspaceDir, cfg.HomeDir)
+	if IsSensitivePath(resolved, cfg.HomeDir) {
+		return resolved, api.SafetyUnsafe
+	}
+	if action != api.ActionRead && insideTasksmithConfigPath(resolved) {
+		return resolved, api.SafetyUnsafe
+	}
+	for _, rd := range cfg.ReadDirs {
+		if fsutils.IsInsideDir(resolved, rd) {
+			if action == api.ActionRead {
+				canonical, err := filepath.EvalSymlinks(resolved)
+				base, baseErr := filepath.EvalSymlinks(rd)
+				if err == nil && baseErr == nil && (!fsutils.IsInsideDir(canonical, base) || IsSensitivePath(canonical, cfg.HomeDir)) {
+					return resolved, api.SafetyUnsafe
+				}
+				return resolved, api.SafetySafe
+			}
+			return resolved, api.SafetyUnsafe
+		}
+		if canonical, err := filepath.EvalSymlinks(resolved); err == nil {
+			if base, err := filepath.EvalSymlinks(rd); err == nil && fsutils.IsInsideDir(canonical, base) && action != api.ActionRead {
+				return resolved, api.SafetyUnsafe
+			}
+		}
+	}
+	if cfg.WorkspaceDir != "" && fsutils.IsInsideDir(resolved, cfg.WorkspaceDir) {
+		if IsProtectedPath(resolved, cfg.WorkspaceDir, cfg.ProtectedDirs...) && action != api.ActionRead {
+			return resolved, api.SafetyUnsafe
+		}
+		return resolved, api.SafetySafe
+	}
+	for _, wd := range cfg.WriteDirs {
+		if fsutils.IsInsideDir(resolved, wd) {
+			if action == api.ActionRead || action == api.ActionWrite || action == api.ActionDelete {
+				return resolved, api.SafetySafe
+			}
+			return resolved, api.SafetyUnsafe
+		}
+	}
+	if action == api.ActionRead {
+		return resolved, api.SafetyOutside
+	}
+	return resolved, api.SafetyUnsafe
+}
+
+// EvaluatePath resolves targetPath against workspaceDir (and expands ~ with homeDir)
+// and classifies its SafetyLevel for the given ActionType.
+func EvaluatePath(targetPath, workspaceDir, homeDir string, action api.ActionType, protectedDirs ...string) (string, api.SafetyLevel) {
+	return EvaluatePathWithConfig(targetPath, action, PathConfig{
+		WorkspaceDir:  workspaceDir,
+		HomeDir:       homeDir,
+		ProtectedDirs: protectedDirs,
+	})
+}

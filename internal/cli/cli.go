@@ -1,0 +1,112 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/masterkeysrd/kite/backend"
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
+	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
+)
+
+// ErrInvalidOptions is returned when required [Options] fields are missing.
+var ErrInvalidOptions = errors.New("repl: invalid options")
+
+// Options holds configuration for starting the REPL.
+type Options struct {
+	Client      *client.Client
+	Workspace   string
+	Version     string
+	SessionID   string
+	Agent       string
+	Model       string
+	Title       string
+	Backend     backend.Backend
+	StartDaemon func(ctx context.Context, socketPath string) error
+
+	// Sandbox is the requested sandbox isolation backend ("native" or
+	// "local") for sessions this REPL creates. Empty means the daemon
+	// resolves the host default (native when available).
+	Sandbox api.SandboxMode
+
+	// StartupNotices are appended to the transcript as warning notices once
+	// the REPL boots (e.g. a daemon version skew the user should act on).
+	StartupNotices []string
+}
+
+// Validate checks that all required fields in [Options] are provided.
+func (o Options) Validate() error {
+	if o.Client == nil {
+		return fmt.Errorf("%w: client is required", ErrInvalidOptions)
+	}
+	if strings.TrimSpace(o.Workspace) == "" {
+		return fmt.Errorf("%w: workspace is required", ErrInvalidOptions)
+	}
+	return nil
+}
+
+// Run starts the REPL application using the Kite trail inline engine.
+func Run(ctx context.Context, opts Options) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+
+	theme.SetClient(theme.ClientCLI)
+
+	if opts.Client.CWD() == "" && opts.Workspace != "" {
+		opts.Client = opts.Client.WithCWD(opts.Workspace)
+	}
+
+	store.ResetApp()
+	store.ClearSlot()
+	store.ResetSession()
+	store.ClearTranscript()
+	store.ResetStream()
+
+	store.SetHeaderMeta(opts.Version, opts.Workspace)
+	store.SetClient(opts.Client)
+
+	for _, notice := range opts.StartupNotices {
+		store.AppendWarning(notice)
+	}
+
+	status, err := opts.Client.GetWorkspaceStatus(ctx)
+	if err == nil && status != nil && status.NeedsOnboarding && opts.SessionID == "" {
+		store.StartOnboarding(opts.Workspace, *status, false)
+	} else {
+		store.InitSession(ctx, opts.Client, store.InitSessionOptions{
+			SessionID:   opts.SessionID,
+			Agent:       opts.Agent,
+			Model:       opts.Model,
+			Title:       opts.Title,
+			Sandbox:     opts.Sandbox,
+			StartDaemon: opts.StartDaemon,
+		})
+	}
+
+	trailOpts := []trail.Option{trail.WithCtrlCExit(false)}
+	if opts.Backend != nil {
+		trailOpts = append(trailOpts, trail.WithBackend(opts.Backend))
+	}
+
+	if err := trail.Run(ctx, App(), trailOpts...); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
+}
+
+// ActiveSession returns the currently active session from the store, or nil if none.
+func ActiveSession() *api.Session {
+	return store.GetSession().Session
+}
+
+// ActiveUsage returns the active session's usage snapshot; it is empty for
+// draft sessions that never recorded calls.
+func ActiveUsage() api.SessionUsage {
+	return store.GetUsage()
+}

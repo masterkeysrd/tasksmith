@@ -1,0 +1,41 @@
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: openai
+spec:
+  type: openai
+  endpoint: https://api.openai.com/v1
+  defaultModels:
+    completion: gpt-6.1-sol
+  config:
+    # apiMode: responses | chat_completions (omitted = auto-detect per model)
+    # store: false disables server-side conversation state retention (ZDR mode)
+    store: false
+  auth:
+    type: env
+    env: OPENAI_API_KEY
+  models:
+    - id: gpt-6-astra
+      name: gpt-6-astra
+      label: GPT-6 Astra
+      limits:
+        context: 1050000
+        output: 128000
+    - id: gpt-6-luna
+      name: gpt-6-luna
+      label: GPT-6 Luna
+      limits:
+        context: 1050000
+        output: 128000
+    - id: gpt-6.1-sol
+      name: gpt-6.1-sol
+      label: GPT-6.1 Sol
+      limits:
+        context: 1050000
+        output: 128000
+    - id: gpt-6.1-terra
+      name: gpt-6.1-terra
+      label: GPT-6.1 Terra
+      limits:
+        context: 1050000
+        output: 128000

@@ -1,0 +1,1045 @@
+package harness
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/masterkeysrd/loom/graph"
+	"github.com/masterkeysrd/loom/llm"
+	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/stream"
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+)
+
+// NodeOptions holds the dynamic per-agent/model dependencies for harness graph nodes.
+type NodeOptions struct {
+	Model        *llm.Model
+	Tools        tools.Container
+	SystemPrompt string
+	Limits       models.Limits
+	Static       StaticContext
+	// Rules, when non-nil, drives smart rule matching on tool executions.
+	Rules *RuleMatcher
+	// Attachments, when non-nil, resolves all user-message attachments (files,
+	// directories, rules, skills, MCP resources) and rule triggers into <system_reminders>.
+	Attachments *AttachmentResolver
+}
+
+// Validate checks that required model and tools container dependencies are present.
+func (opts NodeOptions) Validate() error {
+	if opts.Model == nil {
+		return fmt.Errorf("%w: model is required", ErrInvalidConfig)
+	}
+	if opts.Tools == nil {
+		return fmt.Errorf("%w: tools container is required", ErrInvalidConfig)
+	}
+	return nil
+}
+
+// Node is a workflow graph node that can update its dynamic dependencies in place.
+type Node interface {
+	graph.Node[State]
+	Configure(opts NodeOptions)
+}
+
+type GraphConfig struct {
+	Checkpointer graph.Checkpointer
+	Permissions  permissions.SessionManager
+	Queue        Queue
+	Bash         BashRunner
+	Spiller      tools.Spiller
+	Logger       log.Interface
+	Metrics      metrics.Recorder
+}
+
+type AgentNodeConfig struct {
+	Logger log.Interface
+}
+
+type CompactionNodeConfig struct {
+	Logger log.Interface
+}
+
+type ToolsNodeConfig struct {
+	Metrics     metrics.Recorder
+	Permissions permissions.SessionManager
+	Logger      log.Interface
+}
+
+type InboxNodeConfig struct {
+	Queue  Queue
+	Logger log.Interface
+}
+
+type CommandNodeConfig struct {
+	Queue   Queue
+	Bash    BashRunner
+	Spiller tools.Spiller
+	Logger  log.Interface
+}
+
+func buildGraph(cfg GraphConfig) (*graph.Graph[State], []Node, error) {
+	compactNode := NewCompactionNode(CompactionNodeConfig{
+		Logger: cfg.Logger,
+	})
+	agentNode := NewAgentNode(AgentNodeConfig{
+		Logger: cfg.Logger,
+	})
+	toolsNode := NewToolsNode(ToolsNodeConfig{
+		Metrics:     cfg.Metrics,
+		Permissions: cfg.Permissions,
+		Logger:      cfg.Logger,
+	})
+	inboxNode := NewInboxNode(InboxNodeConfig{
+		Queue:  cfg.Queue,
+		Logger: cfg.Logger,
+	})
+	commandNode := NewCommandNode(CommandNodeConfig{
+		Queue:   cfg.Queue,
+		Bash:    cfg.Bash,
+		Spiller: cfg.Spiller,
+		Logger:  cfg.Logger,
+	})
+
+	hasLeadingCommand := func(_ State) bool {
+		return cfg.Queue.HasLeadingCommand()
+	}
+	queueHasItems := func(_ State) bool {
+		return cfg.Queue.HasItems()
+	}
+
+	g, err := graph.New[State]().
+		WithName("harness").
+		WithCheckpointer(cfg.Checkpointer).
+		AddNode("command", commandNode).
+		AddNode("inbox", inboxNode).
+		AddNode("agent", agentNode).
+		AddNode("tools", toolsNode).
+		AddNode("compact", compactNode).
+		// START routing:
+		AddConditionalEdge(graph.START, "compact", State.HasLeadingCompact).
+		AddConditionalEdge(graph.START, "tools", func(s State) bool {
+			return !s.HasLeadingCompact() && s.HasPendingToolCalls()
+		}).
+		AddConditionalEdge(graph.START, "command", func(s State) bool {
+			return !s.HasLeadingCompact() && !s.HasPendingToolCalls()
+		}).
+		// Command routing:
+		AddConditionalEdge("command", "command", hasLeadingCommand).
+		AddConditionalEdge("command", "inbox", func(s State) bool {
+			return !hasLeadingCommand(s)
+		}).
+		// Inbox routing:
+		AddConditionalEdge("inbox", "compact", func(s State) bool {
+			return s.HasLeadingCompact() || (s.ShouldWakeAgent() && s.ShouldAutoCompact())
+		}).
+		AddConditionalEdge("inbox", "agent", func(s State) bool {
+			return !s.HasLeadingCompact() && !s.ShouldAutoCompact() && s.ShouldWakeAgent()
+		}).
+		AddConditionalEdge("inbox", graph.END, func(s State) bool {
+			return !s.HasLeadingCompact() && !s.ShouldWakeAgent()
+		}).
+		// Agent routing:
+		AddConditionalEdge("agent", "tools", State.HasPendingToolCalls).
+		AddConditionalEdge("agent", "compact", func(s State) bool {
+			return !s.HasPendingToolCalls() && s.HasLeadingCompact()
+		}).
+		AddConditionalEdge("agent", "command", func(s State) bool {
+			return !s.HasPendingToolCalls() && !s.HasLeadingCompact()
+		}).
+		// Tools routing:
+		AddConditionalEdge("tools", "compact", State.ShouldAutoCompact).
+		AddConditionalEdge("tools", "inbox", func(s State) bool {
+			return !s.ShouldAutoCompact()
+		}).
+		// Compact routing:
+		AddConditionalEdge("compact", "agent", State.IsAutoCompacted).
+		AddConditionalEdge("compact", "command", func(s State) bool {
+			return !s.IsAutoCompacted() && hasLeadingCommand(s)
+		}).
+		AddConditionalEdge("compact", "inbox", func(s State) bool {
+			return !s.IsAutoCompacted() && !hasLeadingCommand(s) && queueHasItems(s)
+		}).
+		AddConditionalEdge("compact", graph.END, func(s State) bool {
+			return !s.IsAutoCompacted() && !hasLeadingCommand(s) && !queueHasItems(s)
+		}).
+		Build()
+	if err != nil {
+		return nil, nil, fmt.Errorf("harness: build graph: %w", err)
+	}
+
+	nodes := []Node{commandNode, inboxNode, agentNode, toolsNode, compactNode}
+	return g, nodes, nil
+}
+
+func emit(ctx context.Context, ev any) {
+	var name string
+	switch v := ev.(type) {
+	case message.Message:
+		if v == nil || SystemKindOf(v) != "" {
+			return
+		}
+		ev = message.CloneMessage(v)
+		name = "message"
+	case api.CommandStartedEvent:
+		name = "command_started"
+	case CommandCompleted:
+		name = "command_completed"
+	case api.TodosUpdatedEvent:
+		v.Todos = slices.Clone(v.Todos)
+		ev = v
+		name = "todos_updated"
+	case api.CompactionStartedEvent:
+		name = "compaction_started"
+	case CompactionCompleted:
+		name = "compaction_completed"
+	case RuleLoaded:
+		name = "rule_loaded"
+	case api.CacheBrokenRecord:
+		name = "cache_broken"
+	case api.ContextUpdatedEvent:
+		name = "context_updated"
+	default:
+		name = "harness"
+	}
+	if sw, ok := stream.WriterFromContext(ctx); ok && sw != nil {
+		_ = sw.Write(ctx, stream.Event{
+			Name: name,
+			Data: ev,
+		})
+	}
+}
+
+func extractTodos(msg *message.Tool) ([]api.TodoItem, bool) {
+	if msg == nil || msg.Name != "todos" || msg.IsError {
+		return nil, false
+	}
+	out, ok := msg.StructuredContent.(api.TodosOutput)
+	if !ok {
+		if m, ok := msg.StructuredContent.(map[string]any); ok {
+			data, err := json.Marshal(m)
+			if err == nil {
+				_ = json.Unmarshal(data, &out)
+			} else {
+				return nil, false
+			}
+		} else {
+			return nil, false
+		}
+	}
+	return slices.Clone(out.Todos), true
+}
+
+// CommandNode executes shell commands and injects their outputs into the conversation state.
+type CommandNode struct {
+	queue   Queue
+	bash    BashRunner
+	spiller tools.Spiller
+	limits  models.Limits
+	static  StaticContext
+	logger  log.Interface
+}
+
+var _ Node = (*CommandNode)(nil)
+
+func (n *CommandNode) Configure(opts NodeOptions) {
+	n.limits = opts.Limits
+	n.static = opts.Static
+}
+
+func NewCommandNode(cfg CommandNodeConfig) *CommandNode {
+	return &CommandNode{
+		queue:   cfg.Queue,
+		bash:    cfg.Bash,
+		spiller: cfg.Spiller,
+		logger:  cfg.Logger.ForComponent("harness.command"),
+	}
+}
+
+func (n *CommandNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
+	cmdID, command, ok := n.queue.PopCommand()
+	if !ok {
+		return graph.Update[State](func(s State) State { return s }), nil
+	}
+	if cmdID == "" || !uuid.Validate(cmdID) {
+		cmdID = uuid.NewString()
+	}
+
+	emit(ctx, api.CommandStartedEvent{ID: cmdID, Command: command})
+
+	cmdCtx := scope.With(ctx, scope.Scope{ToolCallID: cmdID, ToolName: "command"})
+	w := n.spiller.NewWriter(cmdCtx)
+	defer w.Close()
+
+	res, err := n.bash.Bash(cmdCtx, std.BashRequest{Command: command, Output: w})
+	w.Close()
+	if err != nil {
+		return nil, err
+	}
+	outText := strings.TrimRight(w.String(), "\r\n")
+
+	emit(ctx, CommandCompleted{
+		ID: cmdID,
+		CommandRecord: api.CommandRecord{
+			Command:    command,
+			Output:     outText,
+			ExitCode:   res.ExitCode,
+			DurationMs: res.Duration.Milliseconds(),
+		},
+	})
+
+	msgText := fmt.Sprintf("<bash_command command=%q exit_code=\"%d\">\n%s\n</bash_command>", command, res.ExitCode, outText)
+	msg := message.NewUserTextMeta(msgText, map[string]any{MetaSystemKind: SystemKindCommand})
+	msg.SetID(cmdID)
+
+	return graph.Update[State](func(s State) State {
+		s = s.AppendMessage(msg, MessageUpdateOptions{Static: n.static, Limits: n.limits})
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
+		return s
+	}), nil
+}
+
+// AgentNode is the primary reasoning and completion node in the harness workflow graph.
+// It implements [github.com/masterkeysrd/loom/graph.Node].
+type AgentNode struct {
+	model        *llm.Model
+	tools        tools.Container
+	systemPrompt string
+	limits       models.Limits
+	static       StaticContext
+	logger       log.Interface
+}
+
+var _ Node = (*AgentNode)(nil)
+
+func (n *AgentNode) Configure(opts NodeOptions) {
+	n.model = opts.Model
+	n.tools = opts.Tools
+	n.systemPrompt = strings.TrimSpace(opts.SystemPrompt)
+	n.limits = opts.Limits
+	n.static = opts.Static
+}
+
+// NewAgentNode constructs a new [AgentNode] bound to the resolved LLM model,
+// tool container, system prompt, limits, static context, and structured logger.
+func NewAgentNode(cfg AgentNodeConfig) *AgentNode {
+	return &AgentNode{
+		logger: cfg.Logger.ForComponent("harness.agent"),
+	}
+}
+
+// Execute binds all registered tool definitions to the LLM model, invokes it with
+// the transient system prompt prepended to the conversation state, emits the
+// resulting assistant message to the stream, and appends it to [State.Messages].
+func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
+	llmMessages := make([]message.Message, 0, len(state.Messages)+1)
+	if n.systemPrompt != "" {
+		llmMessages = append(llmMessages, message.NewSystemText(n.systemPrompt))
+	}
+	llmMessages = append(llmMessages, state.Messages...)
+
+	boundModel := n.model
+	if defs := n.tools.Definitions(); len(defs) > 0 {
+		boundModel = n.model.BindToolDefs(defs...)
+	}
+
+	// The message ID is generated before the call so that the metrics
+	// middleware can attribute the LLM call to its assistant message and turn.
+	msgID := uuid.NewString()
+	callCtx := scope.With(ctx, scope.Scope{
+		TurnID:    state.LastUserMessageID(),
+		MessageID: msgID,
+		Purpose:   string(metrics.PurposeChat),
+	})
+	resp, err := boundModel.Invoke(callCtx, llmMessages)
+	if err != nil {
+		return nil, fmt.Errorf("harness: invoke llm: %w", err)
+	}
+
+	resp.ID = msgID
+	emit(ctx, resp)
+
+	if resp.Metrics != nil {
+		prevCached := state.Context.CachedTokens
+		currCached := resp.Metrics.Tokens.CacheRead
+		if isCacheBroken(prevCached, currCached) {
+			emit(ctx, api.CacheBrokenRecord{
+				PrevCached:  prevCached,
+				CurrCached:  currCached,
+				InputTokens: resp.Metrics.Tokens.Input,
+			})
+		}
+	}
+
+	return graph.Update[State](func(s State) State {
+		s = s.AppendMessage(resp, MessageUpdateOptions{Static: n.static, Limits: n.limits})
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
+		return s
+	}), nil
+}
+
+// cacheDropThresholdPct is the minimum relative drop in cached tokens (3%)
+// required to report a prompt cache miss, ignoring minor prefix-boundary jitter.
+const cacheDropThresholdPct = 3
+
+func isCacheBroken(prevCached, currCached int) bool {
+	if prevCached <= 0 || currCached >= prevCached {
+		return false
+	}
+	drop := int64(prevCached - currCached)
+	return drop*100 >= int64(prevCached)*cacheDropThresholdPct
+}
+
+// InboxNode drains messages from the session queue and injects them into the conversation state.
+// It implements [github.com/masterkeysrd/loom/graph.Node].
+type InboxNode struct {
+	queue       Queue
+	limits      models.Limits
+	static      StaticContext
+	attachments *AttachmentResolver
+	logger      log.Interface
+}
+
+var _ Node = (*InboxNode)(nil)
+
+func (n *InboxNode) Configure(opts NodeOptions) {
+	n.limits = opts.Limits
+	n.static = opts.Static
+	n.attachments = opts.Attachments
+}
+
+// NewInboxNode constructs a new [InboxNode] bound to the queue and logger.
+func NewInboxNode(cfg InboxNodeConfig) *InboxNode {
+	return &InboxNode{
+		queue:  cfg.Queue,
+		logger: cfg.Logger.ForComponent("harness.inbox"),
+	}
+}
+
+// Execute drains queued messages from the queue, generates IDs if needed, emits notifications,
+// and appends them to [State.Messages].
+func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
+	queued := n.queue.PopMessages()
+	if len(queued) == 0 {
+		return graph.Update[State](func(s State) State { return s }), nil
+	}
+
+	drained := make(message.MessageList, 0, len(queued))
+	tempState := state
+	for _, msg := range queued {
+		if msg == nil {
+			continue
+		}
+		cloned := message.CloneMessage(msg)
+		cloned, msgNewTools := tempState.DeduplicateToolBlocks(cloned)
+		if cloned.GetID() == "" || !uuid.Validate(cloned.GetID()) {
+			cloned.SetID(uuid.NewString())
+		}
+		tempState = tempState.RecordLoadedTools(msgNewTools...)
+		emit(ctx, cloned)
+		drained = append(drained, cloned)
+
+		if n.attachments != nil {
+			var reminder *message.User
+			var loaded []RuleLoaded
+			tempState, reminder, loaded = n.attachments.ResolveUserMessage(ctx, cloned, tempState)
+			if reminder != nil {
+				drained = append(drained, reminder)
+			}
+			for _, ev := range loaded {
+				emit(ctx, ev)
+			}
+		}
+	}
+
+	return graph.Update[State](func(s State) State {
+		s = s.RecordLoadedTools(tempState.LoadedTools...)
+		s = s.RecordLoadedRules(tempState.LoadedRules...)
+		s = s.RecordLoadedSkills(tempState.LoadedSkills...)
+		s = s.RecordSuggestedRules(tempState.SuggestedRules...)
+		s = s.AppendMessages(drained, MessageUpdateOptions{Static: n.static, Limits: n.limits})
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
+		return s
+	}), nil
+}
+
+// ToolsNode orchestrates pre-flight tool preparation, permission gate evaluation,
+// interrupt/resume lifecycles, and tool execution.
+// It implements [github.com/masterkeysrd/loom/graph.Node].
+type ToolsNode struct {
+	tools       tools.Container
+	permissions permissions.SessionManager
+	limits      models.Limits
+	static      StaticContext
+	rules       *RuleMatcher
+	logger      log.Interface
+	metrics     metrics.Recorder
+}
+
+var _ Node = (*ToolsNode)(nil)
+
+func (n *ToolsNode) Configure(opts NodeOptions) {
+	n.tools = opts.Tools
+	n.limits = opts.Limits
+	n.static = opts.Static
+	n.rules = opts.Rules
+}
+
+// NewToolsNode constructs a new [ToolsNode] bound to the tool container, permission manager, and logger.
+func NewToolsNode(cfg ToolsNodeConfig) *ToolsNode {
+	return &ToolsNode{
+		permissions: cfg.Permissions,
+		logger:      cfg.Logger.ForComponent("harness.tools"),
+		metrics:     cfg.Metrics,
+	}
+}
+
+// executeTool runs the tool and records a tool_call metric. The duration
+// covers execution only; permission and question waits happen before it.
+// When planReadOnly is true, the context is tagged so execution-capable tools
+// apply a per-command read-only kernel profile inside native sandboxes even
+// though the sandbox itself may be writable. When planUnsandboxed is true, the
+// context is tagged so those tools skip the kernel wrapper for this call's
+// child process — the permission engine already approved that posture.
+func (n *ToolsNode) executeTool(ctx context.Context, tc *message.ToolCall, planReadOnly, planUnsandboxed bool) (*message.Tool, error) {
+	start := time.Now()
+	msg, err := n.tools.Execute(tools.WithUnsandboxedExecution(tools.WithReadOnlyExecution(ctx, planReadOnly), planUnsandboxed), tc)
+	dur := time.Since(start)
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		n.recordTool(ctx, tc, metrics.StatusCanceled, "canceled", dur)
+	case err != nil:
+		n.recordTool(ctx, tc, metrics.StatusError, "execute_error", dur)
+	case msg != nil && msg.IsError:
+		n.recordTool(ctx, tc, metrics.StatusError, "tool_error", dur)
+	default:
+		n.recordTool(ctx, tc, metrics.StatusOK, "", dur)
+	}
+	return msg, err
+}
+
+// recordFailure records a tool call that failed before executing, classifying
+// permission rejections as denied.
+func (n *ToolsNode) recordFailure(ctx context.Context, tc *message.ToolCall, err error) {
+	if errors.Is(err, tools.ErrPermissionDenied) {
+		n.recordTool(ctx, tc, metrics.StatusDenied, "permission_denied", 0)
+		return
+	}
+	n.recordTool(ctx, tc, metrics.StatusError, "prepare_error", 0)
+}
+
+func (n *ToolsNode) recordTool(ctx context.Context, tc *message.ToolCall, status metrics.Status, errKind string, dur time.Duration) {
+	err := metrics.RecordToolCall(ctx, n.metrics, metrics.ToolCall{
+		Tool:       tc.Name,
+		ToolCallID: tc.ID,
+		Status:     status,
+		ErrorKind:  errKind,
+		Duration:   dur,
+	})
+	if err != nil {
+		n.logger.Warn("failed to record tool call metrics", log.String("error", err.Error()))
+	}
+}
+
+// Execute handles tool call evaluation, permission interrupts, permission resumes,
+// and cancellation when a user sends a new message while tool calls are pending.
+func (n *ToolsNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
+	asstIdx, _, unfulfilled, hasUserAfter := state.ActiveToolCalls()
+	if asstIdx < 0 || len(unfulfilled) == 0 {
+		return clearPermissionsUpdate(), nil
+	}
+	if hasUserAfter {
+		return n.cancelCalls(ctx, asstIdx, unfulfilled, state.Messages)
+	}
+
+	asstMsgID := state.Messages[asstIdx].GetID()
+	turnID := state.LastUserMessageID()
+	ctx = scope.With(ctx, scope.Scope{TurnID: turnID, MessageID: asstMsgID})
+
+	if len(state.PendingPermissions) > 0 || len(state.PendingQuestions) > 0 {
+		return n.resumeCalls(ctx, unfulfilled, state.PendingPermissions, state.PermissionDecisions, state.PendingQuestions, state.QuestionResponses, state.LoadedTools)
+	}
+	return n.evaluateCalls(ctx, unfulfilled, state.LoadedTools)
+}
+
+func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []*message.ToolCall, messages message.MessageList) (graph.Command[State], error) {
+	canceledMsgs := make(message.MessageList, 0, len(unfulfilled))
+	for _, tc := range unfulfilled {
+		toolMsg, err := newErrorToolMessage(tc, "tool execution canceled: user sent a new message")
+		if err != nil {
+			return nil, err
+		}
+		n.recordTool(ctx, tc, metrics.StatusCanceled, "canceled", 0)
+		emit(ctx, toolMsg)
+		canceledMsgs = append(canceledMsgs, toolMsg)
+	}
+
+	trailingIdx := len(messages) - 1
+	for trailingIdx > asstIdx && SystemKindOf(messages[trailingIdx]) != "" {
+		trailingIdx--
+	}
+	trailingUser := message.CloneMessage(messages[trailingIdx])
+	if strings.TrimSpace(trailingUser.GetID()) == "" {
+		trailingUser.SetID(uuid.NewString())
+	}
+	emit(ctx, trailingUser)
+
+	return graph.Update[State](func(s State) State {
+		if trailingIdx >= 0 && trailingIdx < len(s.Messages) {
+			s.Messages[trailingIdx].SetID(trailingUser.GetID())
+		}
+		insertIdx := firstNonToolIndex(s.Messages, asstIdx+1)
+		updated := make(message.MessageList, 0, len(s.Messages)+len(canceledMsgs))
+		updated = append(updated, s.Messages[:insertIdx]...)
+		updated = append(updated, canceledMsgs...)
+		updated = append(updated, s.Messages[insertIdx:]...)
+		s.Messages = updated
+		s.PendingPermissions = nil
+		s.PermissionDecisions = nil
+		s.PendingQuestions = nil
+		s.QuestionResponses = nil
+		s.Context = computeContextState(n.static, s, n.limits)
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
+		return s
+	}), nil
+}
+
+func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.ToolCall, loadedTools []string) (graph.Command[State], error) {
+	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
+	var pending []api.PermissionRequest
+	var questions []api.QuestionRequest
+	var updatedTodos []api.TodoItem
+	var hasTodos bool
+	var newTools []string
+	plans := make(map[string]*tools.Plan)
+
+	dedupState := State{LoadedTools: loadedTools}
+
+	for _, tc := range unfulfilled {
+		if tc.Name == "ask_question" {
+			plan, err := n.tools.Prepare(ctx, tc)
+			if err == nil {
+				var access tools.AccessDecision
+				var req *api.PermissionRequest
+				access, req, err = n.permissions.Evaluate(plan)
+				if err == nil {
+					switch access {
+					case tools.AccessAsk:
+						if req == nil {
+							err = tools.ErrPermissionDenied
+						} else {
+							pending = append(pending, *req)
+							continue
+						}
+					case tools.AccessAllow:
+					default:
+						err = tools.ErrPermissionDenied
+					}
+				}
+			}
+			var question api.QuestionRequest
+			if err == nil {
+				question, err = newQuestionRequest(tc)
+			}
+			if err != nil {
+				n.recordFailure(ctx, tc, err)
+				msg, msgErr := newErrorToolMessage(tc, err.Error())
+				if msgErr != nil {
+					return nil, msgErr
+				}
+				emit(ctx, msg)
+				toolMsgs = append(toolMsgs, msg)
+				continue
+			}
+			questions = append(questions, question)
+			continue
+		}
+		toolMsg, req, err := n.evaluateSingleCall(ctx, tc, plans)
+		if err != nil {
+			return nil, err
+		}
+		if req != nil {
+			pending = append(pending, *req)
+			continue
+		}
+		deduped, msgNewTools := dedupState.DeduplicateToolBlocks(toolMsg)
+		dedupState = dedupState.RecordLoadedTools(msgNewTools...)
+		newTools = append(newTools, msgNewTools...)
+		emit(ctx, deduped)
+		toolMsgs = append(toolMsgs, deduped)
+		if dedupedTool, ok := deduped.(*message.Tool); ok {
+			if todos, ok := extractTodos(dedupedTool); ok {
+				updatedTodos = todos
+				hasTodos = true
+				emit(ctx, api.TodosUpdatedEvent{Todos: updatedTodos})
+			}
+		}
+	}
+
+	if len(pending) > 0 || len(questions) > 0 {
+		return graph.InterruptUpdate[State](func(s State) State {
+			s.Messages = append(s.Messages, toolMsgs...)
+			s.PendingPermissions = clonePermissionRequests(pending)
+			s.PermissionDecisions = nil
+			s.PendingQuestions = cloneQuestionRequests(questions)
+			s.QuestionResponses = nil
+			if hasTodos {
+				s.Todos = slices.Clone(updatedTodos)
+			}
+			s = s.RecordLoadedTools(newTools...)
+			s.Context = computeContextState(n.static, s, n.limits)
+			emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
+			return s
+		}), nil
+	}
+
+	return n.appendToolMessagesUpdate(ctx, toolMsgs, unfulfilled, plans, updatedTodos, hasTodos, newTools), nil
+}
+
+func newQuestionRequest(tc *message.ToolCall) (api.QuestionRequest, error) {
+	data, err := json.Marshal(tc.Args)
+	if err != nil {
+		return api.QuestionRequest{}, err
+	}
+	var input api.AskQuestionInput
+	if err := json.Unmarshal(data, &input); err != nil {
+		return api.QuestionRequest{}, err
+	}
+	return api.QuestionRequest{
+		ID:          uuid.NewString(),
+		ToolCallID:  tc.ID,
+		Title:       input.Title,
+		Description: input.Description,
+		Questions:   input.Questions,
+	}, nil
+}
+
+func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall, plans map[string]*tools.Plan) (*message.Tool, *api.PermissionRequest, error) {
+	plan, err := n.tools.Prepare(ctx, tc)
+	if err != nil {
+		n.recordFailure(ctx, tc, err)
+		msg, msgErr := newErrorToolMessage(tc, err.Error())
+		return msg, nil, msgErr
+	}
+	if plans != nil {
+		plans[tc.ID] = plan
+	}
+
+	access, req, err := n.permissions.Evaluate(plan)
+	if err != nil {
+		n.recordFailure(ctx, tc, err)
+		msg, msgErr := newErrorToolMessage(tc, err.Error())
+		return msg, nil, msgErr
+	}
+	if access == tools.AccessAsk && req != nil {
+		return nil, req, nil
+	}
+	if access == tools.AccessDeny {
+		n.recordTool(ctx, tc, metrics.StatusDenied, "permission_denied", 0)
+		msg, msgErr := newErrorToolMessage(tc, tools.ErrPermissionDenied.Error())
+		return msg, nil, msgErr
+	}
+
+	msg, execErr := n.executeTool(ctx, tc, plan.ReadOnly, plan.Unsandboxed)
+	if execErr != nil {
+		return nil, nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, execErr)
+	}
+	return msg, nil, nil
+}
+
+func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []api.PermissionRequest, decisions map[string]api.PermissionDecision, questions []api.QuestionRequest, answers map[string]api.QuestionResponse, loadedTools []string) (graph.Command[State], error) {
+	pendingByCall := make(map[string]api.PermissionRequest, len(pending))
+	for _, req := range pending {
+		pendingByCall[req.ToolCallID] = req
+	}
+	questionsByCall := make(map[string]api.QuestionRequest, len(questions))
+	for _, req := range questions {
+		questionsByCall[req.ToolCallID] = req
+	}
+
+	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
+	var nextQuestions []api.QuestionRequest
+	var updatedTodos []api.TodoItem
+	var hasTodos bool
+	var newTools []string
+
+	// Re-prepare each resumed call so rule matching can read plan.Target/Paths.
+	// DryRun preparation is side-effect-free, so this is safe to repeat.
+	var plans map[string]*tools.Plan
+	if n.tools != nil {
+		plans = make(map[string]*tools.Plan, len(unfulfilled))
+		for _, tc := range unfulfilled {
+			if plan, err := n.tools.Prepare(ctx, tc); err == nil {
+				plans[tc.ID] = plan
+			}
+		}
+	}
+
+	dedupState := State{LoadedTools: loadedTools}
+
+	for _, tc := range unfulfilled {
+		if req, ok := questionsByCall[tc.ID]; ok {
+			response, found := lookupQuestionResponse(answers, req)
+			if !found {
+				return nil, ErrPendingQuestionsUnresolved
+			}
+			out := api.AskQuestionOutput{Canceled: response.Canceled, Answers: make([]api.QuestionAnswer, 0, len(response.Answers))}
+			matched := make([]int, len(req.Questions))
+			used := make([]bool, len(response.Answers))
+			for i := range matched {
+				matched[i] = -1
+				if i < len(response.Answers) && response.Answers[i].Question == req.Questions[i].Question {
+					matched[i] = i
+					used[i] = true
+				}
+			}
+			for i, question := range req.Questions {
+				if matched[i] >= 0 {
+					continue
+				}
+				for j, answer := range response.Answers {
+					if !used[j] && answer.Question == question.Question {
+						matched[i] = j
+						used[j] = true
+						break
+					}
+				}
+			}
+			for _, j := range matched {
+				if j < 0 {
+					continue
+				}
+				answer := response.Answers[j]
+				converted := api.QuestionAnswer{Question: answer.Question, Selected: slices.Clone(answer.Selected), Text: answer.Text, Confirmed: answer.Confirmed}
+				out.Answers = append(out.Answers, converted)
+			}
+			for i, answer := range response.Answers {
+				if !used[i] {
+					out.Answers = append(out.Answers, api.QuestionAnswer{Question: answer.Question, Selected: slices.Clone(answer.Selected), Text: answer.Text})
+				}
+			}
+			data, err := json.Marshal(out)
+			if err != nil {
+				return nil, err
+			}
+			msg := &message.Tool{
+				Base:              message.Base{ID: uuid.NewString()},
+				ToolCallID:        tc.ID,
+				Name:              tc.Name,
+				Content:           message.Content{&message.TextBlock{Text: string(data)}},
+				StructuredContent: out,
+			}
+			n.recordTool(ctx, tc, metrics.StatusOK, "", 0)
+			emit(ctx, msg)
+			toolMsgs = append(toolMsgs, msg)
+			continue
+		}
+		req, ok := pendingByCall[tc.ID]
+		if !ok {
+			return nil, ErrPendingPermissionsUnresolved
+		}
+		if tc.Name == "ask_question" {
+			dec, ok := lookupDecision(decisions, req)
+			if !ok {
+				return nil, ErrPendingPermissionsUnresolved
+			}
+			if err := n.permissions.ApplyDecision(&req, dec); err != nil {
+				n.recordFailure(ctx, tc, err)
+				msg, msgErr := newErrorToolMessage(tc, err.Error())
+				if msgErr != nil {
+					return nil, msgErr
+				}
+				emit(ctx, msg)
+				toolMsgs = append(toolMsgs, msg)
+				continue
+			}
+			question, err := newQuestionRequest(tc)
+			if err != nil {
+				return nil, err
+			}
+			nextQuestions = append(nextQuestions, question)
+			continue
+		}
+		var planReadOnly bool
+		if p, ok := plans[tc.ID]; ok && p != nil {
+			planReadOnly = p.ReadOnly
+		}
+		toolMsg, err := n.resumeSingleCall(ctx, tc, req, decisions, planReadOnly)
+		if err != nil {
+			return nil, err
+		}
+		deduped, msgNewTools := dedupState.DeduplicateToolBlocks(toolMsg)
+		dedupState = dedupState.RecordLoadedTools(msgNewTools...)
+		newTools = append(newTools, msgNewTools...)
+		emit(ctx, deduped)
+		toolMsgs = append(toolMsgs, deduped)
+		if dedupedTool, ok := deduped.(*message.Tool); ok {
+			if todos, ok := extractTodos(dedupedTool); ok {
+				updatedTodos = todos
+				hasTodos = true
+				emit(ctx, api.TodosUpdatedEvent{Todos: updatedTodos})
+			}
+		}
+	}
+
+	if len(nextQuestions) > 0 {
+		return graph.InterruptUpdate[State](func(s State) State {
+			s = n.appendToolMessagesUpdate(ctx, toolMsgs, unfulfilled, plans, updatedTodos, hasTodos, newTools)(s)
+			s.PendingQuestions = cloneQuestionRequests(nextQuestions)
+			return s
+		}), nil
+	}
+	return n.appendToolMessagesUpdate(ctx, toolMsgs, unfulfilled, plans, updatedTodos, hasTodos, newTools), nil
+}
+
+func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, req api.PermissionRequest, decisions map[string]api.PermissionDecision, planReadOnly bool) (*message.Tool, error) {
+	dec, ok := lookupDecision(decisions, req)
+	if !ok {
+		return nil, ErrPendingPermissionsUnresolved
+	}
+	if err := n.permissions.ApplyDecision(&req, dec); err != nil {
+		n.recordFailure(ctx, tc, err)
+		return newErrorToolMessage(tc, err.Error())
+	}
+	// The pending request carries the exact posture the user was shown and
+	// approved, so resume execution re-applies it instead of re-deriving.
+	toolMsg, err := n.executeTool(ctx, tc, planReadOnly, req.Unsandboxed)
+	if err != nil {
+		return nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, err)
+	}
+	return toolMsg, nil
+}
+
+func firstNonToolIndex(messages message.MessageList, start int) int {
+	idx := start
+	for idx < len(messages) {
+		if _, isTool := messages[idx].(*message.Tool); !isTool {
+			return idx
+		}
+		idx++
+	}
+	return idx
+}
+
+func clearPermissionsUpdate() graph.Update[State] {
+	return func(s State) State {
+		s.PendingPermissions = nil
+		s.PermissionDecisions = nil
+		s.PendingQuestions = nil
+		s.QuestionResponses = nil
+		return s
+	}
+}
+
+func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs message.MessageList, calls []*message.ToolCall, plans map[string]*tools.Plan, todos []api.TodoItem, hasTodos bool, newTools []string) graph.Update[State] {
+	return func(s State) State {
+		s = s.AppendMessages(toolMsgs, MessageUpdateOptions{Static: n.static, Limits: n.limits})
+		s.PendingPermissions = nil
+		s.PermissionDecisions = nil
+		s.PendingQuestions = nil
+		s.QuestionResponses = nil
+		if hasTodos {
+			s.Todos = slices.Clone(todos)
+		}
+		s = s.RecordLoadedTools(newTools...)
+		toolResults := toolToolMessages(toolMsgs)
+		s = s.RecordLoadedSkills(loadedSkillsFromToolResults(toolResults)...)
+		// Smart rule matching after tool results are appended: tool-name and
+		// path triggers auto-inject matching conditional rules as reminders.
+		if n.rules != nil {
+			reminder, loaded := n.rules.MatchToolBatch(calls, plans, toolResults, s)
+			if len(loaded) > 0 {
+				s = s.RecordLoadedRules(ruleLoadedNames(loaded)...)
+			}
+			if reminder != nil {
+				s = s.AppendMessage(reminder, MessageUpdateOptions{Static: n.static, Limits: n.limits})
+				for _, ev := range loaded {
+					if ev.Trigger != "manual" {
+						emit(ctx, ev)
+					}
+				}
+			}
+		}
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
+		return s
+	}
+}
+
+func loadedSkillsFromToolResults(results []*message.Tool) []string {
+	var names []string
+	for _, res := range results {
+		if res == nil || res.IsError || res.Name != "load_skill" {
+			continue
+		}
+		if out, ok := res.StructuredContent.(api.LoadSkillOutput); ok && strings.TrimSpace(out.Skill) != "" {
+			names = append(names, strings.TrimSpace(out.Skill))
+		}
+	}
+	return names
+}
+
+// toolToolMessages extracts the *message.Tool results from a mixed message list.
+func toolToolMessages(msgs message.MessageList) []*message.Tool {
+	var out []*message.Tool
+	for _, m := range msgs {
+		if t, ok := m.(*message.Tool); ok {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func lookupQuestionResponse(answers map[string]api.QuestionResponse, req api.QuestionRequest) (api.QuestionResponse, bool) {
+	if response, ok := answers[req.ID]; ok {
+		return response, true
+	}
+	response, ok := answers[req.ToolCallID]
+	return response, ok
+}
+
+func lookupDecision(decisions map[string]api.PermissionDecision, req api.PermissionRequest) (api.PermissionDecision, bool) {
+	if len(decisions) == 0 {
+		return api.PermissionDecision{}, false
+	}
+	if dec, ok := decisions[req.ID]; ok && isValidDecisionKind(dec.Kind) {
+		return dec, true
+	}
+	if dec, ok := decisions[req.ToolCallID]; ok && isValidDecisionKind(dec.Kind) {
+		return dec, true
+	}
+	return api.PermissionDecision{}, false
+}
+
+func isValidDecisionKind(k api.DecisionKind) bool {
+	switch k {
+	case api.DecisionAllowOnce, api.DecisionAllowSession, api.DecisionReject:
+		return true
+	default:
+		return false
+	}
+}
+
+func newErrorToolMessage(tc *message.ToolCall, errText string) (*message.Tool, error) {
+	return &message.Tool{
+		Base:       message.Base{ID: uuid.NewString()},
+		ToolCallID: tc.ID,
+		Name:       tc.Name,
+		IsError:    true,
+		Content: message.Content{
+			&message.TextBlock{Text: errText},
+		},
+	}, nil
+}

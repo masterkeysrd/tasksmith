@@ -5,35 +5,52 @@ import (
 	"strings"
 )
 
-// Op represents the type of edit operation.
+// Op represents the type of line edit operation in an edit script.
 type Op int
 
 const (
+	// OpEqual indicates a line that is unchanged between both inputs.
 	OpEqual Op = iota
+	// OpDelete indicates a line deleted from the first input.
 	OpDelete
+	// OpInsert indicates a line inserted from the second input.
 	OpInsert
 )
 
-// Edit represents a single line edit operation.
+// String returns a human-readable name for the edit operation.
+func (op Op) String() string {
+	switch op {
+	case OpEqual:
+		return "equal"
+	case OpDelete:
+		return "delete"
+	case OpInsert:
+		return "insert"
+	default:
+		return fmt.Sprintf("Op(%d)", int(op))
+	}
+}
+
+// Edit represents a single line edit operation produced by [MyersDiff].
 type Edit struct {
 	Op   Op
 	Line string
 }
 
-// hunk represents a contiguous group of edit operations.
+// hunk represents a contiguous group of edit operations with surrounding context.
 type hunk struct {
 	aStart, aLen int
 	bStart, bLen int
 	edits        []Edit
 }
 
-// FormatUnified compares contentA and contentB and returns a unified diff string.
-// If the contents are identical, it returns an empty string.
-func FormatUnified(nameA, nameB string, contentA, contentB string) string {
+// FormatUnified compares contentA and contentB and returns a unified diff
+// string with 3 lines of context. It normalizes "\r\n" line endings to "\n".
+// If the contents are identical (after line splitting), it returns "".
+func FormatUnified(nameA, nameB, contentA, contentB string) string {
 	linesA := splitLines(contentA)
 	linesB := splitLines(contentB)
 
-	// If both are empty
 	if len(linesA) == 0 && len(linesB) == 0 {
 		return ""
 	}
@@ -43,7 +60,6 @@ func FormatUnified(nameA, nameB string, contentA, contentB string) string {
 		return ""
 	}
 
-	// Check if all edits are equal (identical contents)
 	allEqual := true
 	for _, e := range edits {
 		if e.Op != OpEqual {
@@ -97,7 +113,29 @@ func FormatUnified(nameA, nameB string, contentA, contentB string) string {
 	return sb.String()
 }
 
-// MyersDiff implements the Myers diff algorithm to find the shortest edit script.
+// Stats computes the number of inserted ([OpInsert]) and deleted ([OpDelete])
+// lines between contentA and contentB.
+func Stats(contentA, contentB string) (added int, removed int) {
+	linesA := splitLines(contentA)
+	linesB := splitLines(contentB)
+	if len(linesA) == 0 && len(linesB) == 0 {
+		return 0, 0
+	}
+
+	edits := MyersDiff(linesA, linesB)
+	for _, e := range edits {
+		switch e.Op {
+		case OpInsert:
+			added++
+		case OpDelete:
+			removed++
+		}
+	}
+	return added, removed
+}
+
+// MyersDiff implements the Myers shortest-edit-script algorithm to compute the
+// minimal sequence of [Edit] operations transforming slice a into slice b.
 func MyersDiff(a, b []string) []Edit {
 	n, m := len(a), len(b)
 	if n == 0 && m == 0 {
@@ -150,8 +188,9 @@ func MyersDiff(a, b []string) []Edit {
 		return nil
 	}
 
-	// Backtrack to find the path
-	var path []struct{ x, y int }
+	// Backtrack through the frontier trace to reconstruct the edit path.
+	type point struct{ x, y int }
+	var path []point
 	x, y := n, m
 	for d >= 0 {
 		k := x - y
@@ -169,24 +208,24 @@ func MyersDiff(a, b []string) []Edit {
 		prevY := prevX - prevK
 
 		for x > prevX && y > prevY {
-			path = append(path, struct{ x, y int }{x, y})
+			path = append(path, point{x, y})
 			x--
 			y--
 		}
 
 		if d > 0 {
-			path = append(path, struct{ x, y int }{x, y})
+			path = append(path, point{x, y})
 		}
 		x, y = prevX, prevY
 		d--
 	}
 
-	// Reverse path
+	// Reverse path into forward order.
 	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
 		path[i], path[j] = path[j], path[i]
 	}
 
-	var edits []Edit
+	edits := make([]Edit, 0, len(path))
 	currX, currY := 0, 0
 	for _, pt := range path {
 		if pt.x == currX+1 && pt.y == currY {
@@ -211,7 +250,7 @@ func MyersDiff(a, b []string) []Edit {
 	return edits
 }
 
-// groupEdits clusters edits into hunks with context lines.
+// groupEdits clusters edits into hunks with up to context unchanged lines.
 func groupEdits(edits []Edit, context int) []hunk {
 	var hunks []hunk
 	n := len(edits)
@@ -233,10 +272,7 @@ func groupEdits(edits []Edit, context int) []hunk {
 		}
 
 		hunkStart := i
-		preContextStart := hunkStart - context
-		if preContextStart < 0 {
-			preContextStart = 0
-		}
+		preContextStart := max(hunkStart-context, 0)
 		hunkAStart := lineA - (hunkStart - preContextStart)
 		hunkBStart := lineB - (hunkStart - preContextStart)
 
@@ -251,13 +287,7 @@ func groupEdits(edits []Edit, context int) []hunk {
 			i++
 		}
 
-		hunkEnd := lastEditIdx + 1 + context
-		if hunkEnd > i {
-			hunkEnd = i
-		}
-		if hunkEnd > n {
-			hunkEnd = n
-		}
+		hunkEnd := min(min(lastEditIdx+1+context, i), n)
 
 		hunkEdits := edits[preContextStart:hunkEnd]
 
@@ -311,9 +341,9 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// Merge3 performs a line-based three-way merge.
-// It merges the changes from B -> A (left) and B -> C (right) using B as the ancestor.
-// Returns the merged lines and a boolean indicating if there was a conflict.
+// Merge3 performs a line-based three-way merge using ancestor as the common base
+// between left and right. It returns the merged lines and a boolean reporting
+// whether an overlapping conflict was detected.
 func Merge3(ancestor, left, right []string) ([]string, bool) {
 	matchA := buildMatches(ancestor, left)
 	matchC := buildMatches(ancestor, right)
@@ -329,7 +359,6 @@ func Merge3(ancestor, left, right []string) ([]string, bool) {
 
 	for i < n {
 		if matchA[i] != -1 && matchC[i] != -1 {
-			// Handle insertions before line i
 			currA := matchA[i]
 			currC := matchC[i]
 
@@ -348,21 +377,18 @@ func Merge3(ancestor, left, right []string) ([]string, bool) {
 				result = append(result, insC...)
 			}
 
-			// Keep the matched line
 			result = append(result, ancestor[i])
 
 			prevA = currA
 			prevC = currC
 			i++
 		} else {
-			// Find the end of the contiguous mismatch segment
 			start := i
 			for i < n && (matchA[i] == -1 || matchC[i] == -1) {
 				i++
 			}
 			end := i
 
-			// The next matched indices (or the end of the files)
 			nextA := len(left)
 			if end < n && matchA[end] != -1 {
 				nextA = matchA[end]
@@ -398,7 +424,6 @@ func Merge3(ancestor, left, right []string) ([]string, bool) {
 		}
 	}
 
-	// Handle trailing insertions after the last matched line
 	insA := left[prevA+1:]
 	insC := right[prevC+1:]
 	if len(insA) > 0 && len(insC) > 0 {
@@ -450,8 +475,4 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func IsDiff(preview string) bool {
-	return strings.Contains(preview, "@@ ") || strings.HasPrefix(preview, "--- ") || strings.HasPrefix(preview, "+++ ")
 }

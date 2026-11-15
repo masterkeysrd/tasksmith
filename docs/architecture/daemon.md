@@ -1,0 +1,80 @@
+# Daemon Architecture
+
+The **TaskSmith Daemon** is the background service that orchestrates workspaces, manages multi-turn agent sessions, executes tool pipelines, and powers real-time client communication.
+
+---
+
+## 1. Architectural Overview
+
+```mermaid
+flowchart TD
+    subgraph Clients ["Client Layer"]
+        CLI1["TaskSmith CLI (Workspace A)"]
+        CLI2["TaskSmith CLI (Workspace B)"]
+    end
+
+    subgraph DaemonSubsystem ["TaskSmith Daemon (daemon.sock)"]
+        Server["HTTP REST API (/v1/...) & SSE Broker (/v1/events)"]
+        RuntimePool["Workspace Runtime Pool\n(Content-Addressable by Root Path)"]
+
+        subgraph RuntimeInstance ["Workspace Runtime Instance"]
+            SessCoord["Session Coordinator\n(State Machine & Store Orchestration)"]
+            Timeline["Timeline & Snapshot Engine\n(Unified Diffs & Reverts)"]
+            Journal["Durable SQLite Journal\n(Event Log & Turn History)"]
+            PermMgr["Permission & Guard Manager\n(AST & Path Policies)"]
+            MCPMgr["MCP Manager\n(Per-Workspace Connections & OAuth)"]
+        end
+
+        Gateways["Pooled Provider Gateways\n(Shared by Fingerprint)"]
+        Sandboxes["Per-Session Sandboxes\n(FS / Proc / Net Jails)"]
+    end
+
+    CLI1 & CLI2 -->|IPC over Unix Socket| Server
+    Server --> RuntimePool
+    RuntimePool --> RuntimeInstance
+    RuntimeInstance --> Gateways
+    RuntimeInstance --> Sandboxes
+```
+
+---
+
+## 2. Core Architectural Design
+
+### 1. Client-Daemon IPC & Multiplexed Event Stream
+TaskSmith operates as an on-demand, headless background process listening on a local Unix domain socket (`$XDG_RUNTIME_DIR/tasksmith/brain.sock`, or `~/.local/state/tasksmith/run/brain.sock` when `XDG_RUNTIME_DIR` is unset):
+- **REST Endpoints**: CLI and external tools issue standard HTTP commands across `/v1/sessions`, `/v1/workspace`, `/v1/permissions`, `/v1/sandbox`, and `/v1/tasks`.
+- **Multiplexed SSE Event Bus**: Clients subscribe to a single Server-Sent Events stream (`GET /v1/events`) powered by an internal publish-subscribe message broker. Real-time token streams, tool start/finish events, interactive permission requests, and background task updates are broadcast concurrently to all connected interfaces without polling.
+
+### 2. Workspace Runtime Pool
+The daemon maintains a pool of active workspace runtimes indexed by canonical root path:
+- **Workspace Isolation**: Each workspace executes inside its own runtime directly coordinating its session store, active sessions, timeline tracker, permission evaluator, and tool container.
+- **Zero-Downtime Hot Reloading**: Changes to `.agents/`, `.env`, or workspace configurations trigger automatic in-memory reloads without terminating active sessions.
+- **Model Catalog**: Each workspace builds its model catalog at load time by merging workspace model manifests with provider profiles into an in-memory snapshot. Reload replaces the catalog atomically; existing model snapshots remain unchanged.
+- **MCP Connections**: Each runtime owns one MCP manager for its declared servers, attached to the workspace so MCP endpoints and tools share the same live connections. Opening a workspace starts connections in the background, so a slow or unreachable server never delays session start; a server that cannot authenticate parks in `auth_required` rather than failing — with its authorization URL when an interactive flow is available, and with the rejected or missing static credential otherwise. Per-server health is served from the MCP listing rather than the workspace view, because it keeps changing while a session runs; the CLI reports it in the transcript as it polls. Reload re-connects servers whose definition, workspace environment, or render context changed and re-publishes the discovered tools of servers that stayed the same, since reload replaces the tool registry. A server that advertises list-change notifications re-syncs itself, and a re-list that fails leaves the previously discovered tools in place rather than dropping them. Discovery completing after a session already started triggers a session refresh, so open sessions activate the newly discovered tools and any conditional built-in they unlock without a restart. Closing the runtime disconnects every server and closes the manager, and sibling worktrees resolve MCP servers through the root workspace.
+- **Resource De-duplication**: Sibling Git worktrees and independent workspaces sharing identical provider setups automatically share underlying connection pools in the content-addressable Gateway Pool.
+
+### 3. Session State Machine & Durable Journal
+Every conversation turn is governed by a strict session lifecycle state machine:
+- **Discrete Operational States**: Sessions transition through `idle` $\to$ `running` $\to$ `waiting_permission` (or `waiting_question`) $\to$ `canceling` $\to$ `idle`.
+- **Durable Persistence**: All prompt requests, message chunks, assistant reasoning tokens, tool invocations, and user interactions are committed to a local SQLite journal. If the daemon restarts, in-progress turn history and state remain fully recoverable.
+
+### 4. Timeline & File Snapshot Engine
+To ensure complete reversibility of AI-driven code edits, the daemon wraps file modifications in a transactional snapshot layer:
+- **Before/After Content Capture**: Before any tool (`edit`, `write`, `bash`) mutates a file, the timeline records an immutable snapshot of the original file contents.
+- **Instant Unified Diffs**: Clients can query the timeline at any point to render syntax-highlighted diffs across an entire turn or individual tool execution.
+- **Atomic File Reverts**: Users can revert specific turns or rollback entire sessions, restoring modified files to their exact pre-turn state on disk.
+
+### 5. Metrics Engine & `daemon.db`
+The daemon owns a global SQLite database at `~/.local/share/tasksmith/daemon.db` (`$XDG_DATA_HOME/tasksmith/daemon.db`), opened at startup and closed at shutdown. Its first migration scope is `metrics`, which stores one row per recorded occurrence in `metrics_records` plus any number of named integer values in `metrics_measurements`.
+- **Records**: An LLM call (`llm_call`: tokens, nano-USD cost frozen with its pricing tier and a priced flag, latency, time to first token), a tool call (`tool_call`: status and execution duration), or a file change (`file_change`: lines added and removed, written by the session journal for every recorded change, with reverts flagged so views can exclude them). Failed and canceled calls are recorded too. New kinds need no schema change.
+- **Attribution**: Each record is attributed from the `scope.Scope` carried in the context: workspace root, session, parent session, turn, message, agent and (for LLM calls) purpose (`chat`, `compaction`, `title`). The assistant message ID is generated before the LLM call so the call is attributed to its message.
+- **Write path**: Recording is asynchronous. Records go through a bounded in-memory queue to a batching writer; a full queue drops the record with a warning, recording failures never fail a turn, and shutdown flushes the queue before the database closes.
+- **Live totals**: A decorator keeps per-session running totals (loaded from the database on first access) and publishes a `usage_updated` event on the session's stream topic after each record.
+- **Queries**: A generic query engine aggregates records for the session, workspace and global usage views, the inference speed view, and the read-only `/v1/metrics/query`, `/v1/sessions/{id}/usage` and `/v1/usage` endpoints.
+- **Turn summaries**: When a turn ends (final answer, cancel or failure), the session appends a `turn_completed` timeline entry with the elapsed time and the turn's tokens and cost, read from the metrics records by turn ID. Completed turns under 5 seconds are skipped, and the entry is never part of the model's context.
+- **Retention**: Records outlive their sessions, so historical spend stays accurate after a session is deleted.
+
+### 6. Structured Observability
+The daemon provides detailed diagnostics without polluting user terminal outputs:
+- Diagnostic events, HTTP request logs, and subsystem errors are written as structured JSON Lines records to `~/.local/state/tasksmith/logs/daemon.jsonl`.
+- Session turn failures and LLM error messages are enriched with vendor diagnostics for rapid troubleshooting.

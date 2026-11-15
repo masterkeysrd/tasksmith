@@ -1,0 +1,325 @@
+package session
+
+import (
+	"fmt"
+	"maps"
+	"slices"
+
+	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+)
+
+// ToAPISession converts an internal [Session] into the public [api.Session]
+// representation used for HTTP responses and published events.
+func ToAPISession(sess *Session) api.Session {
+	if sess == nil {
+		return api.Session{}
+	}
+	sess = sess.Clone()
+	status := api.StatusIdle
+	var perms []api.PermissionRequest
+	var questions []api.QuestionRequest
+	var ts []api.Task
+	var todos []api.TodoItem
+	var queueItems []api.QueueItem
+	var ctxState api.ContextState
+	if sess.State != nil {
+		if sess.Status != "" {
+			status = sess.Status
+		}
+		perms = sess.PendingPermissions
+		questions = sess.PendingQuestions
+		ts = slices.Clone(sess.State.Tasks)
+		todos = sess.Todos
+		queueItems = sess.VisibleQueue()
+		ctxState = sess.Context
+	}
+	var resolvedModel *api.Model
+	if m, thinking, ok := sess.ResolvedModel(); ok {
+		converted := m.ToAPI()
+		converted.ThinkingDefault = thinking
+		resolvedModel = &converted
+	}
+	var subagents []api.Session
+	for _, child := range sess.Children() {
+		subagents = append(subagents, ToAPISession(child))
+	}
+	activity := sess.Activity
+	if status == api.StatusWaitingPermission {
+		activity = "Waiting for permission"
+	} else if status == api.StatusWaitingQuestion {
+		activity = "Waiting for answer"
+	} else if status == api.StatusIdle {
+		activity = ""
+	} else if status == api.StatusThinking && activity == "" {
+		activity = "Thinking..."
+	} else if status == api.StatusGenerating && activity == "" {
+		activity = "Generating"
+	}
+	var sandboxMode api.SandboxMode
+	if sess.Sandbox != nil {
+		sandboxMode = sess.Sandbox.Mode()
+	}
+	return api.Session{
+		Model:              resolvedModel,
+		ID:                 sess.ID,
+		Title:              sess.Title,
+		Config:             sess.Config,
+		Status:             status,
+		Diagnostics:        slices.Clone(sess.Diagnostics),
+		Context:            ctxState,
+		PendingPermissions: perms,
+		PendingQuestions:   questions,
+		Tasks:              ts,
+		Todos:              todos,
+		Queue:              queueItems,
+		ParentID:           sess.ParentID,
+		WorkDir:            sess.WorkDir,
+		Subagents:          subagents,
+		Activity:           activity,
+		SandboxMode:        sandboxMode,
+		CreatedAt:          sess.CreatedAt,
+		UpdatedAt:          sess.UpdatedAt,
+	}
+}
+
+func toAPIQueueItem(it queueItem) (api.QueueItem, bool) {
+	switch it.Kind {
+	case api.QueueKindMessage:
+		if it.Message == nil {
+			return api.QueueItem{}, false
+		}
+		apiMsg, err := ToAPIMessage(it.Message)
+		if err != nil || apiMsg == nil {
+			return api.QueueItem{}, false
+		}
+		return api.QueueItem{
+			ID:        it.ID,
+			Kind:      api.QueueKindMessage,
+			Message:   apiMsg,
+			CreatedAt: it.CreatedAt,
+		}, true
+	case api.QueueKindCommand:
+		return api.QueueItem{
+			ID:        it.ID,
+			Kind:      api.QueueKindCommand,
+			Command:   it.Command,
+			CreatedAt: it.CreatedAt,
+		}, true
+	default:
+		return api.QueueItem{}, false
+	}
+}
+
+// FromAPIBlock converts a single [api.Block] into an internal [message.Block].
+// The boolean reports whether the block was successfully converted.
+func FromAPIBlock(b api.Block) (message.Block, bool) {
+	switch b.Type {
+	case api.BlockText:
+		if b.Text == "" {
+			return nil, false
+		}
+		return &message.TextBlock{Text: b.Text}, true
+
+	case api.BlockReasoning:
+		if b.Text == "" {
+			return nil, false
+		}
+		var extras map[string]any
+		if b.Signature != "" {
+			extras = map[string]any{"signature": b.Signature}
+		}
+		return &message.ThinkingBlock{
+			Thinking: b.Text,
+			Extras:   extras,
+		}, true
+
+	case api.BlockToolCall:
+		if b.ToolCall == nil {
+			return nil, false
+		}
+		return &message.ToolCall{
+			ID:   b.ToolCall.ID,
+			Name: b.ToolCall.Name,
+			Args: maps.Clone(b.ToolCall.Args),
+		}, true
+
+	default:
+		return nil, false
+	}
+}
+
+// ToAPIMessage converts an internal [message.Message] into the public
+// [api.Message] representation. It returns an error when a structured tool
+// payload cannot be serialized.
+func ToAPIMessage(msg message.Message) (*api.Message, error) {
+	if msg == nil {
+		return nil, nil
+	}
+
+	createdAt, _ := uuid.ExtractTime(msg.GetID())
+	out := &api.Message{
+		ID:        msg.GetID(),
+		Role:      api.Role(msg.Role()),
+		Content:   toAPIBlocks(msg.GetContent()),
+		CreatedAt: createdAt,
+	}
+
+	if tm, ok := msg.(*message.Tool); ok && tm != nil {
+		out.ToolCallID = tm.ToolCallID
+		out.Name = tm.Name
+		out.IsError = tm.IsError
+		if tm.StructuredContent != nil {
+			data, err := tm.CanonicalStructuredContent()
+			if err != nil {
+				return nil, fmt.Errorf("daemon: marshal structured content for message %q: %w", msg.GetID(), err)
+			}
+			out.StructuredContent = data
+		}
+	}
+
+	if atts := harness.AttachmentsOf(msg); len(atts) > 0 {
+		out.Attachments = slices.Clone(atts)
+	}
+
+	return out, nil
+}
+
+func toAPIBlocks(blocks []message.Block) []api.Block {
+	if len(blocks) == 0 {
+		return nil
+	}
+	out := make([]api.Block, 0, len(blocks))
+	for _, b := range blocks {
+		if converted, ok := ToAPIBlock(b); ok {
+			out = append(out, converted)
+		}
+	}
+	return out
+}
+
+// ToAPIBlock converts a single internal [message.Block] into the public
+// [api.Block] representation. The boolean reports whether the block type is
+// supported by the public API.
+func ToAPIBlock(b message.Block) (api.Block, bool) {
+	if b == nil {
+		return api.Block{}, false
+	}
+
+	switch v := b.(type) {
+	case *message.TextBlock:
+		return api.Block{
+			Type: api.BlockText,
+			Text: v.Text,
+		}, true
+
+	case *message.ThinkingBlock:
+		sig, _ := v.Extras["signature"].(string)
+		return api.Block{
+			Type:      api.BlockReasoning,
+			Text:      v.Thinking,
+			Signature: sig,
+		}, true
+
+	case *message.ToolCall:
+		return api.Block{
+			Type: api.BlockToolCall,
+			ToolCall: &api.ToolCall{
+				ID:   v.ID,
+				Name: v.Name,
+				Args: maps.Clone(v.Args),
+			},
+		}, true
+
+	case *message.ToolCallChunk:
+		var args map[string]any
+		if tc, err := v.ToToolCall(); err == nil && tc != nil {
+			args = tc.Args
+		}
+		return api.Block{
+			Type: api.BlockToolCall,
+			ToolCall: &api.ToolCall{
+				ID:   v.ID,
+				Name: v.Name,
+				Args: args,
+			},
+		}, true
+
+	default:
+		return api.Block{}, false
+	}
+}
+
+func toAPIChunk(ch *message.AssistantChunk) *api.Chunk {
+	if ch == nil {
+		return nil
+	}
+	out := &api.Chunk{
+		ID:      ch.ID,
+		Content: toAPIBlocks(ch.Content),
+		Done:    ch.Done,
+	}
+	if ch.Metrics != nil && (ch.Metrics.Tokens.Input > 0 || ch.Metrics.Tokens.Output > 0) {
+		out.Usage = &api.ChunkUsage{
+			Input:  ch.Metrics.Tokens.Input,
+			Output: ch.Metrics.Tokens.Output,
+		}
+	}
+	return out
+}
+
+// ToAPIQuestionResponse converts an internal [api.QuestionResponse] into the
+// public [api.QuestionResponse] representation, attaching confirmation flags for
+// confirm-typed questions.
+func ToAPIQuestionResponse(r api.QuestionResponse, questions []api.Question) api.QuestionResponse {
+	out := api.QuestionResponse{
+		RequestID:  r.RequestID,
+		ToolCallID: r.ToolCallID,
+		Canceled:   r.Canceled,
+	}
+	for i, a := range r.Answers {
+		answer := api.QuestionAnswer{
+			Question: a.Question,
+			Selected: slices.Clone(a.Selected),
+			Text:     a.Text,
+		}
+		if i < len(questions) && questions[i].Type == string(api.QuestionTypeConfirm) {
+			answer.Confirmed = a.Confirmed
+		}
+		out.Answers = append(out.Answers, answer)
+	}
+	return out
+}
+
+// publishEntryAdded converts a freshly-persisted timeline entry into the public
+// [api.EntryAddedEvent] and publishes it. If the conversion fails (for example
+// an un-marshalable structured message payload) it publishes an
+// [api.ErrorEvent] on the same topic instead of dropping the notification.
+func publishEntryAdded(p Publisher, sessionID string, entry *timeline.Entry) {
+	if entry == nil {
+		return
+	}
+	apiEntry, err := ToAPITimelineEntry(*entry)
+	if err != nil {
+		p.Publish(api.SessionStreamTopic(sessionID), api.ErrorEvent{SessionID: sessionID, Error: err.Error()})
+		return
+	}
+	p.Publish(api.SessionStreamTopic(sessionID), api.EntryAddedEvent{SessionID: sessionID, Entry: apiEntry})
+}
+
+// ToAPITimelineEntry converts an internal [timeline.Entry] into the public
+// [api.TimelineEntry] representation used by the API.
+func ToAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
+	out := entry.TimelineEntry
+	if entry.Message != nil {
+		msg, err := ToAPIMessage(entry.Message)
+		if err != nil {
+			return api.TimelineEntry{}, err
+		}
+		out.Message = msg
+	}
+	return out, nil
+}

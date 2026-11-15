@@ -1,0 +1,371 @@
+package sandbox
+
+import (
+	"context"
+	"errors"
+	"io"
+	"io/fs"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/masterkeysrd/tasksmith/api"
+)
+
+// Sentinel errors returned by the sandbox package.
+var (
+	ErrSandboxClosed     = errors.New("sandbox: sandbox is closed")
+	ErrInvalidConfig     = errors.New("sandbox: invalid configuration")
+	ErrReadOnly          = errors.New("sandbox: filesystem is read-only")
+	ErrPathEscape        = errors.New("sandbox: path escapes sandbox root")
+	ErrNetworkDisabled   = errors.New("sandbox: network access is disabled")
+	ErrHostBlocked       = errors.New("sandbox: target host is blocked by policy")
+	ErrLoopbackBlocked   = errors.New("sandbox: loopback address access is blocked by policy")
+	ErrProxyUnavailable  = errors.New("sandbox: network allowlist proxy is not running")
+	ErrInvalidURL        = errors.New("sandbox: invalid http/https url")
+	ErrNativeUnavailable = errors.New("sandbox: native OS sandbox backend is unavailable")
+	ErrWatchUnsupported  = errors.New("sandbox: watching filesystem is unsupported")
+)
+
+// Mode defines the isolation backend used by a Sandbox.
+type Mode = api.SandboxMode
+
+const (
+	// ModeLocal confines operations to the host working directory using os.Root,
+	// process group lifecycle management, and in-process network policy dialers.
+	ModeLocal Mode = api.SandboxLocal
+
+	// ModeNative wraps child process execution in OS-level kernel sandboxes
+	// (macOS Seatbelt sandbox-exec or Linux Bubblewrap bwrap) in addition to
+	// ModeLocal's os.Root and Net enforcement.
+	ModeNative Mode = api.SandboxNative
+)
+
+// Platform describes the target operating system, architecture, and root path
+// of a sandbox instance.
+type Platform struct {
+	OS      string `json:"os"`
+	Arch    string `json:"arch"`
+	WorkDir string `json:"work_dir"`
+}
+
+// NetworkPolicy defines outbound network access controls for the sandbox.
+type NetworkPolicy struct {
+	// Disabled completely blocks all outbound network connections when true.
+	Disabled bool `json:"disabled,omitempty"`
+
+	// Allowlist routes child process traffic through the daemon-side domain
+	// proxy instead of granting direct network access. It only takes effect
+	// in ModeNative, where the kernel profile can physically force the
+	// routing; in ModeLocal the in-process Net capability still enforces
+	// AllowedHosts/BlockedHosts, but child processes cannot be confined.
+	Allowlist bool `json:"allowlist,omitempty"`
+
+	// AllowedHosts restricts outbound connections to matching hostnames or
+	// wildcard domain patterns (e.g., "api.example.com", "*.example.com").
+	// When empty, all non-blocked hosts are permitted.
+	AllowedHosts []string `json:"allowed_hosts,omitempty"`
+
+	// BlockedHosts denies outbound connections to matching hostnames or
+	// wildcard domain patterns. BlockedHosts takes precedence over AllowedHosts.
+	BlockedHosts []string `json:"blocked_hosts,omitempty"`
+
+	// AllowLoopback permits connections to loopback IP addresses (127.0.0.0/8, ::1).
+	// When false (the default), dialing any host that resolves to or specifies a
+	// loopback address is rejected with ErrLoopbackBlocked.
+	AllowLoopback bool `json:"allow_loopback,omitempty"`
+}
+
+func (p *NetworkPolicy) IsZero() bool {
+	return !p.Disabled && !p.Allowlist &&
+		len(p.AllowedHosts) == 0 &&
+		len(p.BlockedHosts) == 0 &&
+		!p.AllowLoopback
+}
+
+// ProxyPolicy derives the domain policy the network proxy enforces from the
+// sandbox network posture.
+func (p *NetworkPolicy) ProxyPolicy() ProxyPolicy {
+	return ProxyPolicy{
+		AllowedDomains: append([]string(nil), p.AllowedHosts...),
+		DeniedDomains:  append([]string(nil), p.BlockedHosts...),
+	}
+}
+
+// Sandbox represents an isolated OS execution environment exposing confined
+// filesystem, process, and network capabilities.
+type Sandbox interface {
+	// ID returns the unique identifier of the sandbox instance.
+	ID() string
+
+	// Mode returns the active isolation mode (ModeLocal or ModeNative).
+	Mode() Mode
+
+	// ReadOnly reports whether the sandbox currently enforces read-only
+	// filesystem semantics.
+	ReadOnly() bool
+
+	// SetReadOnly toggles read-only enforcement for future filesystem
+	// operations and native OS sandbox profiles. Toggling to true does not
+	// terminate already-running child processes; it affects subsequent
+	// executions and confined FS operations.
+	SetReadOnly(readOnly bool)
+
+	// Platform returns the OS, architecture, and canonical root directory.
+	Platform() Platform
+
+	// Env returns a defensive copy of the sandbox's base environment variables.
+	Env() map[string]string
+
+	// SetEnv replaces the sandbox's base environment variables for future child
+	// processes, defensively cloning env so external mutations cannot affect the
+	// sandbox.
+	SetEnv(env map[string]string)
+
+	// Filesystem returns a defensive copy of the sandbox's current native
+	// filesystem path policy.
+	Filesystem() FilesystemPolicy
+
+	// SetFilesystemPolicy atomically replaces the native filesystem path
+	// policy for future child processes, defensively cloning policy so
+	// external mutations cannot affect the sandbox. Already-running child
+	// processes keep the kernel profile they started with. It has no effect
+	// in ModeLocal.
+	SetFilesystemPolicy(policy FilesystemPolicy)
+
+	// SetNetworkPolicy atomically replaces the live outbound network posture
+	// for future child processes and in-process dials. When the Allowlist
+	// flag turns on in ModeNative the sandbox starts its domain proxy; when
+	// it turns off the proxy stops. Already-running child processes keep the
+	// profile and environment they started with. If the proxy cannot start,
+	// the allowlist posture is kept (fail-closed: confined children get no
+	// network) and the error is reported.
+	SetNetworkPolicy(policy NetworkPolicy) error
+
+	// FS returns the confined filesystem capability rooted at WorkDir.
+	FS() FS
+
+	// Proc returns the confined process execution capability.
+	Proc() Proc
+
+	// Net returns the policy-enforced network capability.
+	Net() Net
+
+	// Upload copies a file or directory tree from hostSrc on the host filesystem
+	// into sandboxDst within the sandbox. Returns ErrReadOnly if the sandbox is
+	// configured as read-only, or ErrPathEscape if sandboxDst escapes WorkDir.
+	Upload(ctx context.Context, hostSrc, sandboxDst string) error
+
+	// Download copies a file or directory tree from sandboxSrc within the sandbox
+	// to hostDst on the host filesystem. Returns ErrPathEscape if sandboxSrc
+	// escapes WorkDir.
+	Download(ctx context.Context, sandboxSrc, hostDst string) error
+
+	// Close terminates all active processes spawned inside the sandbox and
+	// releases underlying OS resources (such as the os.Root handle).
+	Close() error
+}
+
+// File represents an open file handle within the sandbox filesystem.
+type File interface {
+	fs.File
+	io.Writer
+	io.ReaderAt
+	io.Seeker
+	Sync() error
+}
+
+// FS provides traversal-safe filesystem operations confined to the sandbox's
+// working directory. It implements [io/fs.FS] for read-only standard library
+// compatibility alongside context-aware read and write operations.
+type FS interface {
+	fs.FS // Open(name string) (fs.File, error)
+
+	ReadFile(ctx context.Context, path string) ([]byte, error)
+	WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error
+	OpenFile(ctx context.Context, path string, flag int, perm fs.FileMode) (File, error)
+
+	Stat(ctx context.Context, path string) (fs.FileInfo, error)
+	Lstat(ctx context.Context, path string) (fs.FileInfo, error)
+	ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error)
+
+	MkdirAll(ctx context.Context, path string, perm fs.FileMode) error
+	Remove(ctx context.Context, path string) error
+	RemoveAll(ctx context.Context, path string) error
+	Rename(ctx context.Context, oldpath, newpath string) error
+	Chmod(ctx context.Context, path string, perm fs.FileMode) error
+
+	// ResolvePath validates path and returns a clean, slash-separated path
+	// relative to the sandbox root, or ErrPathEscape if path escapes WorkDir.
+	ResolvePath(path string) (string, error)
+
+	// Watch monitors the directory at path (relative to WorkDir) for filesystem changes.
+	Watch(ctx context.Context, path string, opts WatchOptions) (Watcher, error)
+}
+
+// WatchOp represents a bitmask of filesystem change operations.
+type WatchOp uint32
+
+const (
+	WatchCreate WatchOp = 1 << iota
+	WatchWrite
+	WatchRemove
+	WatchRename
+	WatchChmod
+)
+
+func (op WatchOp) String() string {
+	if op == 0 {
+		return "none"
+	}
+	var ops []string
+	if op&WatchCreate != 0 {
+		ops = append(ops, "create")
+	}
+	if op&WatchWrite != 0 {
+		ops = append(ops, "write")
+	}
+	if op&WatchRemove != 0 {
+		ops = append(ops, "remove")
+	}
+	if op&WatchRename != 0 {
+		ops = append(ops, "rename")
+	}
+	if op&WatchChmod != 0 {
+		ops = append(ops, "chmod")
+	}
+	return strings.Join(ops, "|")
+}
+
+// WatchEvent describes a filesystem mutation event within the sandbox.
+type WatchEvent struct {
+	Path string  // Clean, slash-separated sandbox-relative path
+	Op   WatchOp // Bitmask of operations
+}
+
+// WatchOptions configures filesystem watching.
+type WatchOptions struct {
+	Recursive bool     // Watch directory and all subdirectories recursively
+	Ignore    []string // Additional directory names or patterns to ignore (always includes .git, .bare)
+	MaxDirs   int      // Maximum directories to watch (defaults to 1024 when <= 0)
+}
+
+// Watcher provides streaming notifications of filesystem events within the sandbox.
+type Watcher interface {
+	Events() <-chan WatchEvent
+	Errors() <-chan error
+	Close() error
+}
+
+// Command specifies the parameters for executing a child process inside the sandbox.
+type Command struct {
+	// Name is the executable name or path to invoke.
+	Name string
+
+	// Args holds command-line arguments passed to the executable (excluding argv[0]).
+	Args []string
+
+	// Dir specifies the working directory relative to the sandbox root (or an
+	// absolute path within the sandbox root). If empty, defaults to WorkDir.
+	Dir string
+
+	// Env contains per-command environment variables merged on top of the
+	// sandbox's base Config.Env.
+	Env map[string]string
+
+	// Stdin supplies standard input when calling Proc.Exec.
+	Stdin io.Reader
+
+	// Stdout optionally receives standard output when calling Proc.Exec.
+	// If nil, output is captured in ExecResult.Stdout.
+	Stdout io.Writer
+
+	// Stderr optionally receives standard error when calling Proc.Exec.
+	// If nil, output is captured in ExecResult.Stderr.
+	Stderr io.Writer
+
+	// Timeout overrides the sandbox's DefaultTimeout for Proc.Exec.
+	Timeout time.Duration
+
+	// ReadOnly requests a read-only kernel profile for this individual
+	// command even when the sandbox itself is writable. In ModeNative the
+	// generated Seatbelt/Bubblewrap profile denies all file writes outside the
+	// dedicated temp directory for this process only. It has no effect in
+	// ModeLocal, which has no kernel enforcement.
+	ReadOnly bool
+
+	// Unsandboxed runs this single command directly on the host, skipping the
+	// kernel wrapper in ModeNative while keeping process-group tracking, the
+	// session environment scrubbing, and lifecycle teardown. The command
+	// inherits the host temp/cache directories instead of the sandbox temp
+	// dir. Combining Unsandboxed with a read-only session or ReadOnly command
+	// is rejected with ErrReadOnly. It has no effect in ModeLocal, which
+	// already runs processes without a kernel wrapper.
+	Unsandboxed bool
+}
+
+// ExecResult contains the captured output and exit metadata of a completed process.
+type ExecResult struct {
+	Stdout   []byte        `json:"stdout,omitempty"`
+	Stderr   []byte        `json:"stderr,omitempty"`
+	ExitCode int           `json:"exit_code"`
+	Duration time.Duration `json:"duration"`
+}
+
+// Process represents a running child process started via [Proc.Start].
+type Process interface {
+	// PID returns the operating system process ID.
+	PID() int
+
+	// Stdin returns the write-closer pipe connected to the process's standard input.
+	Stdin() io.WriteCloser
+
+	// Stdout returns the read-closer pipe connected to the process's standard output.
+	Stdout() io.ReadCloser
+
+	// Stderr returns the read-closer pipe connected to the process's standard error.
+	Stderr() io.ReadCloser
+
+	// Wait waits for the process to exit and returns its execution result.
+	// When pipes are consumed directly via Stdout()/Stderr(), ExecResult contains
+	// any remaining unread bytes alongside the exit code and duration.
+	Wait() (*ExecResult, error)
+
+	// Signal sends an OS signal to the process group.
+	Signal(sig os.Signal) error
+
+	// Kill forcefully terminates the entire process group with SIGKILL.
+	Kill() error
+}
+
+// Proc provides process execution confined to the sandbox.
+type Proc interface {
+	// Exec runs a command to completion, capturing its stdout, stderr, exit code,
+	// and execution duration. Non-zero exit codes are returned in ExecResult.ExitCode
+	// without returning a Go error unless the context expires or startup fails.
+	Exec(ctx context.Context, cmd Command) (*ExecResult, error)
+
+	// Start launches a command asynchronously with streaming stdio pipes.
+	Start(ctx context.Context, cmd Command) (Process, error)
+}
+
+// Net provides network dialing and HTTP client generation subject to the
+// sandbox's NetworkPolicy.
+type Net interface {
+	// DialContext connects to the address on the named network while enforcing
+	// the sandbox's NetworkPolicy (disabled check, host allow/block lists, and
+	// loopback IP prevention).
+	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// HTTPClient returns a new *http.Client whose transport is wired to use
+	// the sandbox's policy-enforced DialContext.
+	HTTPClient() *http.Client
+
+	// ValidateURL parses and validates an outbound HTTP or HTTPS URL and
+	// checks its hostname against the sandbox's NetworkPolicy (Disabled,
+	// BlockedHosts, AllowedHosts, and literal/localhost loopback rules).
+	ValidateURL(rawURL string) (*url.URL, error)
+}

@@ -3,73 +3,203 @@ package xdg
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 )
 
-// VarType represents the type of XDG directory.
-type VarType int
+// DefaultAppName is the default application directory name when TASKSMITH_APPNAME
+// is unset or invalid.
+const DefaultAppName = "tasksmith"
 
-// appname is the name of the application, used to create subdirectories in the XDG directories.
-var appname string
+// VarType represents a category of XDG Base Directory (analogous to Neovim's stdpath types).
+type VarType int
 
 const (
 	// VarTypeConfig represents the XDG_CONFIG_HOME directory.
 	VarTypeConfig VarType = iota
 	// VarTypeData represents the XDG_DATA_HOME directory.
 	VarTypeData
+	// VarTypeState represents the XDG_STATE_HOME directory.
+	VarTypeState
 	// VarTypeCache represents the XDG_CACHE_HOME directory.
 	VarTypeCache
+	// VarTypeRuntime represents the XDG_RUNTIME_DIR directory for ephemeral runtime files.
+	VarTypeRuntime
 )
 
 var envVars = map[VarType]string{
-	VarTypeConfig: "XDG_CONFIG_HOME",
-	VarTypeData:   "XDG_DATA_HOME",
-	VarTypeCache:  "XDG_CACHE_HOME",
+	VarTypeConfig:  "XDG_CONFIG_HOME",
+	VarTypeData:    "XDG_DATA_HOME",
+	VarTypeState:   "XDG_STATE_HOME",
+	VarTypeCache:   "XDG_CACHE_HOME",
+	VarTypeRuntime: "XDG_RUNTIME_DIR",
 }
 
-var defaultDirs = map[VarType]string{
-	VarTypeConfig: "$HOME/.config",
-	VarTypeData:   "$HOME/.local/share",
-	VarTypeCache:  "$HOME/.cache",
+func defaultDirFor(varType VarType) string {
+	if runtime.GOOS == "windows" {
+		switch varType {
+		case VarTypeConfig, VarTypeData, VarTypeState:
+			return "$LOCALAPPDATA"
+		case VarTypeCache:
+			return "$TEMP"
+		case VarTypeRuntime:
+			return "$LOCALAPPDATA"
+		}
+	}
+
+	switch varType {
+	case VarTypeConfig:
+		return "$HOME/.config"
+	case VarTypeData:
+		return "$HOME/.local/share"
+	case VarTypeState:
+		return "$HOME/.local/state"
+	case VarTypeCache:
+		return "$HOME/.cache"
+	case VarTypeRuntime:
+		return "$HOME/.local/state"
+	default:
+		return ""
+	}
 }
+
+var (
+	mu       sync.RWMutex
+	appname  string
+	varCache = make(map[VarType]string)
+)
 
 func init() {
-	loadAppName()
+	if testing.Testing() {
+		if testRoot, err := os.MkdirTemp("", "tasksmith-xdg-test-*"); err == nil {
+			defaults := map[string]string{
+				"XDG_CONFIG_HOME": filepath.Join(testRoot, "config"),
+				"XDG_DATA_HOME":   filepath.Join(testRoot, "data"),
+				"XDG_STATE_HOME":  filepath.Join(testRoot, "state"),
+				"XDG_CACHE_HOME":  filepath.Join(testRoot, "cache"),
+				"XDG_RUNTIME_DIR": filepath.Join(testRoot, "runtime"),
+			}
+			for k, v := range defaults {
+				if os.Getenv(k) == "" {
+					_ = os.Setenv(k, v)
+				}
+			}
+		}
+	}
+
+	mu.Lock()
+	loadAppNameLocked()
+	mu.Unlock()
 }
 
-func loadAppName() {
+// isValidAppName validates that name is a safe relative path without parent traversal.
+func isValidAppName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if filepath.IsAbs(name) || strings.HasPrefix(name, "/") || strings.HasPrefix(name, `\`) {
+		return false
+	}
+	cleaned := filepath.Clean(name)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return !slices.Contains(strings.FieldsFunc(name, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}), "..")
+}
+
+func loadAppNameLocked() {
 	name := os.Getenv("TASKSMITH_APPNAME")
-	if name == "" {
-		name = "tasksmith"
+	if !isValidAppName(name) {
+		name = DefaultAppName
 	}
 	appname = name
 }
 
+// AppName returns the active application name, defaulting to "tasksmith" unless
+// overridden by a valid TASKSMITH_APPNAME environment variable.
+func AppName() string {
+	mu.RLock()
+	name := appname
+	mu.RUnlock()
+	if name != "" {
+		return name
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if appname == "" {
+		loadAppNameLocked()
+	}
+	return appname
+}
+
+// GetVar returns the base XDG directory path for the given VarType before appending
+// the application name.
+func GetVar(varType VarType) string {
+	mu.RLock()
+	if dir, ok := varCache[varType]; ok {
+		mu.RUnlock()
+		return dir
+	}
+	mu.RUnlock()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if dir, ok := varCache[varType]; ok {
+		return dir
+	}
+
+	val := resolveVarLocked(varType)
+	varCache[varType] = val
+	return val
+}
+
+func resolveVarLocked(varType VarType) string {
+	env := envVars[varType]
+	val := os.Getenv(env)
+	if val == "" {
+		if varType == VarTypeRuntime {
+			// Fall back to the resolved XDG_STATE_HOME base directory when XDG_RUNTIME_DIR is unset.
+			if stateDir, ok := varCache[VarTypeState]; ok && stateDir != "" {
+				return stateDir
+			}
+			stateVal := os.Getenv(envVars[VarTypeState])
+			if stateVal == "" {
+				stateVal = defaultDirFor(VarTypeState)
+			}
+			return os.ExpandEnv(stateVal)
+		}
+		val = defaultDirFor(varType)
+	}
+
+	return os.ExpandEnv(val)
+}
+
 // Home returns the application's base directory for the given VarType.
-// For example, if VarType is VarTypeConfig, it might return "$HOME/.config/tasksmith".
+// For VarTypeConfig, VarTypeData, VarTypeState, and VarTypeCache, it returns
+// "<GetVar(key)>/<AppName()>".
+// For VarTypeRuntime, it returns "$XDG_RUNTIME_DIR/<AppName()>" when XDG_RUNTIME_DIR
+// is set, or "<Home(VarTypeState)>/run" when XDG_RUNTIME_DIR is unset.
 func Home(key VarType) (string, error) {
+	if key == VarTypeRuntime && os.Getenv("XDG_RUNTIME_DIR") == "" {
+		stateHome, err := Home(VarTypeState)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(stateHome, "run"), nil
+	}
+
 	dir := GetVar(key)
 	if dir == "" {
 		return "", os.ErrNotExist
 	}
 
-	name := AppName()
-	return filepath.Join(dir, name), nil
-}
-
-// SubDataDir returns a subdirectory within the application's data directory.
-func SubDataDir(subdirs ...string) (string, error) {
-	return Subdir(VarTypeData, subdirs...)
-}
-
-// SubConfigDir returns a subdirectory within the application's configuration directory.
-func SubConfigDir(subdirs ...string) (string, error) {
-	return Subdir(VarTypeConfig, subdirs...)
-}
-
-// SubCacheDir returns a subdirectory within the application's cache directory.
-func SubCacheDir(subdirs ...string) (string, error) {
-	return Subdir(VarTypeCache, subdirs...)
+	return filepath.Join(dir, AppName()), nil
 }
 
 // Subdir returns a subdirectory within the application's base directory for the given VarType.
@@ -79,59 +209,62 @@ func Subdir(key VarType, subdirs ...string) (string, error) {
 		return "", err
 	}
 
-	path := base
-	for _, subdir := range subdirs {
-		path = filepath.Join(path, subdir)
-	}
-
-	return path, nil
+	elems := make([]string, 0, 1+len(subdirs))
+	elems = append(elems, base)
+	elems = append(elems, subdirs...)
+	return filepath.Join(elems...), nil
 }
 
-// AppName returns the name of the application.
-func AppName() string {
-	return appname
+// SubConfigDir returns a subdirectory within the application's configuration directory.
+func SubConfigDir(subdirs ...string) (string, error) {
+	return Subdir(VarTypeConfig, subdirs...)
 }
 
-var varCache = make(map[VarType]string)
-
-// GetVar returns the directory path for the given VarType, using the XDG
-// Base Directory Specification.
-func GetVar(varType VarType) string {
-	if dir, ok := varCache[varType]; ok {
-		return dir
-	}
-
-	env := envVars[varType]
-	val := os.Getenv(env)
-	if val == "" {
-		val = defaultDirs[varType]
-	}
-
-	val = os.ExpandEnv(val)
-
-	varCache[varType] = val
-	return val
+// SubDataDir returns a subdirectory within the application's data directory.
+func SubDataDir(subdirs ...string) (string, error) {
+	return Subdir(VarTypeData, subdirs...)
 }
 
-// ClearCache clears the internal cache of XDG directory paths.
-// This is primarily used for testing purposes.
+func BuiltinDir(subdirs ...string) (string, error) {
+	return SubDataDir(append([]string{"builtin"}, subdirs...)...)
+}
+
+// SubStateDir returns a subdirectory within the application's state directory.
+func SubStateDir(subdirs ...string) (string, error) {
+	return Subdir(VarTypeState, subdirs...)
+}
+
+// SubCacheDir returns a subdirectory within the application's cache directory.
+func SubCacheDir(subdirs ...string) (string, error) {
+	return Subdir(VarTypeCache, subdirs...)
+}
+
+// SubRuntimeDir returns a subdirectory within the application's runtime directory.
+func SubRuntimeDir(subdirs ...string) (string, error) {
+	return Subdir(VarTypeRuntime, subdirs...)
+}
+
+// ClearCache clears the cached XDG base directory paths and reloads TASKSMITH_APPNAME.
 func ClearCache() {
+	mu.Lock()
 	varCache = make(map[VarType]string)
+	loadAppNameLocked()
+	mu.Unlock()
 }
 
-// SetTestEnv configures the XDG environment variables to point to a temporary
-// directory and clears the path cache. This is used in testing to prevent
-// pollution of the real user configuration and data directories.
+// SetTestEnv configures all XDG environment variables and TASKSMITH_APPNAME to use
+// a temporary directory and refreshes the cache.
 func SetTestEnv(tmpDir string, appName string) {
-	os.Setenv("XDG_CONFIG_HOME", tmpDir)
-	os.Setenv("XDG_DATA_HOME", tmpDir)
-	os.Setenv("XDG_CACHE_HOME", tmpDir)
-	os.Setenv("TASKSMITH_APPNAME", appName)
+	_ = os.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "config"))
+	_ = os.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "data"))
+	_ = os.Setenv("XDG_STATE_HOME", filepath.Join(tmpDir, "state"))
+	_ = os.Setenv("XDG_CACHE_HOME", filepath.Join(tmpDir, "cache"))
+	_ = os.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmpDir, "runtime"))
+	_ = os.Setenv("TASKSMITH_APPNAME", appName)
 	ClearCache()
 }
 
-// RunWithTestEnv runs package tests within a redirected temporary XDG environment
-// to avoid polluting the user's local workspace.
+// RunWithTestEnv executes a test suite within an isolated temporary XDG environment.
 func RunWithTestEnv(m *testing.M, appName string) {
 	tmpDir, err := os.MkdirTemp("", appName+"-*")
 	if err != nil {
@@ -139,25 +272,23 @@ func RunWithTestEnv(m *testing.M, appName string) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Save original env vars
-	origXdgData := os.Getenv("XDG_DATA_HOME")
-	origXdgConfig := os.Getenv("XDG_CONFIG_HOME")
-	origXdgCache := os.Getenv("XDG_CACHE_HOME")
+	origConfig := os.Getenv("XDG_CONFIG_HOME")
+	origData := os.Getenv("XDG_DATA_HOME")
+	origState := os.Getenv("XDG_STATE_HOME")
+	origCache := os.Getenv("XDG_CACHE_HOME")
+	origRuntime := os.Getenv("XDG_RUNTIME_DIR")
 	origAppName := os.Getenv("TASKSMITH_APPNAME")
 
-	// Set temporary ones
 	SetTestEnv(tmpDir, appName)
 
-	// Run tests
 	code := m.Run()
 
-	// Restore env vars
-	os.Setenv("XDG_DATA_HOME", origXdgData)
-	os.Setenv("XDG_CONFIG_HOME", origXdgConfig)
-	os.Setenv("XDG_CACHE_HOME", origXdgCache)
-	os.Setenv("TASKSMITH_APPNAME", origAppName)
-
-	// Clear cache again
+	_ = os.Setenv("XDG_CONFIG_HOME", origConfig)
+	_ = os.Setenv("XDG_DATA_HOME", origData)
+	_ = os.Setenv("XDG_STATE_HOME", origState)
+	_ = os.Setenv("XDG_CACHE_HOME", origCache)
+	_ = os.Setenv("XDG_RUNTIME_DIR", origRuntime)
+	_ = os.Setenv("TASKSMITH_APPNAME", origAppName)
 	ClearCache()
 
 	os.Exit(code)

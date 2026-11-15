@@ -1,67 +1,64 @@
 package shellguard
 
 import (
-	"os"
 	"testing"
+
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 func TestVirtualCWDTracker(t *testing.T) {
-	workspaceDir := "/tmp/workspace"
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("failed to get user home dir: %v", err)
-	}
+	guard := New(Config{
+		WorkspaceDir: "/tmp/workspace",
+		HomeDir:      "/Users/tester",
+	})
 
 	tests := []struct {
 		name           string
 		command        string
-		expectedAction ActionType
-		expectedSafety SafetyLevel
+		expectedAction api.ActionType
+		expectedSafety api.SafetyLevel
 	}{
 		{
 			name:           "Literal Absolute Escapes",
 			command:        "cd /etc && touch hosts",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "Tilde Expansion Outside Workspace",
 			command:        "cd ~/some_dir && touch file",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe, // Assuming home is outside /tmp/workspace
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "Logical Relative Navigation",
 			command:        "cd subdir && cd .. && touch file.txt",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "Dynamic Navigation Taints CWD",
 			command:        "cd $TARGET && touch file.txt",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnknown,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnknown,
 		},
 		{
 			name:           "Relative Escapes from subdir",
 			command:        "cd subdir && touch ../../hosts",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "Relative Write Inside subdir",
 			command:        "cd subdir && touch file.txt",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetySafe,
 		},
 	}
 
-	isHomeInWorkspace := isInsideWorkspace(home, workspaceDir)
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ops, err := Analyze(tt.command, workspaceDir)
+			ops, err := guard.Analyze(tt.command)
 			if err != nil {
 				t.Fatalf("Analyze error: %v", err)
 			}
@@ -69,15 +66,11 @@ func TestVirtualCWDTracker(t *testing.T) {
 				t.Fatalf("expected 1 operation, got %d", len(ops))
 			}
 			op := ops[0]
-			expectedSafety := tt.expectedSafety
-			if tt.name == "Tilde Expansion Outside Workspace" && isHomeInWorkspace {
-				expectedSafety = SafetySafe
-			}
 			if op.Action != tt.expectedAction {
 				t.Errorf("Analyze(%q) got action %q, want %q", tt.command, op.Action, tt.expectedAction)
 			}
-			if op.Safety != expectedSafety {
-				t.Errorf("Analyze(%q) got safety %q, want %q", tt.command, op.Safety, expectedSafety)
+			if op.Safety != tt.expectedSafety {
+				t.Errorf("Analyze(%q) got safety %q, want %q", tt.command, op.Safety, tt.expectedSafety)
 			}
 		})
 	}

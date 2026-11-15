@@ -1,0 +1,80 @@
+# Gateway Architecture
+
+The **Provider Gateway** is the subsystem in the TaskSmith daemon that manages connections, authentication, and model routing between workspaces and upstream AI providers. For user-facing provider configuration and manifest schemas, see [Providers](../reference/providers.md).
+
+---
+
+## 1. Architectural Overview
+
+```mermaid
+flowchart TD
+    subgraph Workspaces ["Active Workspaces & Worktrees"]
+        WS1["Workspace A (Primary)"]
+        WS2["Workspace A (Worktree)"]
+        WS3["Workspace B"]
+    end
+
+    subgraph GatewaySubsystem ["Provider Gateway Subsystem"]
+        Pool["Content-Addressable Gateway Pool\n(Keyed by Config Fingerprint)"]
+        
+        subgraph GatewayInstance ["Gateway Instance"]
+            Auth["Resilient Credential Resolver\n(In-Memory Env Map + Getenv Fallback)"]
+            Router["Role-Based Model Router\n(Completion / Decision / Embedding)"]
+            Adapter["Decision Fallback Adapter\n(Structured LLM Wrapper)"]
+        end
+
+        Pool --> GatewayInstance
+        Router --> Adapter
+    end
+
+    subgraph Providers ["Upstream Provider Clients"]
+        Anthropic["Anthropic"]
+        OpenAI["OpenAI"]
+        Ollama["Ollama"]
+        TypeSafe["TypeSafe"]
+        GenAI["Google GenAI"]
+        Antigravity["Antigravity"]
+    end
+
+    WS1 & WS2 -->|Same Config Hash| Pool
+    WS3 -->|Different Config Hash| Pool
+    GatewayInstance --> Providers
+```
+
+---
+
+## 2. Core Architectural Components
+
+### 1. Decoupled Configuration Boundary
+The gateway is decoupled from on-disk manifest formats. The workspace catalog resolves model references and role defaults and supplies effective model metadata. Runtime gateway configuration contains:
+- Registered provider connection settings (type, endpoint, authentication, headers, and provider options).
+- An isolated, in-memory environment map containing workspace secrets.
+
+### 2. Content-Addressable Gateway Pool
+Rather than creating a gateway per session or keying gateways by a mutable workspace ID, the daemon maintains a **Content-Addressable Pool** keyed by a deterministic SHA-256 fingerprint of the effective configuration:
+- **Automatic De-duplication**: Multiple git worktrees of the same repository—or separate workspaces sharing the same global provider setup—produce the exact same configuration fingerprint and automatically share a single Gateway instance and its underlying HTTP connection pools.
+- **Zero-Race Hot Reloading**: When a user edits a provider configuration or rotates an API key, the configuration fingerprint changes automatically. New turns acquire a freshly initialized gateway for the new hash without disrupting in-flight turns on the previous instance.
+- **Scoped Hash Inputs**: Only credentials explicitly referenced by a provider's authentication config are included in the fingerprint — the values of referenced environment variables and a content digest of each referenced `auth.file`. Unrelated environment variables never cause cache misses, and file digests keep secrets out of the hash itself.
+
+### 3. Credential Resolver & Lazy Validation
+The gateway resolves authentication credentials without mutating process state or probing global files:
+- **Layered Resolution**: Credentials resolve from the workspace's injected environment map, falling back to process environment variables (`os.Getenv`), or reading from an explicit file path (`auth.file`), which accepts `~` and paths relative to the declaring provider manifest.
+- **Scheme Handling**: The configured scheme (`env`, `bearer`, `api-key`, `basic`, or `none`) decides the header and prefix. The gateway transport is the last layer before the wire, so the configured header always wins over whatever a provider SDK attached, and the SDK's own credential header is removed when it is not the configured one.
+- **Graceful Degradation & Lazy Validation**: Providers missing required credentials or encountering initialization failures in multi-provider environments do not abort gateway construction. Instead, the affected provider is flagged with a warning in provider listings and CLI status displays, and an error is only raised when an operation explicitly targets a model on that disabled provider. Remaining healthy providers continue serving completions, decisions, and embeddings normally.
+
+### 4. Effective Model Configuration
+The workspace model catalog merges Loom profiles with explicit workspace model overrides and resolves requested settings into a configuration and structured diagnostics. Completion models are constructed with the catalog's effective profile, scoped to each model instance so workspace overrides do not alter shared providers. Declared capabilities, limits, modalities and thinking strategies take precedence over the provider profile. Session thinking overrides agent thinking, which overrides the default declared by the model's own thinking capabilities; unsupported agent settings produce diagnostics, while invalid explicit overrides fail validation. A model-declared default that fails validation is ignored rather than reported, because the user never selected it. Explicit temperature support overrides the provider profile; when support is unknown, configured temperature is forwarded with a warning. Known unsupported temperature and Anthropic extended-thinking conflicts are omitted. Session creation, model or agent changes, and workspace reload refresh session diagnostics. Reload stages workspace and gateway changes before publishing them, and session configuration and model construction use a shared reload barrier.
+
+At the provider boundary, request validation rejects known unsupported tools, tool history, input modalities, and response schemas. Structured-output requests with unknown support are forwarded to Loom. Media formats that the adapter would discard are rejected independently of model capabilities. Input blocks that cannot be converted are rejected before entering a session.
+
+### 4a. Metrics Middleware
+Every completion model the gateway builds carries a metrics middleware that closes over the effective model. It measures time to first token and total duration, keeps the last token metrics reported by the stream, and estimates cost from the model's effective pricing profile (loom attaches cost outside the middleware chain, so the middleware estimates it itself). One `llm_call` record is written when the stream ends, fails, is canceled, or is abandoned by the consumer; models without pricing are recorded as unpriced. Workspace-defined pricing and tiers are merged into the effective profile by the model catalog and handed to loom, so loom's estimates and the recorded costs agree. The recorder is not part of the gateway configuration fingerprint. See the [Daemon Architecture](./daemon.md) for the metrics engine.
+
+### 5. Triple-Role Model Instantiation & Decision Adapter
+Given a resolved `(provider, modelID)` from the workspace layer, the gateway instantiates and adapts models across three cognitive roles:
+
+- **System 1 — Decision (`decision`)**: Evaluates calibrated probabilistic questions (classification, routing, confidence checks).
+  - *Native Path*: If the target provider and model support native decision evaluation (e.g., Ollama `nimble-v3`, TypeSafe `jev-latest`, OpenAI decision models), the gateway routes directly to the provider's native decision API.
+  - *Adapted Path*: If the target model only supports text completion, the gateway's **Decision Adapter** transparently wraps the completion model using structured outputs so any LLM can act as a System 1 decision engine.
+- **System 2 — Completion (`completion`)**: Routes multi-turn reasoning, coding, and tool-calling workloads to chat completion providers.
+- **System 3 — Embedding (`embedding`)**: Routes vector generation workloads for semantic search and memory indexing to embedding-capable models.

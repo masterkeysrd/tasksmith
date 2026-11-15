@@ -1,0 +1,284 @@
+package metrics
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/masterkeysrd/tasksmith/api"
+)
+
+// AggFunc is an aggregate function over a metric.
+type AggFunc string
+
+// Aggregate functions. COUNT is per-metric: it counts only records that
+// recorded the metric, so sum/COUNT is the mean over the calls that measured
+// it rather than over all calls.
+const (
+	AggSum   AggFunc = "sum"
+	AggMin   AggFunc = "min"
+	AggMax   AggFunc = "max"
+	AggCount AggFunc = "count"
+)
+
+// Bucket is a time bucket size.
+type Bucket string
+
+// Time buckets.
+const (
+	BucketNone  Bucket = ""
+	BucketHour  Bucket = "hour"
+	BucketDay   Bucket = "day"
+	BucketWeek  Bucket = "week"
+	BucketMonth Bucket = "month"
+)
+
+// Dimension is a column name (workspace_root, session_id, parent_session_id,
+// turn_id, message_id, agent, status, kind) or an attr key prefixed with
+// "attr." (e.g. "attr.model").
+type Dimension string
+
+// AttrPrefix prefixes attr keys used as a [Dimension].
+const AttrPrefix = "attr."
+
+// ErrInvalidQuery is returned for malformed queries.
+var ErrInvalidQuery = errors.New("metrics: invalid query")
+
+var (
+	identPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	metricRe     = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
+
+	columnDims = map[string]bool{
+		"workspace_root": true, "session_id": true, "parent_session_id": true,
+		"turn_id": true, "message_id": true, "agent": true, "status": true, "kind": true,
+	}
+)
+
+func dimensionExpr(d Dimension) (string, error) {
+	name := string(d)
+	if columnDims[name] {
+		return "r." + name, nil
+	}
+	if key, ok := strings.CutPrefix(name, AttrPrefix); ok {
+		if !identPattern.MatchString(key) {
+			return "", fmt.Errorf("%w: invalid attr key %q", ErrInvalidQuery, key)
+		}
+		return fmt.Sprintf("COALESCE(json_extract(r.attrs, '$.%s'), '')", key), nil
+	}
+	return "", fmt.Errorf("%w: unknown dimension %q", ErrInvalidQuery, name)
+}
+
+func bucketExpr(b Bucket) (string, error) {
+	switch b {
+	case BucketHour:
+		return "strftime('%Y-%m-%dT%H:00:00Z', r.created_at)", nil
+	case BucketDay:
+		return "strftime('%Y-%m-%dT00:00:00Z', r.created_at)", nil
+	case BucketWeek:
+		return "strftime('%Y-%m-%dT00:00:00Z', date(r.created_at, 'weekday 0', '-6 days'))", nil
+	case BucketMonth:
+		return "strftime('%Y-%m-01T00:00:00Z', r.created_at)", nil
+	}
+	return "", fmt.Errorf("%w: unknown bucket %q", ErrInvalidQuery, b)
+}
+
+// BuildSQL returns the parameterized SQL for q and the group dimensions in
+// select order. It is exported for testing.
+func BuildSQL(q api.MetricsQuery) (string, []any, error) {
+	var (
+		selects []string
+		args    []any
+		groups  []string
+	)
+	if q.Bucket != "" && Bucket(q.Bucket) != BucketNone {
+		expr, err := bucketExpr(Bucket(q.Bucket))
+		if err != nil {
+			return "", nil, err
+		}
+		selects = append(selects, expr+" AS bucket")
+		groups = append(groups, "bucket")
+	}
+	for i, d := range q.GroupBy {
+		expr, err := dimensionExpr(Dimension(d))
+		if err != nil {
+			return "", nil, err
+		}
+		selects = append(selects, fmt.Sprintf("%s AS g%d", expr, i))
+		groups = append(groups, fmt.Sprintf("g%d", i))
+	}
+	selects = append(selects, "COUNT(DISTINCT r.id) AS cnt")
+	seen := make(map[string]bool, len(q.Aggregates))
+	for _, a := range q.Aggregates {
+		if !metricRe.MatchString(a.Metric) {
+			return "", nil, fmt.Errorf("%w: invalid metric %q", ErrInvalidQuery, a.Metric)
+		}
+		// Values are keyed by metric name, so two functions over one metric
+		// would silently overwrite each other. Callers issue one query per
+		// function instead.
+		if seen[a.Metric] {
+			return "", nil, fmt.Errorf("%w: duplicate metric %q", ErrInvalidQuery, a.Metric)
+		}
+		seen[a.Metric] = true
+		switch AggFunc(a.Func) {
+		case AggSum, "":
+			selects = append(selects, "COALESCE(SUM(CASE WHEN m.metric = ? THEN m.value END), 0)")
+		case AggMin:
+			selects = append(selects, "COALESCE(MIN(CASE WHEN m.metric = ? THEN m.value END), 0)")
+		case AggMax:
+			selects = append(selects, "COALESCE(MAX(CASE WHEN m.metric = ? THEN m.value END), 0)")
+		case AggCount:
+			// COUNT over a CASE yields the records that recorded the metric,
+			// which is the denominator a mean needs.
+			selects = append(selects, "COUNT(CASE WHEN m.metric = ? THEN 1 END)")
+		default:
+			return "", nil, fmt.Errorf("%w: unknown aggregate %q", ErrInvalidQuery, a.Func)
+		}
+		args = append(args, a.Metric)
+	}
+
+	var where []string
+	if q.Kind != "" {
+		where = append(where, "r.kind = ?")
+		args = append(args, q.Kind)
+	}
+	f := q.Filter
+	if f.WorkspaceRoot != "" {
+		where = append(where, "r.workspace_root = ?")
+		args = append(args, f.WorkspaceRoot)
+	}
+	if f.SessionID != "" {
+		if f.IncludeChildren {
+			where = append(where, "(r.session_id = ? OR r.parent_session_id = ?)")
+			args = append(args, f.SessionID, f.SessionID)
+		} else {
+			where = append(where, "r.session_id = ?")
+			args = append(args, f.SessionID)
+		}
+	}
+	if len(f.TurnIDs) > 0 {
+		ph := make([]string, len(f.TurnIDs))
+		for i, id := range f.TurnIDs {
+			ph[i] = "?"
+			args = append(args, id)
+		}
+		where = append(where, "r.turn_id IN ("+strings.Join(ph, ",")+")")
+	}
+	if f.Agent != "" {
+		where = append(where, "r.agent = ?")
+		args = append(args, f.Agent)
+	}
+	if len(f.Status) > 0 {
+		ph := make([]string, len(f.Status))
+		for i, s := range f.Status {
+			ph[i] = "?"
+			args = append(args, s)
+		}
+		where = append(where, "r.status IN ("+strings.Join(ph, ",")+")")
+	}
+	for _, kv := range sortedAttrPairs(f.Attrs) {
+		if !identPattern.MatchString(kv[0]) {
+			return "", nil, fmt.Errorf("%w: invalid attr key %q", ErrInvalidQuery, kv[0])
+		}
+		where = append(where, fmt.Sprintf("json_extract(r.attrs, '$.%s') = ?", kv[0]))
+		args = append(args, kv[1])
+	}
+	if !q.Since.IsZero() {
+		where = append(where, "r.created_at >= ?")
+		args = append(args, q.Since.UTC().Format(TimeLayout))
+	}
+	if !q.Until.IsZero() {
+		where = append(where, "r.created_at < ?")
+		args = append(args, q.Until.UTC().Format(TimeLayout))
+	}
+
+	var sb strings.Builder
+	sb.WriteString("SELECT ")
+	sb.WriteString(strings.Join(selects, ", "))
+	sb.WriteString(" FROM metrics_records r LEFT JOIN metrics_measurements m ON m.record_id = r.id")
+	if len(where) > 0 {
+		sb.WriteString(" WHERE ")
+		sb.WriteString(strings.Join(where, " AND "))
+	}
+	if len(groups) > 0 {
+		sb.WriteString(" GROUP BY ")
+		sb.WriteString(strings.Join(groups, ", "))
+		sb.WriteString(" ORDER BY ")
+		sb.WriteString(strings.Join(groups, ", "))
+	}
+	return sb.String(), args, nil
+}
+
+// Query runs q against the database.
+func (s *Store) Query(ctx context.Context, q api.MetricsQuery) (api.MetricsResult, error) {
+	return RunQuery(ctx, s.db, q)
+}
+
+// RunQuery runs q against db.
+func RunQuery(ctx context.Context, db *sql.DB, q api.MetricsQuery) (api.MetricsResult, error) {
+	query, args, err := BuildSQL(q)
+	if err != nil {
+		return api.MetricsResult{}, err
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return api.MetricsResult{}, fmt.Errorf("metrics: query: %w", err)
+	}
+	defer rows.Close()
+
+	var res api.MetricsResult
+	for rows.Next() {
+		var (
+			bucket sql.NullString
+			groups = make([]sql.NullString, len(q.GroupBy))
+			count  int64
+			values = make([]int64, len(q.Aggregates))
+			dest   []any
+		)
+		if q.Bucket != "" && Bucket(q.Bucket) != BucketNone {
+			dest = append(dest, &bucket)
+		}
+		for i := range groups {
+			dest = append(dest, &groups[i])
+		}
+		dest = append(dest, &count)
+		for i := range values {
+			dest = append(dest, &values[i])
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return api.MetricsResult{}, fmt.Errorf("metrics: scan: %w", err)
+		}
+		row := api.MetricsRow{Group: make(map[string]string, len(groups)), Count: count, Values: make(map[string]int64, len(values))}
+		if bucket.Valid {
+			t, err := time.Parse(time.RFC3339, bucket.String)
+			if err != nil {
+				return api.MetricsResult{}, fmt.Errorf("metrics: parse bucket %q: %w", bucket.String, err)
+			}
+			row.Bucket = t.UTC()
+		}
+		for i, d := range q.GroupBy {
+			row.Group[d] = groups[i].String
+		}
+		for i, a := range q.Aggregates {
+			row.Values[a.Metric] = values[i]
+		}
+		res.Rows = append(res.Rows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return api.MetricsResult{}, err
+	}
+	return res, nil
+}
+
+func sortedAttrPairs(m map[string]string) [][2]string {
+	out := make([][2]string, 0, len(m))
+	for k, v := range m {
+		out = append(out, [2]string{k, v})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+	return out
+}

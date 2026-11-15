@@ -1,0 +1,208 @@
+{
+  "name": "light",
+  "type": "light",
+  "palette": {
+    "bg_canvas": "#ffffff",
+    "bg_panel": "#f6f8fa",
+    "bg_elevated": "#ffffff",
+    "bg_code": "#f6f8fa",
+    "bg_hover": "#eaeef2",
+    "bg_active": "#e1e4e8",
+    "bg_selected": "#e8f0fe",
+    "bg_disabled": "#f6f8fa",
+    "fg_primary": "#1f2328",
+    "fg_secondary": "#59636e",
+    "fg_muted": "#8c959f",
+    "fg_disabled": "#afb8c1",
+    "fg_inverse": "#ffffff",
+    "accent": "#0969da",
+    "info": "#0969da",
+    "success": "#1a7f37",
+    "warning": "#9a6700",
+    "error": "#cf222e",
+    "tint_accent": "#ddf4ff",
+    "tint_info": "#ddf4ff",
+    "tint_success": "#dafbe1",
+    "tint_warning": "#fff8c5",
+    "tint_error": "#ffebe9",
+    "border_default": "#d0d7de",
+    "border_subtle": "#ebeef1",
+    "border_focus": "#0969da",
+    "agent_brand": "#8250df",
+    "agent_thinking": "#8250df",
+    "agent_generating": "#bf3989",
+    "agent_executing": "#1b7c83",
+    "agent_permission": "#bc4c00",
+    "red": "#cf222e",
+    "blue": "#0969da",
+    "green": "#1a7f37",
+    "yellow": "#bf8700",
+    "purple": "#8250df",
+    "orange": "#bc4c00",
+    "pink": "#bf3989",
+    "cyan": "#1b7c83",
+    "mode_default": "#0969da",
+    "mode_plan": "#8250df",
+    "mode_accept_edits": "#1a7f37",
+    "mode_auto": "#1a7f37",
+    "mode_ask": "#bc4c00",
+    "mode_bash": "#cf222e",
+    "diff_added_bg": "#e6ffec",
+    "diff_added_text": "#1a7f37",
+    "diff_added_word": "#abf2bc",
+    "diff_added_dimmed": "#1a7f37",
+    "diff_removed_bg": "#ffebe9",
+    "diff_removed_text": "#cf222e",
+    "diff_removed_word": "#ffc0c0",
+    "diff_removed_dimmed": "#cf222e",
+    "diff_hunk_bg": "#f1f8ff",
+    "diff_hunk_text": "#0969da",
+    "transcript_user_bg": "#f6f8fa",
+    "transcript_user_hover_bg": "#ebeef1",
+    "transcript_bash_bg": "#f6f8fa",
+    "transcript_system_text": "#59636e",
+    "transcript_queued_text": "#8c959f",
+    "meter_fill": "#0969da",
+    "meter_warn": "#9a6700",
+    "meter_danger": "#cf222e",
+    "meter_empty": "#d0d7de",
+    "syntax_keyword": "#cf222e",
+    "syntax_function": "#8250df",
+    "syntax_string": "#0a3069",
+    "syntax_number": "#0969da",
+    "syntax_type": "#953800",
+    "syntax_comment": "#59636e",
+    "syntax_operator": "#0969da",
+    "syntax_variable": "#1f2328",
+    "syntax_punctuation": "#1f2328"
+  },
+  "colors": {
+    "text": {
+      "primary": "fg_primary",
+      "secondary": "fg_secondary",
+      "muted": "fg_muted",
+      "disabled": "fg_disabled",
+      "inverse": "fg_inverse",
+      "accent": "accent",
+      "info": "info",
+      "success": "success",
+      "warning": "warning",
+      "error": "error"
+    },
+    "surface": {
+      "canvas": "bg_canvas",
+      "panel": "bg_panel",
+      "elevated": "bg_elevated",
+      "code": "bg_code",
+      "hover": "bg_hover",
+      "active": "bg_active",
+      "selected": "bg_selected",
+      "disabled": "bg_disabled"
+    },
+    "tint": {
+      "accent": "tint_accent",
+      "info": "tint_info",
+      "success": "tint_success",
+      "warning": "tint_warning",
+      "error": "tint_error"
+    },
+    "border": {
+      "default": "border_default",
+      "subtle": "border_subtle",
+      "focus": "border_focus",
+      "accent": "accent",
+      "info": "info",
+      "success": "success",
+      "warning": "warning",
+      "error": "error"
+    },
+    "icon": {
+      "primary": "cyan",
+      "secondary": "fg_secondary",
+      "muted": "fg_muted",
+      "accent": "accent",
+      "info": "info",
+      "success": "success",
+      "warning": "warning",
+      "error": "error"
+    },
+    "agent": {
+      "brand": "agent_brand",
+      "thinking": "agent_thinking",
+      "generating": "agent_generating",
+      "executing": "agent_executing",
+      "permission": "agent_permission",
+      "subagents": {
+        "red": "red",
+        "blue": "blue",
+        "green": "green",
+        "yellow": "yellow",
+        "purple": "purple",
+        "orange": "orange",
+        "pink": "pink",
+        "cyan": "cyan"
+      }
+    },
+    "mode": {
+      "default": "mode_default",
+      "plan": "mode_plan",
+      "accept_edits": "mode_accept_edits",
+      "auto": "mode_auto",
+      "ask": "mode_ask",
+      "bash": "mode_bash"
+    },
+    "diff": {
+      "added_bg": "diff_added_bg",
+      "added_text": "diff_added_text",
+      "added_word": "diff_added_word",
+      "added_dimmed": "diff_added_dimmed",
+      "removed_bg": "diff_removed_bg",
+      "removed_text": "diff_removed_text",
+      "removed_word": "diff_removed_word",
+      "removed_dimmed": "diff_removed_dimmed",
+      "hunk_bg": "diff_hunk_bg",
+      "hunk_text": "diff_hunk_text"
+    },
+    "transcript": {
+      "user_bg": "transcript_user_bg",
+      "user_hover_bg": "transcript_user_hover_bg",
+      "bash_bg": "transcript_bash_bg",
+      "system_text": "transcript_system_text",
+      "queued_text": "transcript_queued_text"
+    },
+    "meter": {
+      "fill": "meter_fill",
+      "warn": "meter_warn",
+      "danger": "meter_danger",
+      "empty": "meter_empty"
+    },
+    "syntax": {
+      "keyword": "syntax_keyword",
+      "function": "syntax_function",
+      "string": "syntax_string",
+      "number": "syntax_number",
+      "type": "syntax_type",
+      "comment": "syntax_comment",
+      "operator": "syntax_operator",
+      "variable": "syntax_variable",
+      "punctuation": "syntax_punctuation"
+    }
+  },
+  "clients": {
+    "cli": {
+      "transparent": true,
+      "colors": {
+        "transcript": {
+          "user_bg": "none",
+          "bash_bg": "none"
+        }
+      }
+    },
+    "tui": {
+      "transparent": false
+    },
+    "desktop": {
+      "transparent": false
+    }
+  }
+}

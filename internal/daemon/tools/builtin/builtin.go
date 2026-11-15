@@ -1,0 +1,218 @@
+package builtin
+
+import (
+	"embed"
+	"fmt"
+	"io/fs"
+	"strings"
+
+	"github.com/masterkeysrd/loom/tool"
+	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
+)
+
+//go:generate toolgen -dir . -pkg builtin -out generated.go -types-pkg api -types-out ../../../../api/tools.go
+
+//go:embed *.tool.md
+var builtinFS embed.FS
+
+// FS returns a read-only filesystem containing the embedded default *.tool.md
+// manifests for all built-in tools.
+func FS() fs.FS {
+	return builtinFS
+}
+
+// ErrInvalidConfig is returned when [New] receives an invalid [Config].
+var ErrInvalidConfig = tools.ErrInvalidConfig
+
+// Config holds the required dependencies for constructing the built-in system tools.
+type Config struct {
+	Std          *std.Std
+	Sandbox      sandbox.Sandbox
+	Guard        *shellguard.Guard
+	Tasks        tasks.Store
+	Workspace    *workspace.Workspace
+	AllowedTools []string
+	Skills       []warp.Skill
+	Rules        []warp.Rule
+	Subagents    []*warp.Agent
+	Agents       AgentManager
+	// SandboxSettings is the workspace's live sandbox.json manager. The bash
+	// tool consults it for excludedCommands matching and the allowUnsandboxed
+	// lock; when nil, bypass_sandbox is rejected and exclusion is disabled.
+	SandboxSettings sandboxcfg.Manager
+	// AgentName is the active agent's name, used to resolve a loaded skill's
+	// declared tools against the agent's policy ceiling. When empty, the
+	// workspace default agent is used.
+	AgentName string
+	// Agent is the active agent definition, injected into skill render options
+	// so skill templates can reference {{.Agent.*}} fields.
+	Agent *warp.Agent
+	// DeferredTools is the set of tool names withheld from the initial model
+	// context (DeferLoading: true). Skill tools in this set are activated into
+	// context via tool references when the skill is loaded.
+	DeferredTools []string
+	// MCPCaller is the MCP runtime backing the resource-reading built-in tool. When
+	// nil, that tool is not constructed: with no runtime attached there is nothing
+	// for it to read, and offering it would only invite failed calls.
+	MCPCaller tools.MCPCaller
+}
+
+// Validate ensures that all required dependencies are non-nil. Zero silent
+// fallbacks are permitted.
+func (c Config) Validate() error {
+	if c.Std == nil {
+		return fmt.Errorf("%w: std is required", ErrInvalidConfig)
+	}
+	if c.Sandbox == nil {
+		return fmt.Errorf("%w: sandbox is required", ErrInvalidConfig)
+	}
+	if c.Guard == nil {
+		return fmt.Errorf("%w: guard is required", ErrInvalidConfig)
+	}
+	return nil
+}
+
+// New validates cfg and constructs the built-in system tools backed by
+// [std.Std], [shellguard.Guard], and [tasks.Store]. [Config.AllowedTools] is
+// an explicit allowlist: only tools whose name appears in it are constructed.
+// A nil or empty allowlist constructs zero tools.
+func New(cfg Config) ([]tools.Tool, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	tasksMgr := cfg.Tasks
+	if tasksMgr == nil {
+		tasksMgr = tasks.New(tasks.Config{})
+	}
+
+	isAllowed := func(name string) bool {
+		for _, a := range cfg.AllowedTools {
+			if strings.EqualFold(a, name) {
+				return true
+			}
+		}
+		return false
+	}
+
+	toolEntries := []struct {
+		name    string
+		factory func(meta tools.Metadata) tools.Tool
+	}{
+		{ToolView, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolView, m, &viewTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})
+		}},
+		{ToolLS, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolLS, m, &lsTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})
+		}},
+		{ToolGlob, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolGlob, m, &globTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})
+		}},
+		{ToolGrep, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolGrep, m, &grepTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})
+		}},
+		{ToolWrite, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolWrite, m, &writeTool{std: cfg.Std, guard: cfg.Guard})
+		}},
+		{ToolEdit, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolEdit, m, &editTool{std: cfg.Std, guard: cfg.Guard})
+		}},
+		{ToolRemove, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolRemove, m, &removeTool{std: cfg.Std, guard: cfg.Guard})
+		}},
+		{ToolBash, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolBash, m, &bashTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard, tasks: tasksMgr, sandboxCfg: cfg.SandboxSettings})
+		}},
+		{ToolWebFetch, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolWebFetch, m, &webFetchTool{std: cfg.Std})
+		}},
+		{ToolDownload, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolDownload, m, &downloadTool{std: cfg.Std, guard: cfg.Guard})
+		}},
+		{ToolTasks, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolTasks, m, &tasksTool{tasks: tasksMgr}) }},
+		{ToolTodos, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolTodos, m, &todosTool{}) }},
+		{ToolAskQuestion, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolAskQuestion, m, &askQuestionTool{}) }},
+		{ToolLoadSkill, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolLoadSkill, m, newLoadSkillTool(cfg.Skills, cfg.Workspace, cfg.AgentName, cfg.Agent, cfg.DeferredTools))
+		}},
+		{ToolLoadRule, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolLoadRule, m, newLoadRuleTool(cfg.Rules, cfg.Workspace, cfg.Agent))
+		}},
+	}
+
+	// read_mcp_resource needs a live MCP runtime to read from, so it is offered only
+	// when one is attached. The catalog independently keeps it out of every agent's
+	// tool list until a server actually exposes a permitted resource.
+	if cfg.MCPCaller != nil {
+		toolEntries = append(toolEntries, struct {
+			name    string
+			factory func(meta tools.Metadata) tools.Tool
+		}{
+			ToolReadMCPResource, func(m tools.Metadata) tools.Tool {
+				return tools.NewHandler(ToolReadMCPResource, m, newReadMCPResourceTool(cfg.Workspace, cfg.MCPCaller, m.Annotation))
+			},
+		})
+	}
+
+	if cfg.Agents != nil && len(cfg.Subagents) > 0 {
+		toolEntries = append(toolEntries,
+			struct {
+				name    string
+				factory func(meta tools.Metadata) tools.Tool
+			}{
+				ToolInvokeAgent, func(m tools.Metadata) tools.Tool {
+					return tools.NewHandler(ToolInvokeAgent, m, newInvokeAgentTool(cfg.Agents, cfg.Subagents))
+				},
+			},
+			struct {
+				name    string
+				factory func(meta tools.Metadata) tools.Tool
+			}{
+				ToolManageAgents, func(m tools.Metadata) tools.Tool {
+					return tools.NewHandler(ToolManageAgents, m, &manageAgentsTool{agents: cfg.Agents})
+				},
+			},
+		)
+	}
+
+	var out []tools.Tool
+	for _, entry := range toolEntries {
+		if isAllowed(entry.name) {
+			var meta tools.Metadata
+			if cfg.Workspace != nil && cfg.Workspace.Catalog() != nil {
+				wsTool, ok := cfg.Workspace.Catalog().GetTool(entry.name)
+				if !ok {
+					return nil, fmt.Errorf("%w: tool %q not found in workspace", tools.ErrToolNotFound, entry.name)
+				}
+				if wsTool.Metadata.DisplayName != "" {
+					meta.Title = wsTool.Metadata.DisplayName
+				} else {
+					meta.Title = wsTool.Metadata.Name
+				}
+				if wsTool.Spec.Instructions != "" {
+					meta.Description = wsTool.Spec.Instructions
+				} else {
+					meta.Description = wsTool.Metadata.Description
+				}
+				if wsTool.Spec.Annotations != nil {
+					meta.Annotation = tool.Annotation{
+						IsOpenWorld:  wsTool.Spec.Annotations.IsOpenWorld,
+						IsDangerous:  wsTool.Spec.Annotations.IsDangerous,
+						IsReadOnly:   wsTool.Spec.Annotations.IsReadOnly,
+						IsIdempotent: wsTool.Spec.Annotations.IsIdempotent,
+						UserHint:     wsTool.Spec.Annotations.UserHint,
+					}
+				}
+			}
+			out = append(out, entry.factory(meta))
+		}
+	}
+	return out, nil
+}

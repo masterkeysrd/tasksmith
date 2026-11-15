@@ -1,0 +1,7190 @@
+package session
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/masterkeysrd/loom/decision"
+	"github.com/masterkeysrd/loom/embedding"
+	"github.com/masterkeysrd/loom/llm"
+	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/memdb"
+	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
+)
+
+func testAppendMessage(ctx context.Context, sess *Session, msg message.Message) error {
+	if msg == nil {
+		return ErrNilMessage
+	}
+	return sess.appendTimeline(ctx, timeline.NewMessageEntry(msg))
+}
+
+func testCatalog(t *testing.T, ws *workspace.Workspace, entries ...warp.ProviderModel) func() *models.Catalog {
+	t.Helper()
+	reg := warp.NewRegistry(nil)
+	p := &warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "local"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type:   "ollama",
+			Models: entries,
+		},
+	}
+	reg.Set(p.QualifiedName(), p)
+	cat := workspace.NewCatalog(reg, ws.RootDir(), ws.CWD())
+	catalog, err := models.Build(cat, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func() *models.Catalog { return catalog }
+}
+
+func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
+	ctx := context.Background()
+	requests := make(chan map[string]any, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"model","message":{"role":"assistant","content":"done"},"done":true}` + "\n"))
+	}))
+	defer server.Close()
+	db, ws, _, pub, _ := setupTestEnv(t, nil)
+	dir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: cold\nspec:\n  temperature: 0.0\n---\nYou are helpful.\n"
+	if err := os.WriteFile(filepath.Join(dir, "cold.agent.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gw, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{Name: "local", Type: "ollama", Endpoint: server.URL}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
+	perms, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tempTrue := true
+	tempFalse := false
+	catalog := testCatalog(t, ws,
+		warp.ProviderModel{ID: "supported", Capabilities: &warp.ProviderModelCapabilities{Temperature: &tempTrue, Thinking: []warp.ProviderModelThinkingCapability{{Type: "effort", AllowedEfforts: []string{"low", "high"}}}}},
+		warp.ProviderModel{ID: "unsupported", Capabilities: &warp.ProviderModelCapabilities{Temperature: &tempFalse}},
+	)
+	mgr, err := newTestCoordinator(Config{DB: db, Workspace: ws, Gateway: func() gateway.Gateway { return gw }, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "test", Config: api.SessionConfig{Agent: "cold", Model: "local/unsupported"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Diagnostics) != 1 || sess.Diagnostics[0].Code != "temperature_unsupported" {
+		t.Fatalf("diagnostics: %+v", sess.Diagnostics)
+	}
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first := <-requests
+	if options, ok := first["options"].(map[string]any); ok {
+		if _, exists := options["temperature"]; exists {
+			t.Fatalf("unexpected temperature: %#v", first)
+		}
+	}
+	updated, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Model: "local/supported"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Diagnostics) != 0 {
+		t.Fatalf("diagnostics not cleared: %+v", updated.Diagnostics)
+	}
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello again"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second := <-requests
+	options, ok := second["options"].(map[string]any)
+	if !ok || options["temperature"] != float64(0) {
+		t.Fatalf("zero temperature missing: %#v", second)
+	}
+	updated, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Agent: "main", Model: "local/unsupported"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Diagnostics) != 1 || updated.Diagnostics[0].Code != "temperature_unsupported" {
+		t.Fatalf("agent switch diagnostics: %+v", updated.Diagnostics)
+	}
+	reopened, err := newTestCoordinator(Config{DB: db, Workspace: ws, Gateway: func() gateway.Gateway { return gw }, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	loaded, err := reopened.Get(ctx, sess.ID)
+	if err != nil || len(loaded.Diagnostics) != 1 || loaded.Diagnostics[0].Code != "temperature_unsupported" {
+		t.Fatalf("reopened diagnostics: %+v, %v", loaded, err)
+	}
+	mgr.Refresh()
+	if len(sess.Diagnostics) != 1 || sess.Harness == nil {
+		t.Fatalf("refresh state: %+v, harness=%v", sess.Diagnostics, sess.Harness)
+	}
+	for _, tc := range []struct {
+		model           string
+		wantTemperature bool
+	}{
+		{"local/supported", true},
+		{"local/unsupported", false},
+	} {
+		titleSession, _, err := mgr.Create(ctx, api.CreateSessionRequest{Config: api.SessionConfig{Agent: "cold", Model: tc.model}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		titleSession.generateTitle("test title")
+		body := <-requests
+		options, _ := body["options"].(map[string]any)
+		temp, present := options["temperature"]
+		if present != tc.wantTemperature {
+			t.Fatalf("title request for %s: %#v", tc.model, body)
+		}
+		if present && (temp.(float64) < 0.099 || temp.(float64) > 0.101) {
+			t.Fatalf("title temperature: %v", temp)
+		}
+	}
+
+	titleManifest := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: title-generator\nspec:\n  temperature: 0.0\n  thinking:\n    type: effort\n    effort: high\n---\nGenerate a title.\n"
+	if err := os.WriteFile(filepath.Join(dir, "title-generator.agent.md"), []byte(titleManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		model     string
+		thinking  *api.ThinkingSetting
+		wantThink any
+	}{
+		{"local/supported", &api.ThinkingSetting{Type: "effort", Effort: "low"}, "high"},
+		{"local/unsupported", nil, nil},
+	} {
+		titleSession, _, err := mgr.Create(ctx, api.CreateSessionRequest{Config: api.SessionConfig{Agent: "cold", Model: tc.model, Thinking: tc.thinking}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		titleSession.generateTitle("test title")
+		body := <-requests
+		if body["think"] != tc.wantThink {
+			t.Fatalf("title thinking for %s: %#v", tc.model, body)
+		}
+		options, _ := body["options"].(map[string]any)
+		if tc.model == "local/supported" && options["temperature"] != float64(0) {
+			t.Fatalf("title agent zero temperature missing: %#v", body)
+		}
+		if tc.model == "local/unsupported" {
+			if _, present := options["temperature"]; present {
+				t.Fatalf("unsupported title temperature sent: %#v", body)
+			}
+		}
+	}
+}
+
+func TestWaitingForInteractionLocked(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    api.SessionStatus
+		perms     []api.PermissionRequest
+		questions []api.QuestionRequest
+		want      bool
+	}{
+		{name: "idle", status: api.StatusIdle},
+		{name: "pending permissions", status: api.StatusIdle, perms: []api.PermissionRequest{{ID: "p1"}}, want: true},
+		{name: "pending questions", status: api.StatusIdle, questions: []api.QuestionRequest{{ID: "q1"}}, want: true},
+		{name: "permission handoff", status: api.StatusWaitingPermission, want: true},
+		{name: "question handoff", status: api.StatusWaitingQuestion, want: true},
+		{name: "both pending", status: api.StatusWaitingPermission, perms: []api.PermissionRequest{{ID: "p1"}}, questions: []api.QuestionRequest{{ID: "q1"}}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Session{State: &State{Status: tt.status, PendingPermissions: tt.perms, PendingQuestions: tt.questions}}
+			s.Lock()
+			got := s.waitingForInteractionLocked()
+			s.Unlock()
+			if got != tt.want {
+				t.Errorf("waitingForInteractionLocked() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+type capturedTurn struct {
+	model    string
+	messages []message.Message
+}
+
+type fakeProvider struct {
+	mu           sync.Mutex
+	turns        []capturedTurn
+	handler      func(ctx context.Context, req *llm.Request) ([]string, string, error)
+	chunkHandler func(ctx context.Context, req *llm.Request) ([]message.AssistantChunk, error)
+	profile      profile.Profile
+	hasProfile   bool
+}
+
+func (p *fakeProvider) Name() string {
+	return "fake"
+}
+
+func (p *fakeProvider) ListProfiles() []profile.Profile {
+	return nil
+}
+
+func (p *fakeProvider) GetProfile(string) (profile.Profile, bool) {
+	if p.hasProfile {
+		return p.profile, true
+	}
+	return profile.Profile{}, false
+}
+
+func (p *fakeProvider) SearchProfiles(string) []profile.Profile {
+	return nil
+}
+
+func (p *fakeProvider) OverrideProfile(string, profile.Profile) {}
+
+func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	p.mu.Lock()
+	clonedMsgs := make([]message.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		clonedMsgs[i] = message.CloneMessage(m)
+	}
+	p.turns = append(p.turns, capturedTurn{
+		model:    req.Model,
+		messages: clonedMsgs,
+	})
+	handler := p.handler
+	chunkHandler := p.chunkHandler
+	p.mu.Unlock()
+
+	if chunkHandler != nil {
+		customChunks, err := chunkHandler(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return func(yield func(message.AssistantChunk, error) bool) {
+			for _, ch := range customChunks {
+				if err := ctx.Err(); err != nil {
+					yield(message.AssistantChunk{}, err)
+					return
+				}
+				if !yield(ch, nil) {
+					return
+				}
+			}
+		}, nil
+	}
+
+	var chunks []string
+	var respID string
+	if handler != nil {
+		var err error
+		chunks, respID, err = handler(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		chunks = []string{"Hello", " from ", "assistant!"}
+		respID = uuid.NewString()
+	}
+
+	return func(yield func(message.AssistantChunk, error) bool) {
+		for i, text := range chunks {
+			if err := ctx.Err(); err != nil {
+				yield(message.AssistantChunk{}, err)
+				return
+			}
+			chunk := message.AssistantChunk{
+				BaseChunk: message.BaseChunk{ID: respID},
+				Model:     req.Model,
+				Content: []message.Block{
+					&message.TextBlock{Text: text},
+				},
+				Done: i == len(chunks)-1,
+			}
+			if !yield(chunk, nil) {
+				return
+			}
+		}
+	}, nil
+}
+
+func (p *fakeProvider) recordedTurns() []capturedTurn {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]capturedTurn, len(p.turns))
+	copy(out, p.turns)
+	return out
+}
+
+type fakeGateway struct {
+	provider *fakeProvider
+}
+
+func newFakeGateway(p *fakeProvider) *fakeGateway {
+	if p == nil {
+		p = &fakeProvider{}
+	}
+	return &fakeGateway{provider: p}
+}
+
+func (g *fakeGateway) LLM(ctx context.Context, model models.Model, cfg llm.ModelConfig) (*llm.Model, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return llm.NewModel(g.provider, string(model.ID), &cfg)
+}
+
+func (g *fakeGateway) Decision(context.Context, models.Model, llm.ModelConfig) (*decision.Model, error) {
+	return nil, gateway.ErrUnsupportedCapability
+}
+
+func (g *fakeGateway) Embedding(context.Context, models.Model) (*embedding.Model, error) {
+	return nil, gateway.ErrUnsupportedCapability
+}
+
+func (g *fakeGateway) ListProviders() []gateway.ProviderInfo {
+	return nil
+}
+
+func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
+	id := models.ID(qualifiedID)
+	if g.provider != nil {
+		if prof, found := g.provider.GetProfile(id.Name()); found {
+			return prof, true
+		}
+		if prof, found := g.provider.GetProfile(string(id)); found {
+			return prof, true
+		}
+	}
+	return profile.Profile{}, false
+}
+
+func (g *fakeGateway) Quota(context.Context, models.Model) (*api.ModelQuota, error) {
+	return nil, nil
+}
+
+func (g *fakeGateway) Close() error {
+	return nil
+}
+
+type pubRecord struct {
+	topic string
+	event broker.Event
+}
+
+type testPublisher struct {
+	mu      sync.Mutex
+	events  []broker.Event
+	records []pubRecord
+}
+
+func (p *testPublisher) Publish(topic string, ev broker.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := ev.(api.EventPayload); ok {
+		p.events = append(p.events, ev)
+		p.records = append(p.records, pubRecord{topic: topic, event: ev})
+	}
+}
+
+func (p *testPublisher) DeleteTopic(_ string) {}
+
+func (p *testPublisher) recorded() []broker.Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]broker.Event, len(p.events))
+	copy(out, p.events)
+	return out
+}
+
+func (p *testPublisher) recordedRecords() []pubRecord {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]pubRecord, len(p.records))
+	copy(out, p.records)
+	return out
+}
+
+func (p *testPublisher) reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = nil
+	p.records = nil
+}
+
+type testCoordinator struct {
+	cfg      Config
+	store    Store
+	sessions *memdb.DB[*Session]
+	createMu sync.Mutex
+	bgCancel context.CancelFunc
+}
+
+func newTestCoordinator(cfg Config) (*testCoordinator, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	st, err := NewStore(context.Background(), cfg.DB)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ReloadLock == nil {
+		cfg.ReloadLock = &sync.RWMutex{}
+	}
+	if cfg.Catalog == nil {
+		catalog, err := models.Build(cfg.Workspace.Catalog(), cfg.Gateway())
+		if err != nil {
+			return nil, fmt.Errorf("session: build model catalog: %w", err)
+		}
+		cfg.Catalog = func() *models.Catalog { return catalog }
+	}
+	var cancel context.CancelFunc
+	if cfg.Context == nil {
+		cfg.Context, cancel = context.WithCancel(context.Background())
+	}
+	if cfg.WaitGroup == nil {
+		cfg.WaitGroup = &sync.WaitGroup{}
+	}
+	return &testCoordinator{
+		cfg:      cfg,
+		store:    st,
+		sessions: memdb.New(func(s *Session) string { return s.ID }),
+		bgCancel: cancel,
+	}, nil
+}
+
+func (c *testCoordinator) getLive(ctx context.Context, id string) (*Session, error) {
+	if sess, ok := c.sessions.Snapshot().Get(id); ok {
+		return sess, nil
+	}
+
+	dbSess, err := c.store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := c.cfg
+	cfg.OnUpdate = func(ctx context.Context, s *Session) error {
+		return s.CheckpointTo(ctx, c.store)
+	}
+
+	sess, err := Open(ctx, dbSess, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	c.createMu.Lock()
+	if existing, ok := c.sessions.Snapshot().Get(sess.ID); ok {
+		c.createMu.Unlock()
+		_ = sess.Close()
+		return existing, nil
+	}
+	c.sessions.Save(sess)
+	c.createMu.Unlock()
+
+	return sess, nil
+}
+
+func (c *testCoordinator) Create(ctx context.Context, req api.CreateSessionRequest) (*Session, bool, error) {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+
+	id := strings.TrimSpace(req.ID)
+	if id != "" {
+		c.createMu.Lock()
+		defer c.createMu.Unlock()
+
+		existing, err := c.getLive(ctx, id)
+		switch {
+		case err == nil:
+			if err := existing.Matches(req); err != nil {
+				return nil, false, err
+			}
+			return existing, false, nil
+		case !errors.Is(err, ErrSessionNotFound):
+			return nil, false, err
+		}
+	}
+
+	cfg := c.cfg
+	cfg.ID = id
+	cfg.Title = req.Title
+	cfg.Session = req.Config
+	cfg.OnUpdate = func(ctx context.Context, s *Session) error {
+		return s.CheckpointTo(ctx, c.store)
+	}
+
+	newSession, err := New(ctx, cfg)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if err := newSession.CheckpointTo(ctx, c.store); err != nil {
+		_ = newSession.Close()
+		return nil, false, err
+	}
+
+	c.sessions.Save(newSession)
+
+	c.cfg.Publisher.Publish(api.TopicSessions, api.SessionCreatedEvent{
+		Workspace: c.cfg.Workspace.RootDir(),
+		Session:   ToAPISession(newSession),
+	})
+
+	return newSession, true, nil
+}
+
+func (c *testCoordinator) Get(ctx context.Context, id string) (*Session, error) {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, ErrEmptySessionID
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return c.getLive(ctx, id)
+}
+
+func (c *testCoordinator) List(ctx context.Context) ([]*Session, error) {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	list, err := c.store.List(ctx, ListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Session, len(list))
+	for i, dbSess := range list {
+		live, err := c.getLive(ctx, dbSess.ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = live
+	}
+	return out, nil
+}
+
+func (c *testCoordinator) Update(ctx context.Context, id string, req api.UpdateSessionRequest) (*Session, error) {
+	sess, err := c.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := sess.Update(ctx, req); err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+func (c *testCoordinator) Delete(ctx context.Context, id string) error {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrEmptySessionID
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	sess, _ := c.sessions.Snapshot().Get(id)
+	c.sessions.Delete(id)
+
+	if sess == nil {
+		if live, err := c.getLive(ctx, id); err == nil {
+			sess = live
+			c.sessions.Delete(id)
+		}
+	}
+
+	if sess != nil {
+		_ = sess.Cancel(ctx)
+		_ = sess.Close()
+		if sess.Timeline != nil {
+			_ = sess.Timeline.Delete(ctx)
+		}
+		if sess.Journal != nil {
+			_ = sess.Journal.Delete(ctx)
+		}
+	}
+
+	if err := c.store.Delete(ctx, id); err != nil {
+		return err
+	}
+
+	sessDir, err := SessionDir(c.cfg.Workspace.RootDir(), id)
+	if err == nil {
+		_ = os.RemoveAll(sessDir)
+	}
+
+	c.cfg.Publisher.Publish(api.TopicSessions, api.SessionDeletedEvent{
+		Workspace: c.cfg.Workspace.RootDir(),
+		SessionID: id,
+	})
+	c.cfg.Publisher.DeleteTopic(api.SessionStreamTopic(id))
+
+	return nil
+}
+
+func (c *testCoordinator) Preview(ctx context.Context, config api.SessionConfig) (api.SessionConfig, models.Model, []api.SessionDiagnostic, bool, error) {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	return Preview(ctx, c.cfg.Workspace, c.cfg.Catalog(), config)
+}
+
+func (c *testCoordinator) Refresh() {
+	ctx := c.cfg.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, sess := range c.sessions.Snapshot().All() {
+		sess.Refresh(ctx)
+	}
+}
+
+func (c *testCoordinator) Close() error {
+	if c.bgCancel != nil {
+		c.bgCancel()
+	}
+	for _, sess := range c.sessions.Snapshot().All() {
+		_ = sess.Close()
+	}
+	if c.cfg.WaitGroup != nil {
+		c.cfg.WaitGroup.Wait()
+	}
+	return nil
+}
+
+func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspace, *fakeGateway, *testPublisher, *testCoordinator) {
+	t.Helper()
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-session-test")
+	t.Cleanup(func() {
+		xdg.ClearCache()
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	wsDir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(context.Background(), wsDir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+
+	logger := log.Default()
+	gw := newFakeGateway(prov)
+	pub := &testPublisher{}
+
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	mgr, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      logger,
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+
+	return db, ws, gw, pub, mgr
+}
+
+func loadHarnessState(t *testing.T, mgr *testCoordinator, sessionID string) harness.State {
+	t.Helper()
+	sess, err := mgr.Get(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("mgr.Get: %v", err)
+	}
+	state, err := sess.Harness.LoadState(context.Background())
+	if err != nil {
+		t.Fatalf("h.LoadState: %v", err)
+	}
+	return state
+}
+
+func extractBlocksText(blocks []message.Block) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if tb, ok := b.(*message.TextBlock); ok && tb != nil {
+			sb.WriteString(tb.Text)
+		}
+	}
+	return sb.String()
+}
+
+func msgText(m message.Message) string {
+	if m == nil {
+		return ""
+	}
+	return extractBlocksText(m.GetContent())
+}
+
+// countToolRefBlocks counts the ToolReferenceBlocks targeting toolName across the
+// given message list.
+func countToolRefBlocks(msgs message.MessageList, toolName string) int {
+	n := 0
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		for _, b := range m.GetContent() {
+			if ref, ok := b.(*message.ToolReferenceBlock); ok && ref.ToolName == toolName {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func extractAPIBlocksText(blocks []api.Block) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if b.Type == api.BlockText {
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
+}
+
+func apiMessageText(m *api.Message) string {
+	if m == nil {
+		return ""
+	}
+	return extractAPIBlocksText(m.Content)
+}
+
+func TestConfigValidate(t *testing.T) {
+	db, ws, gw, pub, _ := setupTestEnv(t, nil)
+	logger := log.Default()
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	gwFunc := func() gateway.Gateway { return gw }
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{
+			name: "missing DB",
+			cfg: Config{
+				Workspace:   ws,
+				Gateway:     gwFunc,
+				Publisher:   pub,
+				Logger:      logger,
+				Permissions: permMgr,
+			},
+		},
+		{
+			name: "missing Workspace",
+			cfg: Config{
+				DB:          db,
+				Gateway:     gwFunc,
+				Publisher:   pub,
+				Logger:      logger,
+				Permissions: permMgr,
+			},
+		},
+		{
+			name: "missing Gateway",
+			cfg: Config{
+				DB:          db,
+				Workspace:   ws,
+				Publisher:   pub,
+				Logger:      logger,
+				Permissions: permMgr,
+			},
+		},
+		{
+			name: "missing Publisher",
+			cfg: Config{
+				DB:          db,
+				Workspace:   ws,
+				Gateway:     gwFunc,
+				Logger:      logger,
+				Permissions: permMgr,
+			},
+		},
+		{
+			name: "missing Logger",
+			cfg: Config{
+				DB:          db,
+				Workspace:   ws,
+				Gateway:     gwFunc,
+				Publisher:   pub,
+				Permissions: permMgr,
+			},
+		},
+		{
+			name: "missing Permissions",
+			cfg: Config{
+				DB:        db,
+				Workspace: ws,
+				Gateway:   gwFunc,
+				Publisher: pub,
+				Logger:    logger,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.cfg.Validate(); !errors.Is(err, ErrInvalidConfig) {
+				t.Errorf("Validate() error = %v, want %v", err, ErrInvalidConfig)
+			}
+			if _, err := New(context.Background(), tc.cfg); !errors.Is(err, ErrInvalidConfig) {
+				t.Errorf("New() error = %v, want %v", err, ErrInvalidConfig)
+			}
+		})
+	}
+}
+
+func TestSessionCRUD(t *testing.T) {
+	ctx := context.Background()
+	db, _, _, _, mgr := setupTestEnv(t, nil)
+
+	// Initially empty list
+	initial, err := mgr.List(ctx)
+	if err != nil {
+		t.Fatalf("List initial error: %v", err)
+	}
+	if len(initial) != 0 {
+		t.Fatalf("expected 0 initial sessions, got %d", len(initial))
+	}
+
+	// Create session 1
+	s1, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "First Session"})
+	if err != nil {
+		t.Fatalf("Create s1 error: %v", err)
+	}
+	if s1.ID == "" {
+		t.Fatal("expected non-empty s1.ID")
+	}
+	if s1.Title != "First Session" {
+		t.Errorf("s1.Title = %q, want %q", s1.Title, "First Session")
+	}
+	if s1.Config.Agent == "" {
+		t.Errorf("expected default s1.Agent to be resolved from workspace, got empty")
+	}
+	if s1.CreatedAt.IsZero() || s1.UpdatedAt.IsZero() {
+		t.Errorf("expected non-zero timestamps on s1: %+v", s1)
+	}
+
+	// Ensure slightly later timestamp for s2
+	time.Sleep(2 * time.Millisecond)
+
+	// Create session 2
+	s2, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Second Session"})
+	if err != nil {
+		t.Fatalf("Create s2 error: %v", err)
+	}
+
+	// Get s1
+	got1, err := mgr.Get(ctx, s1.ID)
+	if err != nil {
+		t.Fatalf("Get s1 error: %v", err)
+	}
+	if got1.ID != s1.ID || got1.Title != s1.Title || got1.Config.Agent != s1.Config.Agent || got1.Config.Model != s1.Config.Model || !got1.CreatedAt.Equal(s1.CreatedAt) {
+		t.Errorf("Get(s1) = %+v, want %+v", got1, s1)
+	}
+
+	// Get validation errors
+	if _, err := mgr.Get(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
+		t.Errorf("Get empty ID error = %v, want %v", err, ErrEmptySessionID)
+	}
+	if _, err := mgr.Get(ctx, "   "); !errors.Is(err, ErrEmptySessionID) {
+		t.Errorf("Get whitespace ID error = %v, want %v", err, ErrEmptySessionID)
+	}
+	if _, err := mgr.Get(ctx, "non-existent-id"); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Get non-existent ID error = %v, want %v", err, ErrSessionNotFound)
+	}
+
+	// List should return [s2, s1] ordered by updated_at DESC
+	list, err := mgr.List(ctx)
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(list))
+	}
+	if list[0].ID != s2.ID || list[1].ID != s1.ID {
+		t.Errorf("List order = [%s, %s], want [%s, %s]", list[0].ID, list[1].ID, s2.ID, s1.ID)
+	}
+
+	// Append a message to s1 so its updated_at becomes newer than s2
+	time.Sleep(2 * time.Millisecond)
+	if err := testAppendMessage(ctx, s1, message.NewUserText("Hello on s1")); err != nil {
+		t.Fatalf("appendMessage s1 error: %v", err)
+	}
+
+	listAfterUpdate, err := mgr.List(ctx)
+	if err != nil {
+		t.Fatalf("List after update error: %v", err)
+	}
+	if listAfterUpdate[0].ID != s1.ID || listAfterUpdate[1].ID != s2.ID {
+		t.Errorf("List order after s1 update = [%s, %s], want [%s, %s]",
+			listAfterUpdate[0].ID, listAfterUpdate[1].ID, s1.ID, s2.ID)
+	}
+
+	// Delete validation errors
+	if err := mgr.Delete(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
+		t.Errorf("Delete empty ID error = %v, want %v", err, ErrEmptySessionID)
+	}
+	if err := mgr.Delete(ctx, "unknown-session"); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Delete unknown ID error = %v, want %v", err, ErrSessionNotFound)
+	}
+
+	// Delete s1 and verify both session and its timeline entries are gone
+	if err := mgr.Delete(ctx, s1.ID); err != nil {
+		t.Fatalf("Delete s1 error: %v", err)
+	}
+	if _, err := mgr.Get(ctx, s1.ID); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Get deleted s1 error = %v, want %v", err, ErrSessionNotFound)
+	}
+
+	var msgCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM timeline WHERE session_id = ?`, s1.ID).Scan(&msgCount); err != nil {
+		t.Fatalf("count timeline entries for deleted s1: %v", err)
+	}
+	if msgCount != 0 {
+		t.Errorf("expected 0 timeline entries for deleted session s1, got %d", msgCount)
+	}
+}
+
+func TestCreateWorkspaceDefaultsAndConcurrentSessionOverrides(t *testing.T) {
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-session-ws-test")
+	t.Cleanup(func() {
+		xdg.ClearCache()
+	})
+
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "ws-test.db")
+	db, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	wsDir := t.TempDir()
+	wsManifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: test-ws
+spec:
+  defaultAgent: custom-default-agent
+  defaultProvider: openai
+---
+WORKSPACE_SHARED_PROMPT_MARKER
+`
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	providerDir := filepath.Join(agentsDir, "providers")
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	providerManifest := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: openai
+spec:
+  type: openai
+  models:
+    - id: gpt-5.5-default
+`
+	if err := os.WriteFile(filepath.Join(providerDir, "openai.yaml"), []byte(providerManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defaultAgentManifest := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: custom-default-agent
+  description: Default agent
+spec:
+  models:
+    - gpt-5.5-default
+---
+DEFAULT_AGENT_PROMPT_MARKER
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "custom-default-agent.agent.md"), []byte(defaultAgentManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	shellToolManifest := `---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: shell
+  description: Shell tool
+spec:
+  command:
+    - sh
+---
+Run shell commands.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "shell.tool.md"), []byte(shellToolManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	overrideAgentManifest := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: override-agent
+  description: Override agent
+spec:
+  tools:
+    - shell
+---
+OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end }}
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "override-agent.agent.md"), []byte(overrideAgentManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(ctx, wsDir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"OK"}, uuid.NewString(), nil
+		},
+	}
+	gw := newFakeGateway(prov)
+	pub := &testPublisher{}
+
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	mgr, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("newTestCoordinator: %v", err)
+	}
+
+	// Session A: uses workspace defaults for Agent and Model
+	sessDefault, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Default Session"})
+	if err != nil {
+		t.Fatalf("Create default session error: %v", err)
+	}
+	if sessDefault.Config.Agent != "custom-default-agent" {
+		t.Errorf("sessDefault.Agent = %q, want %q", sessDefault.Config.Agent, "custom-default-agent")
+	}
+	if sessDefault.Config.Model != "openai/gpt-5.5-default" {
+		t.Errorf("sessDefault.Model = %q, want %q", sessDefault.Config.Model, "openai/gpt-5.5-default")
+	}
+
+	// Session B: explicit Agent and Model overrides in the same workspace
+	sessOverride, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Override Session",
+		Config: api.SessionConfig{
+			Agent: "override-agent",
+			Model: "anthropic/claude-4-sonnet",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create override session error: %v", err)
+	}
+	if sessOverride.Config.Agent != "override-agent" {
+		t.Errorf("sessOverride.Agent = %q, want %q", sessOverride.Config.Agent, "override-agent")
+	}
+	if sessOverride.Config.Model != "anthropic/claude-4-sonnet" {
+		t.Errorf("sessOverride.Model = %q, want %q", sessOverride.Config.Model, "anthropic/claude-4-sonnet")
+	}
+
+	// Send on both concurrent sessions and verify each uses its own Agent prompt and Model
+	if err := sessDefault.Send(ctx, api.SendRequest{Content: "Hello default"}); err != nil {
+		t.Fatalf("Send sessDefault error: %v", err)
+	}
+	if err := sessDefault.Wait(ctx); err != nil {
+		t.Fatalf("Wait sessDefault error: %v", err)
+	}
+	if err := sessOverride.Send(ctx, api.SendRequest{Content: "Hello override"}); err != nil {
+		t.Fatalf("Send sessOverride error: %v", err)
+	}
+	if err := sessOverride.Wait(ctx); err != nil {
+		t.Fatalf("Wait sessOverride error: %v", err)
+	}
+
+	turns := prov.recordedTurns()
+	if len(turns) != 2 {
+		t.Fatalf("expected 2 LLM turns, got %d", len(turns))
+	}
+
+	// Verify Turn 1 (sessDefault)
+	if turns[0].model != "openai/gpt-5.5-default" {
+		t.Errorf("turns[0].model = %q, want %q", turns[0].model, "openai/gpt-5.5-default")
+	}
+	sys0 := msgText(turns[0].messages[0])
+	if !strings.Contains(sys0, "WORKSPACE_SHARED_PROMPT_MARKER") || !strings.Contains(sys0, "DEFAULT_AGENT_PROMPT_MARKER") {
+		t.Errorf("turns[0] system prompt = %q, missing expected default markers", sys0)
+	}
+
+	// Verify Turn 2 (sessOverride)
+	if turns[1].model != "anthropic/claude-4-sonnet" {
+		t.Errorf("turns[1].model = %q, want %q", turns[1].model, "anthropic/claude-4-sonnet")
+	}
+	sys1 := msgText(turns[1].messages[0])
+	if !strings.Contains(sys1, "WORKSPACE_SHARED_PROMPT_MARKER") ||
+		!strings.Contains(sys1, "OVERRIDE_AGENT_PROMPT_MARKER") ||
+		!strings.Contains(sys1, "HAS_SHELL_TOOL") {
+		t.Errorf("turns[1] system prompt = %q, missing expected override markers", sys1)
+	}
+
+	// Update Session A: update title, agent, and bare model (resolving with defaultProvider openai)
+	updatedA, err := mgr.Update(ctx, sessDefault.ID, api.UpdateSessionRequest{
+		Title: "Renamed Default Session",
+		Config: api.SessionConfig{
+			Agent: "override-agent",
+			Model: "gpt-5.5-default",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update session error: %v", err)
+	}
+	if updatedA.Title != "Renamed Default Session" {
+		t.Errorf("updatedA.Title = %q, want %q", updatedA.Title, "Renamed Default Session")
+	}
+	if updatedA.Config.Agent != "override-agent" {
+		t.Errorf("updatedA.Agent = %q, want %q", updatedA.Config.Agent, "override-agent")
+	}
+	if updatedA.Config.Model != "openai/gpt-5.5-default" {
+		t.Errorf("updatedA.Model = %q, want %q", updatedA.Config.Model, "openai/gpt-5.5-default")
+	}
+
+	// Update Session A again with fully qualified model
+	updatedA2, err := mgr.Update(ctx, sessDefault.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{
+			Model: "anthropic/claude-4-sonnet",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update session model: %v", err)
+	}
+	if updatedA2.Config.Model != "anthropic/claude-4-sonnet" {
+		t.Errorf("updatedA2.Model = %q, want %q", updatedA2.Config.Model, "anthropic/claude-4-sonnet")
+	}
+
+	// Verify persistence via Get
+	fetchedA, err := mgr.Get(ctx, sessDefault.ID)
+	if err != nil {
+		t.Fatalf("Get updated session: %v", err)
+	}
+	if fetchedA.Title != updatedA2.Title || fetchedA.Config.Agent != updatedA2.Config.Agent || fetchedA.Config.Model != updatedA2.Config.Model {
+		t.Errorf("Get mismatch after update: got %+v, want %+v", fetchedA, updatedA2)
+	}
+
+	// Error cases
+	if _, err := mgr.Update(ctx, "", api.UpdateSessionRequest{Title: "X"}); !errors.Is(err, ErrEmptySessionID) {
+		t.Errorf("Update empty ID: got %v, want ErrEmptySessionID", err)
+	}
+	if _, err := mgr.Update(ctx, "non-existent-id", api.UpdateSessionRequest{Title: "X"}); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Update nonexistent ID: got %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestSendAndHistory(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Hello", ", ", "TaskSmith!"}, "asst-msg-1", nil
+		},
+	}
+	_, _, _, pub, mgr := setupTestEnv(t, prov)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Chat Loop"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// Validation checks on Send and History
+	if err := sess.Send(ctx, api.SendRequest{}); !errors.Is(err, ErrEmptyMessage) {
+		t.Errorf("Send nil input error = %v, want %v", err, ErrEmptyMessage)
+	}
+
+	pub.reset()
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "Greetings!"}); err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+
+	msgs, err := sess.Timeline.Messages(ctx)
+	if err != nil || len(msgs) < 2 {
+		t.Fatalf("History error (%v) or too few messages (%d)", err, len(msgs))
+	}
+	reply, ok := msgs[1].(*message.Assistant)
+	if !ok || reply == nil {
+		t.Fatal("expected non-nil assistant reply")
+	}
+
+	if got := msgText(reply); got != "Hello, TaskSmith!" {
+		t.Errorf("reply text = %q, want %q", got, "Hello, TaskSmith!")
+	}
+	parsedReplyID, err := uuid.Parse(reply.GetID())
+	if err != nil || parsedReplyID.Version() != 7 {
+		t.Errorf("reply.GetID() = %q, want valid UUIDv7 (err=%v)", reply.GetID(), err)
+	}
+
+	// Verify published event sequence via Publisher:
+	// 0. StatusChangedEvent (StatusThinking)
+	// 1. EntryAddedEvent (user message)
+	// 2. StatusChangedEvent (StatusGenerating)
+	// 3..5. ChunkEvent ("Hello", ", ", "TaskSmith!")
+	// 6. EntryAddedEvent (assistant message)
+	// 7. ContextUpdatedEvent (Context state)
+	// 8. StatusChangedEvent (StatusIdle)
+	// 9. CompletedEvent (assistant reply)
+	events := pub.recorded()
+	if len(events) != 10 {
+		t.Fatalf("expected 10 published events, got %d: %+v", len(events), events)
+	}
+	for i, ev := range events {
+		var sessionID string
+		switch e := ev.(type) {
+		case api.StatusChangedEvent:
+			sessionID = e.SessionID
+		case api.EntryAddedEvent:
+			sessionID = e.SessionID
+		case api.ChunkEvent:
+			sessionID = e.SessionID
+		case api.PermissionRequestedEvent:
+			sessionID = e.SessionID
+		case api.ContextUpdatedEvent:
+			sessionID = e.SessionID
+		case api.CompletedEvent:
+			sessionID = e.SessionID
+		}
+		if sessionID != sess.ID {
+			t.Errorf("events[%d].SessionID = %q, want %q", i, sessionID, sess.ID)
+		}
+	}
+
+	sc0, ok := events[0].(api.StatusChangedEvent)
+	if !ok || sc0.Status != api.StatusThinking {
+		t.Errorf("events[0] = %+v, want StatusChangedEvent(StatusThinking)", events[0])
+	}
+
+	ev1, ok := events[1].(api.EntryAddedEvent)
+	if !ok || ev1.Entry.Kind != api.TimelineKindMessage || ev1.Entry.Message == nil || ev1.Entry.Message.Role != api.RoleUser || apiMessageText(ev1.Entry.Message) != "Greetings!" {
+		t.Errorf("events[1] = %+v, want user EntryAddedEvent", events[1])
+	}
+	if ev1.Entry.ID == "" || ev1.Entry.Message.ID == "" {
+		t.Errorf("expected generated UUID on user message in events[1]")
+	}
+
+	sc2, ok := events[2].(api.StatusChangedEvent)
+	if !ok || sc2.Status != api.StatusGenerating {
+		t.Errorf("events[2] = %+v, want StatusChangedEvent(StatusGenerating)", events[2])
+	}
+
+	var chunkTexts []string
+	for i := 3; i <= 5; i++ {
+		chkEv, ok := events[i].(api.ChunkEvent)
+		if !ok {
+			t.Errorf("events[%d] = %+v, want ChunkEvent", i, events[i])
+			continue
+		}
+		chunkTexts = append(chunkTexts, extractAPIBlocksText(chkEv.Chunk.Content))
+	}
+	wantChunks := []string{"Hello", ", ", "TaskSmith!"}
+	if !reflect.DeepEqual(chunkTexts, wantChunks) {
+		t.Errorf("chunkTexts = %v, want %v", chunkTexts, wantChunks)
+	}
+
+	ev6, ok := events[6].(api.EntryAddedEvent)
+	if !ok || ev6.Entry.Kind != api.TimelineKindMessage || ev6.Entry.Message == nil || ev6.Entry.Message.Role != api.RoleAssistant || apiMessageText(ev6.Entry.Message) != "Hello, TaskSmith!" {
+		t.Errorf("events[6] = %+v, want assistant EntryAddedEvent", events[6])
+	}
+	ctxEv7, ok := events[7].(api.ContextUpdatedEvent)
+	if !ok || ctxEv7.SessionID != sess.ID || ctxEv7.Context.UsedTokens == 0 {
+		t.Errorf("events[7] = %+v, want ContextUpdatedEvent", events[7])
+	}
+	sc8, ok := events[8].(api.StatusChangedEvent)
+	if !ok || sc8.Status != api.StatusIdle {
+		t.Errorf("events[8] = %+v, want StatusChangedEvent(StatusIdle)", events[8])
+	}
+	ev9, ok := events[9].(api.CompletedEvent)
+	if !ok || ev9.SessionID != sess.ID {
+		t.Errorf("events[9] = %+v, want CompletedEvent for session %q", events[9], sess.ID)
+	}
+
+	// Verify session.History returns [User, Assistant] from the messages table
+	history, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 messages in History, got %d", len(history))
+	}
+	if history[0].Role() != message.RoleUser || msgText(history[0]) != "Greetings!" {
+		t.Errorf("history[0] = (%s, %q), want (user, \"Greetings!\")", history[0].Role(), msgText(history[0]))
+	}
+	if history[1].Role() != message.RoleAssistant || msgText(history[1]) != "Hello, TaskSmith!" || history[1].GetID() != reply.GetID() {
+		t.Errorf("history[1] = (%s, %q, %q), want (assistant, \"Hello, TaskSmith!\", %q)",
+			history[1].Role(), msgText(history[1]), history[1].GetID(), reply.GetID())
+	}
+	if history[0].GetID() >= history[1].GetID() {
+		t.Errorf("expected UUIDv7 chronological order history[0].ID (%q) < history[1].ID (%q)", history[0].GetID(), history[1].GetID())
+	}
+
+	// Verify harness.LoadState returns [User, Assistant] from the checkpoints table
+	state := loadHarnessState(t, mgr, sess.ID)
+	if len(state.Messages) != 2 {
+		t.Fatalf("expected 2 messages in harness checkpoint state, got %d", len(state.Messages))
+	}
+	if state.Messages[0].Role() != message.RoleUser || msgText(state.Messages[0]) != "Greetings!" {
+		t.Errorf("state.Messages[0] = (%s, %q), want (user, \"Greetings!\")", state.Messages[0].Role(), msgText(state.Messages[0]))
+	}
+	if state.Messages[1].Role() != message.RoleAssistant || msgText(state.Messages[1]) != "Hello, TaskSmith!" {
+		t.Errorf("state.Messages[1] = (%s, %q), want (assistant, \"Hello, TaskSmith!\")", state.Messages[1].Role(), msgText(state.Messages[1]))
+	}
+}
+
+func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Assistant reply"}, "asst-isolation-1", nil
+		},
+	}
+	_, _, _, pub, mgr := setupTestEnv(t, prov)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "System Notice Thread"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// Validation checks on appendMessage
+	if err := testAppendMessage(ctx, sess, nil); !errors.Is(err, ErrNilMessage) {
+		t.Errorf("appendMessage nil message error = %v, want %v", err, ErrNilMessage)
+	}
+
+	// 1. Run a conversational turn via Send
+	if err := sess.Send(ctx, api.SendRequest{Content: "Hello agent"}); err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+
+	pub.reset()
+
+	// 2. Append a chat-only system message via appendMessage
+	if err := testAppendMessage(ctx, sess, message.NewSystemText("Notice from system")); err != nil {
+		t.Fatalf("appendMessage error: %v", err)
+	}
+
+	// Verify Publisher received EventEntryAdded for the appended system message
+	appendedEvents := pub.recorded()
+	if len(appendedEvents) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(appendedEvents))
+	}
+	appEv, ok := appendedEvents[0].(api.EntryAddedEvent)
+	if !ok || appEv.Entry.Kind != api.TimelineKindMessage || appEv.Entry.Message == nil || appEv.Entry.Message.Role != api.RoleSystem {
+		t.Fatalf("expected 1 EntryAddedEvent for system message, got %+v", appendedEvents)
+	}
+
+	// 3. Verify the RoleSystem message appears in session.History (messages table)
+	history, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("expected 3 messages in session.History, got %d", len(history))
+	}
+	if history[0].Role() != message.RoleUser || msgText(history[0]) != "Hello agent" {
+		t.Errorf("history[0] = (%s, %q), want (user, \"Hello agent\")", history[0].Role(), msgText(history[0]))
+	}
+	if history[1].Role() != message.RoleAssistant || msgText(history[1]) != "Assistant reply" {
+		t.Errorf("history[1] = (%s, %q), want (assistant, \"Assistant reply\")", history[1].Role(), msgText(history[1]))
+	}
+	if history[2].Role() != message.RoleSystem || msgText(history[2]) != "Notice from system" {
+		t.Errorf("history[2] = (%s, %q), want (system, \"Notice from system\")", history[2].Role(), msgText(history[2]))
+	}
+	if history[2].GetID() == "" {
+		t.Errorf("expected generated UUID on appended system message")
+	}
+
+	// 4. Verify harness.LoadState (checkpoints table) is NOT polluted with the chat-only system message
+	state := loadHarnessState(t, mgr, sess.ID)
+	if len(state.Messages) != 2 {
+		t.Fatalf("expected 2 messages in harness checkpoint state, got %d: %+v", len(state.Messages), state.Messages)
+	}
+	for i, m := range state.Messages {
+		if m.Role() == message.RoleSystem || strings.Contains(msgText(m), "Notice from system") {
+			t.Errorf("harness checkpoint state.Messages[%d] was polluted with chat-only system message: %+v", i, m)
+		}
+	}
+}
+
+func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
+	ctx := context.Background()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "File Tracker Session"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	jr := sess.Journal
+
+	sb, err := sandbox.New(sandbox.Config{
+		WorkDir: ws.RootDir(),
+		Mode:    sandbox.ModeLocal,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
+
+	stdTools, err := std.New(std.Config{
+		Sandbox: sb,
+		Tracker: jr,
+		Logger:  log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+
+	// Create initial baseline file on disk
+	initialContent := "line1\nline2\nline3\n"
+	if err := sb.FS().MkdirAll(ctx, "pkg", 0o755); err != nil {
+		t.Fatalf("MkdirAll pkg: %v", err)
+	}
+	if err := sb.FS().WriteFile(ctx, "pkg/app.go", []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("WriteFile initial: %v", err)
+	}
+
+	// 1. View file -> calls RecordRead in memory ONLY (must NOT create blobs on disk)
+	viewRes, err := stdTools.View(ctx, std.ViewRequest{Path: "pkg/app.go"})
+	if err != nil {
+		t.Fatalf("stdTools.View: %v", err)
+	}
+
+	blobsDir := filepath.Join(sess.Root, "blobs")
+	if _, err := os.Stat(blobsDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected View (RecordRead) NOT to create blobs dir %q on disk, stat err = %v", blobsDir, err)
+	}
+
+	// Verify CAS conflict detection when file is modified externally after View
+	if err := sb.FS().WriteFile(ctx, "pkg/app.go", []byte("external_tamper\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile external tamper: %v", err)
+	}
+	if _, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "pkg/app.go",
+		OldText: "line2",
+		NewText: "line2_agent_edit",
+	}); !errors.Is(err, std.ErrFileModified) {
+		t.Fatalf("expected std.ErrFileModified after external tamper, got %v", err)
+	}
+
+	// Restore initial content and re-read via View
+	if err := sb.FS().WriteFile(ctx, "pkg/app.go", []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("WriteFile restore initial: %v", err)
+	}
+	if _, err := stdTools.View(ctx, std.ViewRequest{Path: "pkg/app.go"}); err != nil {
+		t.Fatalf("stdTools.View restore: %v", err)
+	}
+
+	// 2. Edit file -> calls RecordChange (persists to SQLite + blobs)
+	editRes, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "pkg/app.go",
+		OldText: "line2",
+		NewText: "line2_agent_edit",
+	})
+	if err != nil {
+		t.Fatalf("stdTools.Edit: %v", err)
+	}
+
+	// 3. Inspect journal entries via ChangesForPath
+	entries, err := jr.ChangesForPath(ctx, "pkg/app.go")
+	if err != nil {
+		t.Fatalf("ChangesForPath: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 journal entry, got %d", len(entries))
+	}
+	if entries[0].Path != "pkg/app.go" {
+		t.Errorf("entry path = %v, want \"pkg/app.go\"", entries[0].Path)
+	}
+	if entries[0].BeforeHash != viewRes.Hash {
+		t.Errorf("entry before_hash = %v, want %q", entries[0].BeforeHash, viewRes.Hash)
+	}
+	if entries[0].AfterHash != editRes.AfterHash {
+		t.Errorf("entry after_hash = %v, want %q", entries[0].AfterHash, editRes.AfterHash)
+	}
+
+	// 4. Verify blobs exist and deduplicate identical content
+	beforeBlob, err := os.ReadFile(filepath.Join(blobsDir, viewRes.Hash))
+	if err != nil {
+		t.Fatalf("ReadBlob baseline: %v", err)
+	}
+	if string(beforeBlob) != initialContent {
+		t.Errorf("beforeBlob = %q, want %q", string(beforeBlob), initialContent)
+	}
+
+	afterBlob, err := os.ReadFile(filepath.Join(blobsDir, editRes.AfterHash))
+	if err != nil {
+		t.Fatalf("ReadBlob after: %v", err)
+	}
+	if string(afterBlob) != "line1\nline2_agent_edit\nline3\n" {
+		t.Errorf("afterBlob = %q", string(afterBlob))
+	}
+
+	// RecordChange again with identical after content and verify only 2 blobs exist in blobs/
+	dupChange := &std.FileChange{
+		FileChange: api.FileChange{
+			Path:       "pkg/app.go",
+			Source:     api.SourceAgent,
+			Tool:       "write",
+			Kind:       api.KindModified,
+			BeforeHash: editRes.AfterHash,
+			AfterHash:  editRes.AfterHash,
+		},
+		AfterContent: afterBlob,
+	}
+	if err := jr.RecordChange(ctx, dupChange); err != nil {
+		t.Fatalf("RecordChange duplicate: %v", err)
+	}
+	if dupChange.ID == "" {
+		t.Errorf("expected RecordChange to populate dupChange.ID")
+	}
+	blobEntries, err := os.ReadDir(blobsDir)
+	if err != nil {
+		t.Fatalf("ReadDir blobs: %v", err)
+	}
+	if len(blobEntries) != 2 {
+		t.Errorf("expected exactly 2 deduplicated blobs, got %d", len(blobEntries))
+	}
+}
+
+func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
+	ctx := context.Background()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Recovery Session"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	jr := sess.Journal
+
+	sb, err := sandbox.New(sandbox.Config{
+		WorkDir: ws.RootDir(),
+		Mode:    sandbox.ModeLocal,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
+
+	stdTools, err := std.New(std.Config{
+		Sandbox: sb,
+		Tracker: jr,
+		Logger:  log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+
+	// Step 1: Agent creates file via Write ("v1\n")
+	if _, err := stdTools.Write(ctx, std.WriteRequest{
+		Path:    "notes.txt",
+		Content: "v1\n",
+	}); err != nil {
+		t.Fatalf("Write v1: %v", err)
+	}
+
+	// Step 2: Agent edits file to "v2\n"
+	if _, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "notes.txt",
+		OldText: "v1",
+		NewText: "v2",
+	}); err != nil {
+		t.Fatalf("Edit v2: %v", err)
+	}
+
+	// Step 3: External bash command modifies file to "v3_external\n"
+	if _, err := stdTools.Bash(ctx, std.BashRequest{
+		Command: "printf 'v3_external\\n' > notes.txt",
+	}); err != nil {
+		t.Fatalf("Bash v3_external: %v", err)
+	}
+
+	entries, err := jr.ChangesForPath(ctx, "notes.txt")
+	if err != nil {
+		t.Fatalf("ChangesForPath: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 journal entries, got %d", len(entries))
+	}
+	if entries[0].Source != api.SourceAgent || entries[0].Kind != api.KindCreated {
+		t.Errorf("entries[0] = %+v", entries[0])
+	}
+	if entries[1].Source != api.SourceAgent || entries[1].Kind != api.KindModified {
+		t.Errorf("entries[1] = %+v", entries[1])
+	}
+	if entries[2].Source != api.SourceExternal || entries[2].Kind != api.KindModified {
+		t.Errorf("entries[2] = %+v", entries[2])
+	}
+
+	// On-demand DiffEntry for entries[1] ("v1\n" -> "v2\n")
+	diffText, err := jr.DiffEntry(ctx, "notes.txt", entries[1].ID)
+	if err != nil {
+		t.Fatalf("DiffEntry: %v", err)
+	}
+	if !strings.Contains(diffText, "-v1") || !strings.Contains(diffText, "+v2") {
+		t.Errorf("unexpected DiffEntry output:\n%s", diffText)
+	}
+
+	// RecoverAt entries[2] with before=true (state right before external bash edit -> "v2\n")
+	if err := jr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[2].ID, true); err != nil {
+		t.Fatalf("RecoverAt before entries[2]: %v", err)
+	}
+	diskBytes, err := sb.FS().ReadFile(ctx, "notes.txt")
+	if err != nil {
+		t.Fatalf("ReadFile after RecoverAt: %v", err)
+	}
+	if string(diskBytes) != "v2\n" {
+		t.Errorf("disk content after RecoverAt(entries[2], before=true) = %q, want \"v2\\n\"", string(diskBytes))
+	}
+
+	// RecoverAt entries[0] with before=false (state right after creation -> "v1\n")
+	if err := jr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[0].ID, false); err != nil {
+		t.Fatalf("RecoverAt after entries[0]: %v", err)
+	}
+	diskBytes, err = sb.FS().ReadFile(ctx, "notes.txt")
+	if err != nil {
+		t.Fatalf("ReadFile after RecoverAt: %v", err)
+	}
+	if string(diskBytes) != "v1\n" {
+		t.Errorf("disk content after RecoverAt(entries[0], before=false) = %q, want \"v1\\n\"", string(diskBytes))
+	}
+
+	// RecoverAt entries[0] with before=true (state before creation -> file removed)
+	if err := jr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[0].ID, true); err != nil {
+		t.Fatalf("RecoverAt before entries[0]: %v", err)
+	}
+	if _, err := sb.FS().Stat(ctx, "notes.txt"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected notes.txt to be removed after recovering before creation, err = %v", err)
+	}
+}
+
+func TestFileTrackerRevertToBaselineThreeWayMerge(t *testing.T) {
+	ctx := context.Background()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Merge3 Revert Session"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	jr := sess.Journal
+
+	sb, err := sandbox.New(sandbox.Config{
+		WorkDir: ws.RootDir(),
+		Mode:    sandbox.ModeLocal,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
+
+	stdTools, err := std.New(std.Config{
+		Sandbox: sb,
+		Tracker: jr,
+		Logger:  log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+
+	// Initial baseline on disk: 5 lines
+	baseline := "line1\nline2\nline3\nline4\nline5\n"
+	if err := sb.FS().WriteFile(ctx, "service.go", []byte(baseline), 0o644); err != nil {
+		t.Fatalf("WriteFile baseline: %v", err)
+	}
+
+	// Agent reads and edits line1 -> line1_agent
+	if _, err := stdTools.View(ctx, std.ViewRequest{Path: "service.go"}); err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	if _, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "service.go",
+		OldText: "line1",
+		NewText: "line1_agent",
+	}); err != nil {
+		t.Fatalf("Edit line1: %v", err)
+	}
+
+	// User externally edits line5 -> line5_user (non-overlapping with line1)
+	externalNonOverlapping := "line1_agent\nline2\nline3\nline4\nline5_user\n"
+	if err := sb.FS().WriteFile(ctx, "service.go", []byte(externalNonOverlapping), 0o644); err != nil {
+		t.Fatalf("WriteFile external non-overlapping: %v", err)
+	}
+
+	// RevertToBaseline with force=false should revert line1_agent -> line1 while preserving line5_user!
+	if err := jr.RevertToBaseline(ctx, sb.FS(), "service.go", false); err != nil {
+		t.Fatalf("RevertToBaseline (non-overlapping) error: %v", err)
+	}
+	mergedDisk, err := sb.FS().ReadFile(ctx, "service.go")
+	if err != nil {
+		t.Fatalf("ReadFile after RevertToBaseline: %v", err)
+	}
+	wantMerged := "line1\nline2\nline3\nline4\n5_user\n"
+	_ = wantMerged
+	wantMerged = "line1\nline2\nline3\nline4\nline5_user\n"
+	if string(mergedDisk) != wantMerged {
+		t.Errorf("merged file =\n%s\nwant:\n%s", string(mergedDisk), wantMerged)
+	}
+
+	// Now test overlapping conflict: Agent edits line2 -> line2_agent, then user externally edits line2_agent -> line2_user_conflict
+	if _, err := stdTools.View(ctx, std.ViewRequest{Path: "service.go"}); err != nil {
+		t.Fatalf("View 2: %v", err)
+	}
+	if _, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "service.go",
+		OldText: "line2",
+		NewText: "line2_agent",
+	}); err != nil {
+		t.Fatalf("Edit line2: %v", err)
+	}
+
+	overlappingExternal := "line1\nline2_user_conflict\nline3\nline4\nline5_user\n"
+	if err := sb.FS().WriteFile(ctx, "service.go", []byte(overlappingExternal), 0o644); err != nil {
+		t.Fatalf("WriteFile overlapping external: %v", err)
+	}
+
+	if err := jr.RevertToBaseline(ctx, sb.FS(), "service.go", false); !errors.Is(err, ErrRevertConflict) {
+		t.Errorf("RevertToBaseline overlapping error = %v, want %v", err, ErrRevertConflict)
+	}
+
+	// With force=true, RevertToBaseline restores exact original baseline
+	if err := jr.RevertToBaseline(ctx, sb.FS(), "service.go", true); err != nil {
+		t.Fatalf("RevertToBaseline(force=true) error: %v", err)
+	}
+	forcedDisk, err := sb.FS().ReadFile(ctx, "service.go")
+	if err != nil {
+		t.Fatalf("ReadFile after forced revert: %v", err)
+	}
+	if string(forcedDisk) != baseline {
+		t.Errorf("forced revert content = %q, want %q", string(forcedDisk), baseline)
+	}
+}
+
+func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Persistent Tracker"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	jr1 := sess.Journal
+
+	content := []byte("package main\n")
+	hash := sha256Hex(content)
+	if err := jr1.RecordChange(ctx, &std.FileChange{
+		FileChange: api.FileChange{
+			Path:      "main.go",
+			Source:    api.SourceAgent,
+			Tool:      "write",
+			Kind:      api.KindCreated,
+			AfterHash: hash,
+			Additions: 1,
+		},
+		AfterContent: content,
+	}); err != nil {
+		t.Fatalf("RecordChange: %v", err)
+	}
+
+	// Construct a second Manager over the same DB and Workspace (simulating process restart)
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	mgr2, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("New mgr2 error: %v", err)
+	}
+
+	sess2, err := mgr2.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Get 2 error: %v", err)
+	}
+	jr2 := sess2.Journal
+
+	gotHash, ok := jr2.LastHash("main.go")
+	if !ok || gotHash != hash {
+		t.Errorf("reloaded LastHash = (%q, %v), want (%q, true)", gotHash, ok, hash)
+	}
+	gotContent, ok := jr2.LastContent("main.go")
+	if !ok || string(gotContent) != string(content) {
+		t.Errorf("reloaded LastContent = (%q, %v), want (%q, true)", string(gotContent), ok, string(content))
+	}
+	if paths := jr2.TrackedPaths(); !reflect.DeepEqual(paths, []string{"main.go"}) {
+		t.Errorf("reloaded TrackedPaths = %v, want [\"main.go\"]", paths)
+	}
+
+	// Delete session and verify <WorkspaceDir>/sessions/<sess.ID> is removed from disk
+	sessDir := sess.Root
+	if _, err := os.Stat(sessDir); err != nil {
+		t.Fatalf("expected sessionDir %q to exist before Delete: %v", sessDir, err)
+	}
+
+	if err := mgr2.Delete(ctx, sess.ID); err != nil {
+		t.Fatalf("Delete error: %v", err)
+	}
+	if _, err := os.Stat(sessDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected sessionDir %q to be removed on Delete, stat err = %v", sessDir, err)
+	}
+}
+
+func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
+	ctx := context.Background()
+
+	var step int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			step++
+			if step == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.TextBlock{Text: "Let me view that file."},
+							&message.ToolCall{
+								ID:   "tc-view-1",
+								Name: "view",
+								Args: map[string]any{
+									"path": "hello.txt",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			// Step 2: verify the tool result message is present in req.Messages
+			var foundToolOutput bool
+			for _, m := range req.Messages {
+				if tm, ok := m.(*message.Tool); ok {
+					if viewOut, ok := tm.StructuredContent.(api.ViewOutput); ok && strings.Contains(viewOut.Content, "Hello from disk!") {
+						foundToolOutput = true
+						break
+					}
+					if strings.Contains(msgText(m), "Hello from disk!") {
+						foundToolOutput = true
+						break
+					}
+				}
+			}
+			if !foundToolOutput {
+				return nil, errors.New("expected tool output containing 'Hello from disk!' in second LLM turn")
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "The file says: Hello from disk!"},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	_, ws, _, pub, mgr := setupTestEnv(t, prov)
+
+	fileBytes := []byte("Hello from disk!\n")
+	if err := os.WriteFile(filepath.Join(ws.RootDir(), "hello.txt"), fileBytes, 0o644); err != nil {
+		t.Fatalf("WriteFile hello.txt: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Multi-step Tool Session"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	pub.reset()
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "Read hello.txt please"}); err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+
+	// Verify History in SQLite messages table contains:
+	// [User, Assistant(ToolCall), Tool(Result), Assistant(Final)] in exact id ASC order!
+	history, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("expected 4 messages in History, got %d: %+v", len(history), history)
+	}
+
+	reply, ok := history[len(history)-1].(*message.Assistant)
+	if !ok || reply == nil {
+		t.Fatal("expected non-nil final assistant reply")
+	}
+	if got := msgText(reply); got != "The file says: Hello from disk!" {
+		t.Errorf("reply text = %q, want %q", got, "The file says: Hello from disk!")
+	}
+	if len(history) != 4 {
+		t.Fatalf("expected 4 messages in History, got %d: %+v", len(history), history)
+	}
+
+	wantRoles := []message.Role{
+		message.RoleUser,
+		message.RoleAssistant,
+		message.RoleTool,
+		message.RoleAssistant,
+	}
+	for i, wantRole := range wantRoles {
+		if history[i].Role() != wantRole {
+			t.Errorf("history[%d].Role() = %q, want %q", i, history[i].Role(), wantRole)
+		}
+		if i > 0 && (history[i-1].GetID() >= history[i].GetID()) {
+			t.Errorf("expected chronological UUIDv7 ordering history[%d].ID (%q) < history[%d].ID (%q)",
+				i-1, history[i-1].GetID(), i, history[i].GetID())
+		}
+	}
+
+	asstToolMsg, ok := history[1].(*message.Assistant)
+	if !ok || len(asstToolMsg.ToolCalls()) != 1 || asstToolMsg.ToolCalls()[0].Name != "view" {
+		t.Errorf("history[1] = %+v, want Assistant with 'view' tool call", history[1])
+	}
+	toolHistMsg, ok := history[2].(*message.Tool)
+	if !ok {
+		t.Fatalf("history[2] is %T, want *message.Tool", history[2])
+	}
+	var viewOut api.ViewOutput
+	if vo, ok := toolHistMsg.StructuredContent.(api.ViewOutput); ok {
+		viewOut = vo
+	} else if raw, err := json.Marshal(toolHistMsg.StructuredContent); err == nil {
+		_ = json.Unmarshal(raw, &viewOut)
+	}
+	if !strings.Contains(viewOut.Content, "Hello from disk!") && !strings.Contains(msgText(history[2]), "Hello from disk!") {
+		t.Errorf("history[2] tool result = %q (structured: %+v), want to contain 'Hello from disk!'", msgText(history[2]), toolHistMsg.StructuredContent)
+	}
+	if msgText(history[3]) != "The file says: Hello from disk!" {
+		t.Errorf("history[3] final text = %q, want 'The file says: Hello from disk!'", msgText(history[3]))
+	}
+
+	// Verify Journal(ctx, sess.ID) recorded the file read!
+	jr := sess.Journal
+	gotHash, ok := jr.LastHash("hello.txt")
+	if !ok || gotHash != sha256Hex(fileBytes) {
+		t.Errorf("Journal.LastHash(\"hello.txt\") = (%q, %v), want (%q, true)", gotHash, ok, sha256Hex(fileBytes))
+	}
+}
+
+func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) {
+	ctx := context.Background()
+
+	var step int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			step++
+			if step == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.TextBlock{Text: "I will write both files."},
+							&message.ToolCall{
+								ID:   "tc-write-1",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "file1.txt",
+									"content": "content one\n",
+								},
+							},
+							&message.ToolCall{
+								ID:   "tc-write-2",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "file2.txt",
+									"content": "content two\n",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Wrote file1.txt and skipped file2.txt as requested."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	_, ws, _, pub, mgr := setupTestEnv(t, prov)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "All-Or-Nothing Permissions"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	pub.reset()
+
+	// 1. Send triggers 2 write tool calls -> interrupts with 2 permissions
+	err = sess.Send(ctx, api.SendRequest{Content: "Write file1.txt and file2.txt"})
+	if err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+	if sess.Status != api.StatusWaitingPermission {
+		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
+	}
+
+	// Verify PermissionRequestedEvent was published with 2 permissions
+	events := pub.recorded()
+	var permEvent *api.PermissionRequestedEvent
+	for i := range events {
+		if pe, ok := events[i].(api.PermissionRequestedEvent); ok {
+			permEvent = &pe
+		}
+	}
+	if permEvent == nil || len(permEvent.Permissions) != 2 {
+		t.Fatalf("expected PermissionRequestedEvent with 2 permissions, got %+v", permEvent)
+	}
+
+	// Verify PendingPermissions returns 2 items
+	liveSess, err := mgr.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	pending := liveSess.PendingPermissions
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 pending permissions, got %d", len(pending))
+	}
+
+	// Validation error checks on RespondPermission
+	if err := sess.Send(ctx, api.SendRequest{
+		Decision: &api.PermissionDecision{
+			RequestID: pending[0].ID,
+			Kind:      "invalid_kind",
+		},
+	}); !errors.Is(err, ErrInvalidDecision) {
+		t.Errorf("RespondPermission invalid kind error = %v, want %v", err, ErrInvalidDecision)
+	}
+	if err := sess.Send(ctx, api.SendRequest{
+		Decision: &api.PermissionDecision{
+			RequestID: "non-existent-req-id",
+			Kind:      api.DecisionAllowOnce,
+		},
+	}); !errors.Is(err, ErrPermissionNotFound) {
+		t.Errorf("RespondPermission unknown request ID error = %v, want %v", err, ErrPermissionNotFound)
+	}
+
+	pub.reset()
+
+	// 2. Respond to permission #1 ONLY -> must buffer decision and return WITHOUT calling the graph!
+	err = sess.Send(ctx, api.SendRequest{
+		Decision: &api.PermissionDecision{
+			RequestID: pending[0].ID,
+			Kind:      api.DecisionAllowOnce,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RespondPermission #1 error: %v", err)
+	}
+	if len(prov.recordedTurns()) != 1 {
+		t.Fatalf("expected graph NOT to be called until all permissions resolved, got %d LLM turns", len(prov.recordedTurns()))
+	}
+	recs := pub.recorded()
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 event, got %+v", recs)
+	}
+	decEv, ok := recs[0].(api.EntryAddedEvent)
+	if !ok || decEv.Entry.Kind != api.TimelineKindPermission {
+		t.Fatalf("expected 1 EntryAddedEvent (permission) published when recording decision, got %+v", recs)
+	}
+	pub.reset()
+	if _, err := os.Stat(filepath.Join(ws.RootDir(), "file1.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected file1.txt NOT to be written before all permissions are resolved, stat err = %v", err)
+	}
+
+	// Verify PendingPermissions now returns ONLY permission #2!
+	liveSess, err = mgr.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	remaining := liveSess.PendingPermissions
+	if len(remaining) != 1 || remaining[0].ID != pending[1].ID {
+		t.Fatalf("PendingPermissions after #1 = %+v, want only [%s]", remaining, pending[1].ID)
+	}
+
+	// 3. Respond to permission #2 (rejecting it with feedback) -> triggers h.Resume!
+	err = sess.Send(ctx, api.SendRequest{
+		Decision: &api.PermissionDecision{
+			RequestID: pending[1].ID,
+			Kind:      api.DecisionReject,
+			Feedback:  "Do not create file2.txt",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RespondPermission #2 error: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+
+	history, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	finalReply, ok := history[len(history)-1].(*message.Assistant)
+	if !ok || finalReply == nil {
+		t.Fatal("expected non-nil final assistant reply after resolving all permissions")
+	}
+	if got := msgText(finalReply); got != "Wrote file1.txt and skipped file2.txt as requested." {
+		t.Errorf("finalReply = %q, want %q", got, "Wrote file1.txt and skipped file2.txt as requested.")
+	}
+
+	// Verify file1.txt was written and tracked in session's FileTracker journal!
+	disk1, err := os.ReadFile(filepath.Join(ws.RootDir(), "file1.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile file1.txt: %v", err)
+	}
+	if string(disk1) != "content one\n" {
+		t.Errorf("file1.txt content = %q, want \"content one\\n\"", string(disk1))
+	}
+	if _, err := os.Stat(filepath.Join(ws.RootDir(), "file2.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected rejected file2.txt not to exist on disk, stat err = %v", err)
+	}
+
+	jr := sess.Journal
+	entries, err := jr.ChangesForPath(ctx, "file1.txt")
+	if err != nil {
+		t.Fatalf("ChangesForPath(\"file1.txt\") error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Kind != api.KindCreated || entries[0].Tool != "write" {
+		t.Errorf("unexpected journal entries for file1.txt: %+v", entries)
+	}
+
+	// Verify PendingPermissions is now empty and RespondPermission returns ErrPermissionNotFound
+	liveSess, err = mgr.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	afterPerms := liveSess.PendingPermissions
+	if len(afterPerms) != 0 {
+		t.Errorf("expected 0 pending permissions after completion, got %d", len(afterPerms))
+	}
+	if err := sess.Send(ctx, api.SendRequest{
+		Decision: &api.PermissionDecision{
+			RequestID: pending[0].ID,
+			Kind:      api.DecisionAllowOnce,
+		},
+	}); !errors.Is(err, ErrPermissionNotFound) {
+		t.Errorf("RespondPermission with no pending permissions error = %v, want %v", err, ErrPermissionNotFound)
+	}
+
+	// Verify History contains [User, Assistant(ToolCalls), Tool1, Tool2, Assistant(Final)] in exact id ASC order
+	if len(history) != 5 {
+		t.Fatalf("expected 5 messages in History, got %d: %+v", len(history), history)
+	}
+	wantRoles := []message.Role{
+		message.RoleUser,
+		message.RoleAssistant,
+		message.RoleTool,
+		message.RoleTool,
+		message.RoleAssistant,
+	}
+	for i, wantRole := range wantRoles {
+		if history[i].Role() != wantRole {
+			t.Errorf("history[%d].Role() = %q, want %q", i, history[i].Role(), wantRole)
+		}
+		if i > 0 && (history[i-1].GetID() >= history[i].GetID()) {
+			t.Errorf("expected chronological UUIDv7 ordering history[%d].ID (%q) < history[%d].ID (%q)",
+				i-1, history[i-1].GetID(), i, history[i].GetID())
+		}
+	}
+	if !strings.Contains(msgText(history[3]), "Do not create file2.txt") {
+		t.Errorf("history[3] rejected tool message = %q, want to contain rejection feedback", msgText(history[3]))
+	}
+}
+
+func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
+	ctx := context.Background()
+
+	var step int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			step++
+			if step == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.TextBlock{Text: "Preparing writes."},
+							&message.ToolCall{
+								ID:   "tc-cancel-1",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "cancel1.txt",
+									"content": "nope 1\n",
+								},
+							},
+							&message.ToolCall{
+								ID:   "tc-cancel-2",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "cancel2.txt",
+									"content": "nope 2\n",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Understood, canceled those writes and moving on."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Cancel Pending Permissions"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// 1. First Send pauses awaiting 2 permissions
+	err = sess.Send(ctx, api.SendRequest{Content: "Write cancel1.txt and cancel2.txt"})
+	if err != nil {
+		t.Fatalf("Send 1 error: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait 1 error: %v", err)
+	}
+	if sess.Status != api.StatusWaitingPermission {
+		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
+	}
+
+	liveSess, err := mgr.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	pending := liveSess.PendingPermissions
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 pending permissions, got %d", len(pending))
+	}
+
+	// Buffer a partial decision for permission #1
+	if err := sess.Send(ctx, api.SendRequest{
+		Decision: &api.PermissionDecision{
+			RequestID: pending[0].ID,
+			Kind:      api.DecisionAllowOnce,
+		},
+	}); err != nil {
+		t.Fatalf("RespondPermission partial error: %v", err)
+	}
+
+	// 2. Call Send with a new user message while permissions are pending!
+	err = sess.Send(ctx, api.SendRequest{Content: "Actually, cancel that and do something else"})
+	if err != nil {
+		t.Fatalf("Send 2 error: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait 2 error: %v", err)
+	}
+
+	// Verify neither file was written
+	for _, name := range []string{"cancel1.txt", "cancel2.txt"} {
+		if _, err := os.Stat(filepath.Join(ws.RootDir(), name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("expected %s not to be written after cancellation, stat err = %v", name, err)
+		}
+	}
+
+	// Verify History (ORDER BY id ASC) returns:
+	// [User1, Assistant1(ToolCalls), Tool1(Canceled), Tool2(Canceled), User2, Assistant2]
+	// in exact chronological order!
+	history, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 6 {
+		t.Fatalf("expected 6 messages in History, got %d: %+v", len(history), history)
+	}
+	reply2, ok := history[len(history)-1].(*message.Assistant)
+	if !ok || reply2 == nil || msgText(reply2) != "Understood, canceled those writes and moving on." {
+		t.Fatalf("unexpected reply2: %+v", reply2)
+	}
+
+	wantRoles := []message.Role{
+		message.RoleUser,
+		message.RoleAssistant,
+		message.RoleTool,
+		message.RoleTool,
+		message.RoleUser,
+		message.RoleAssistant,
+	}
+	for i, wantRole := range wantRoles {
+		if history[i].Role() != wantRole {
+			t.Errorf("history[%d].Role() = %q, want %q", i, history[i].Role(), wantRole)
+		}
+		if i > 0 && (history[i-1].GetID() >= history[i].GetID()) {
+			t.Errorf("expected chronological UUIDv7 ordering history[%d].ID (%q) < history[%d].ID (%q)",
+				i-1, history[i-1].GetID(), i, history[i].GetID())
+		}
+	}
+
+	if msgText(history[0]) != "Write cancel1.txt and cancel2.txt" {
+		t.Errorf("history[0] = %q", msgText(history[0]))
+	}
+	if !strings.Contains(strings.ToLower(msgText(history[2])), "cancel") {
+		t.Errorf("history[2] = %q, want canceled tool result", msgText(history[2]))
+	}
+	if !strings.Contains(strings.ToLower(msgText(history[3])), "cancel") {
+		t.Errorf("history[3] = %q, want canceled tool result", msgText(history[3]))
+	}
+	if msgText(history[4]) != "Actually, cancel that and do something else" {
+		t.Errorf("history[4] = %q", msgText(history[4]))
+	}
+	if msgText(history[5]) != "Understood, canceled those writes and moving on." {
+		t.Errorf("history[5] = %q", msgText(history[5]))
+	}
+}
+
+func TestPermissionModeGetAndSet(t *testing.T) {
+	ctx := context.Background()
+	_, _, _, _, mgr := setupTestEnv(t, nil)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Permission Modes"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	if sess.Config.Mode != api.ModeDefault {
+		t.Errorf("initial PermissionMode = %q, want %q", sess.Config.Mode, api.ModeDefault)
+	}
+
+	for _, nextMode := range []api.PermissionMode{
+		api.ModeAcceptEdits,
+		api.ModePlan,
+		api.ModeAsk,
+		api.ModeAuto,
+		api.ModeDefault,
+	} {
+		updated, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: nextMode}})
+		if err != nil {
+			t.Fatalf("Update(%q) error: %v", nextMode, err)
+		}
+		if updated.Config.Mode != nextMode {
+			t.Errorf("PermissionMode = %q, want %q", updated.Config.Mode, nextMode)
+		}
+		got, err := mgr.Get(ctx, sess.ID)
+		if err != nil {
+			t.Fatalf("Get after Update(%q) error: %v", nextMode, err)
+		}
+		if got.Config.Mode != nextMode {
+			t.Errorf("Get PermissionMode = %q, want %q", got.Config.Mode, nextMode)
+		}
+	}
+
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: "invalid_mode"}}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Update invalid mode error = %v, want %v", err, ErrInvalidConfig)
+	}
+}
+
+func TestTimelineRecordEvents(t *testing.T) {
+	ctx := context.Background()
+
+	var turnCount int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			turnCount++
+			if turnCount == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.TextBlock{Text: "I will write the test file."},
+							&message.ToolCall{
+								ID:   "tc-timeline-write",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "timeline_test.txt",
+									"content": "sample content\n",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Write completed."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	db, _, _, pub, mgr := setupTestEnv(t, prov)
+
+	// 1. Create session and verify empty initial timeline
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Timeline Lifecycle",
+		Config: api.SessionConfig{
+			Agent: "code-reviewer",
+			Model: "sonnet",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	initialTimeline, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline initial: %v", err)
+	}
+	if len(initialTimeline) != 0 {
+		t.Fatalf("expected empty initial timeline, got %d entries", len(initialTimeline))
+	}
+
+	// 2. Append a user message and verify KindMessage entry
+	userMsg := message.NewUserText("Please review this code")
+	if err := testAppendMessage(ctx, sess, userMsg); err != nil {
+		t.Fatalf("AppendMessage error: %v", err)
+	}
+
+	tl1, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline after message: %v", err)
+	}
+	if len(tl1) != 1 {
+		t.Fatalf("expected 1 timeline entry, got %d", len(tl1))
+	}
+	if tl1[0].Kind != api.TimelineKindMessage {
+		t.Errorf("tl1[0].Kind = %q, want %q", tl1[0].Kind, api.TimelineKindMessage)
+	}
+	if tl1[0].Message == nil || msgText(tl1[0].Message) != "Please review this code" {
+		t.Errorf("tl1[0].Message text = %v, want %q", tl1[0].Message, "Please review this code")
+	}
+
+	// 3. Update Model and verify KindModel entry
+	oldModel := sess.Config.Model
+	newModelRaw := "claude-3-5-sonnet"
+	updatedSess, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Model: newModelRaw}})
+	if err != nil {
+		t.Fatalf("Update model error: %v", err)
+	}
+	if updatedSess.Config.Model == oldModel {
+		t.Fatalf("expected model to change from %q", oldModel)
+	}
+
+	tl2, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline after model update: %v", err)
+	}
+	if len(tl2) != 2 {
+		t.Fatalf("expected 2 timeline entries, got %d", len(tl2))
+	}
+	if tl2[1].Kind != api.TimelineKindModel {
+		t.Errorf("tl2[1].Kind = %q, want %q", tl2[1].Kind, api.TimelineKindModel)
+	}
+	if tl2[1].Model == nil || tl2[1].Model.From != oldModel || tl2[1].Model.To != updatedSess.Config.Model {
+		t.Errorf("tl2[1].Model = %+v, want From=%q To=%q", tl2[1].Model, oldModel, updatedSess.Config.Model)
+	}
+
+	// 4. Update Agent and verify KindAgent entry
+	oldAgent := updatedSess.Config.Agent
+	newAgent := "general-assistant"
+	_, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Agent: newAgent}})
+	if err != nil {
+		t.Fatalf("Update agent error: %v", err)
+	}
+
+	tl3, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline after agent update: %v", err)
+	}
+	if len(tl3) != 3 {
+		t.Fatalf("expected 3 timeline entries, got %d", len(tl3))
+	}
+	if tl3[2].Kind != api.TimelineKindAgent {
+		t.Errorf("tl3[2].Kind = %q, want %q", tl3[2].Kind, api.TimelineKindAgent)
+	}
+	if tl3[2].Agent == nil || tl3[2].Agent.From != oldAgent || tl3[2].Agent.To != newAgent {
+		t.Errorf("tl3[2].Agent = %+v, want From=%q To=%q", tl3[2].Agent, oldAgent, newAgent)
+	}
+
+	// 5. Change permission mode and verify KindMode entry
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: api.ModePlan}}); err != nil {
+		t.Fatalf("Update(ModePlan) error: %v", err)
+	}
+
+	tl4, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline after mode change: %v", err)
+	}
+	if len(tl4) != 4 {
+		t.Fatalf("expected 4 timeline entries, got %d", len(tl4))
+	}
+	if tl4[3].Kind != api.TimelineKindMode {
+		t.Errorf("tl4[3].Kind = %q, want %q", tl4[3].Kind, api.TimelineKindMode)
+	}
+	if tl4[3].Mode == nil || tl4[3].Mode.From != api.ModeDefault || tl4[3].Mode.To != api.ModePlan {
+		t.Errorf("tl4[3].Mode = %+v, want From=%q To=%q", tl4[3].Mode, api.ModeDefault, api.ModePlan)
+	}
+
+	// Setting the same mode again should NOT append an entry
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: api.ModePlan}}); err != nil {
+		t.Fatalf("Update duplicate error: %v", err)
+	}
+	tl4Dup, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline after duplicate mode: %v", err)
+	}
+	if len(tl4Dup) != 4 {
+		t.Fatalf("expected no new entry for duplicate mode, got %d", len(tl4Dup))
+	}
+
+	// Reset mode to default so the tool call requires approval
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: api.ModeDefault}}); err != nil {
+		t.Fatalf("Update(ModeDefault) error: %v", err)
+	}
+	tl5, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline after mode reset: %v", err)
+	}
+	if len(tl5) != 5 {
+		t.Fatalf("expected 5 timeline entries, got %d", len(tl5))
+	}
+	if tl5[4].Kind != api.TimelineKindMode || tl5[4].Mode.From != api.ModePlan || tl5[4].Mode.To != api.ModeDefault {
+		t.Errorf("tl5[4].Mode = %+v, want From=%q To=%q", tl5[4].Mode, api.ModePlan, api.ModeDefault)
+	}
+
+	// 6. Send tool-calling turn to trigger permission interrupt
+	if err := sess.Send(ctx, api.SendRequest{Content: "Write a file"}); err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+	if sess.Status != api.StatusWaitingPermission {
+		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
+	}
+
+	liveSess, err := mgr.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	pending := liveSess.PendingPermissions
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending permission, got %d", len(pending))
+	}
+
+	// Record decision and verify KindPermission entry
+	dec := api.PermissionDecision{
+		RequestID: pending[0].ID,
+		Kind:      api.DecisionAllowOnce,
+	}
+	ready, err := sess.recordDecision(ctx, dec)
+	if err != nil {
+		t.Fatalf("RecordDecision error: %v", err)
+	}
+	if !ready {
+		t.Errorf("expected ready = true after resolving only pending permission")
+	}
+
+	tl6, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline after permission decision: %v", err)
+	}
+
+	// Entries in tl6 should be:
+	// [0] KindMessage (user append)
+	// [1] KindModel
+	// [2] KindAgent
+	// [3] KindMode (default -> plan)
+	// [4] KindMode (plan -> default)
+	// [5] KindMessage (Send user message)
+	// [6] KindMessage (assistant tool-call turn)
+	// [7] KindPermission (recorded decision)
+	if len(tl6) != 8 {
+		t.Fatalf("expected 8 timeline entries, got %d: %+v", len(tl6), tl6)
+	}
+
+	permEntry := tl6[7]
+	if permEntry.Kind != api.TimelineKindPermission {
+		t.Fatalf("tl6[7].Kind = %q, want %q", permEntry.Kind, api.TimelineKindPermission)
+	}
+	if permEntry.Permission == nil {
+		t.Fatalf("expected non-nil Permission payload in entry")
+	}
+	if permEntry.Permission.Request.ID != pending[0].ID {
+		t.Errorf("Permission.Request.ID = %q, want %q", permEntry.Permission.Request.ID, pending[0].ID)
+	}
+	if permEntry.Permission.Decision.Kind != api.DecisionAllowOnce {
+		t.Errorf("Permission.Decision.Kind = %q, want %q", permEntry.Permission.Decision.Kind, api.DecisionAllowOnce)
+	}
+
+	// 8. Verify strict UUIDv7 ascending chronological ordering
+	for i := 0; i < len(tl6)-1; i++ {
+		if tl6[i].ID >= tl6[i+1].ID {
+			t.Errorf("expected strictly ascending entry IDs: tl6[%d].ID=%q >= tl6[%d].ID=%q",
+				i, tl6[i].ID, i+1, tl6[i+1].ID)
+		}
+	}
+
+	// 9. Verify History returns only KindMessage entries
+	history, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("expected 3 messages in History (user append, send user, send assistant), got %d: %+v", len(history), history)
+	}
+
+	// Verify EntryAddedEvent published events for all appended entries
+	var publishedKinds []api.TimelineKind
+	for _, ev := range pub.recorded() {
+		if eae, ok := ev.(api.EntryAddedEvent); ok {
+			publishedKinds = append(publishedKinds, eae.Entry.Kind)
+		}
+	}
+	for _, expectedKind := range []api.TimelineKind{api.TimelineKindMessage, api.TimelineKindModel, api.TimelineKindAgent, api.TimelineKindMode, api.TimelineKindPermission} {
+		if !slices.Contains(publishedKinds, expectedKind) {
+			t.Errorf("expected EventEntryAdded with kind %q in published events: %v", expectedKind, publishedKinds)
+		}
+	}
+
+	// 10. Delete session and verify timeline entries are removed
+	if err := mgr.Delete(ctx, sess.ID); err != nil {
+		t.Fatalf("Delete session: %v", err)
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM timeline WHERE session_id = ?`, sess.ID).Scan(&count); err != nil {
+		t.Fatalf("count timeline entries after delete: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 timeline entries for deleted session, got %d", count)
+	}
+}
+
+func TestTargetedSessionFixes(t *testing.T) {
+	ctx := context.Background()
+
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.ToolCall{
+							ID:   "call-write-1",
+							Name: "write",
+							Args: map[string]any{
+								"path":    "demo.txt",
+								"content": "hello",
+							},
+						},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+
+	// 1. Verify sessionDir uses xdg.WorkspaceDir and does NOT create a sessions/ dir in ws.RootDir()
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Test Fixes",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	wsDataDir, err := xdg.WorkspaceDir(ws.RootDir())
+	if err != nil {
+		t.Fatalf("xdg.WorkspaceDir: %v", err)
+	}
+	expectedRoot := filepath.Join(wsDataDir, "sessions", sess.ID)
+	if sess.Root != expectedRoot {
+		t.Errorf("sess.Root = %q, want %q", sess.Root, expectedRoot)
+	}
+	workspaceSessionsDir := filepath.Join(ws.RootDir(), "sessions")
+	if _, err := os.Stat(workspaceSessionsDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected no sessions/ dir in workspace root, got stat err: %v", err)
+	}
+
+	// 3. Trigger permission interrupt and verify loadOrCacheSession restores StatusWaitingPermission
+	if err := sess.Send(ctx, api.SendRequest{Content: "write demo.txt"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if sess.Status != api.StatusWaitingPermission {
+		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
+	}
+
+	// Load session via a new manager (simulating fresh loadOrCacheSession)
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	mgr2, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("New mgr2: %v", err)
+	}
+
+	sess2, err := mgr2.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("mgr2.Get: %v", err)
+	}
+	if sess2.Status != api.StatusWaitingPermission {
+		t.Errorf("sess2.Status = %v, want StatusWaitingPermission", sess2.Status)
+	}
+	if len(sess2.PendingPermissions) == 0 {
+		t.Errorf("sess2.PendingPermissions is empty, want > 0")
+	}
+
+	// 4. Verify Sandbox initialized with ID
+	if sess.Sandbox == nil {
+		t.Fatalf("sess.Sandbox is nil")
+	}
+	if sess.Sandbox.ID() != sess.ID {
+		t.Errorf("Sandbox.ID() = %q, want %q", sess.Sandbox.ID(), sess.ID)
+	}
+	if sess.Sandbox.Platform().WorkDir != ws.RootDir() {
+		t.Errorf("Sandbox.WorkDir = %q, want %q", sess.Sandbox.Platform().WorkDir, ws.RootDir())
+	}
+}
+
+func TestSessionPermissionsPersistence(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, &fakeProvider{})
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Perm Test Session",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	if len(sess.Permissions.Allow) != 0 || len(sess.Permissions.Deny) != 0 {
+		t.Fatalf("expected empty permissions initially, got %+v", sess.Permissions)
+	}
+
+	if sess.PermManager == nil {
+		t.Fatalf("expected non-nil PermManager")
+	}
+
+	if err := sess.PermManager.AddAllow("write(internal/**)"); err != nil {
+		t.Fatalf("PermManager.AddAllow: %v", err)
+	}
+
+	sess.Lock()
+	hasAllow := slices.Contains(sess.Permissions.Allow, "write(internal/**)")
+	sess.Unlock()
+	if !hasAllow {
+		t.Fatalf("expected sess.Permissions to reflect added allow rule")
+	}
+
+	// Verify directly in SQLite store
+	st, err := NewStore(ctx, db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	dbSess, err := st.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("st.Get: %v", err)
+	}
+	if !slices.Contains(dbSess.Permissions.Allow, "write(internal/**)") {
+		t.Fatalf("expected persisted permissions in store to contain allow rule, got %+v", dbSess.Permissions)
+	}
+
+	// Load via a fresh manager instance
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	mgr2, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("New mgr2: %v", err)
+	}
+
+	sess2, err := mgr2.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("mgr2.Get: %v", err)
+	}
+	if !slices.Contains(sess2.Permissions.Allow, "write(internal/**)") {
+		t.Fatalf("expected sess2 to restore permissions, got %+v", sess2.Permissions)
+	}
+
+	// Update permissions directly via store helper
+	newPerms := api.Permissions{
+		Allow: []string{"write(internal/**)"},
+		Deny:  []string{"bash(*)"},
+	}
+	dbSess.Permissions = newPerms
+	if err := st.Save(ctx, dbSess); err != nil {
+		t.Fatalf("st.Save: %v", err)
+	}
+	dbSess2, err := st.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("st.Get after update: %v", err)
+	}
+	if !slices.Contains(dbSess2.Permissions.Deny, "bash(*)") {
+		t.Fatalf("expected updated deny rule in store, got %+v", dbSess2.Permissions)
+	}
+}
+
+func TestSessionAutoGenerateTitle(t *testing.T) {
+	ctx := t.Context()
+
+	var mu sync.Mutex
+	prov := &fakeProvider{
+		chunkHandler: func(ctx context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			isTitleGen := false
+			for _, m := range req.Messages {
+				if m.Role() == message.RoleSystem {
+					for _, b := range m.GetContent() {
+						if tb, ok := b.(*message.TextBlock); ok && strings.Contains(tb.Text, "short title") {
+							isTitleGen = true
+						}
+					}
+				}
+			}
+			if isTitleGen {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Content: []message.Block{
+							&message.TextBlock{Text: "\"Database Refactoring\"\nExtra explanation to ignore"},
+						},
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Content: []message.Block{
+						&message.TextBlock{Text: "I will help refactor the database."},
+					},
+				},
+			}, nil
+		},
+	}
+	db, _, _, pub, mgr := setupTestEnv(t, prov)
+
+	// 1. Create a session with Title: ""
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+	if sess.Title != "" {
+		t.Fatalf("expected initial title to be empty, got %q", sess.Title)
+	}
+
+	// 2. Send first user message
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Help me refactor the database layer",
+	})
+	if err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// Wait for background title generator to complete
+	deadline := time.Now().Add(3 * time.Second)
+	var foundUpdatedEvent bool
+	for time.Now().Before(deadline) {
+		sess.Lock()
+		curTitle := sess.Title
+		sess.Unlock()
+		if curTitle != "" {
+			for _, r := range pub.recordedRecords() {
+				if r.topic == api.TopicSessions {
+					if uev, ok := r.event.(api.SessionUpdatedEvent); ok && uev.Session.ID == sess.ID && uev.Session.Title == "Database Refactoring" {
+						foundUpdatedEvent = true
+						break
+					}
+				}
+			}
+			if foundUpdatedEvent {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 3. Verify sess.Title updated in memory and sanitized
+	sess.Lock()
+	titleInMemory := sess.Title
+	sess.Unlock()
+	if titleInMemory != "Database Refactoring" {
+		t.Fatalf("expected in-memory title %q, got %q", "Database Refactoring", titleInMemory)
+	}
+
+	// Verify title in SQLite DB
+	var dbTitle string
+	err = db.QueryRowContext(ctx, "SELECT title FROM sessions WHERE id = ?", sess.ID).Scan(&dbTitle)
+	if err != nil {
+		t.Fatalf("failed to query session title from DB: %v", err)
+	}
+	if dbTitle != "Database Refactoring" {
+		t.Fatalf("expected DB title %q, got %q", "Database Refactoring", dbTitle)
+	}
+
+	// Verify UpdatedEvent was published on api.TopicSessions
+	if !foundUpdatedEvent {
+		t.Fatal("expected UpdatedEvent with generated title on TopicSessions")
+	}
+
+	// 4. Verify subsequent Send does not overwrite title
+	pub.reset()
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Another follow-up prompt",
+	})
+	if err != nil {
+		t.Fatalf("sess.Send follow-up: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait follow-up: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	sess.Lock()
+	titleAfterFollowUp := sess.Title
+	sess.Unlock()
+	if titleAfterFollowUp != "Database Refactoring" {
+		t.Fatalf("expected title to remain %q, got %q", "Database Refactoring", titleAfterFollowUp)
+	}
+
+	// Verify manual update or explicit initial title is not overwritten
+	sessManual, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Manual Title"})
+	if err != nil {
+		t.Fatalf("mgr.Create sessManual: %v", err)
+	}
+	err = sessManual.Send(ctx, api.SendRequest{
+		Content: "First prompt in manual session",
+	})
+	if err != nil {
+		t.Fatalf("sessManual.Send: %v", err)
+	}
+	if err := sessManual.Wait(ctx); err != nil {
+		t.Fatalf("sessManual.Wait: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	sessManual.Lock()
+	manualTitle := sessManual.Title
+	sessManual.Unlock()
+	if manualTitle != "Manual Title" {
+		t.Fatalf("expected manual title to remain %q, got %q", "Manual Title", manualTitle)
+	}
+}
+
+// TestSessionTitleRetriesAfterFailure verifies that a failed title-generation
+// attempt does not permanently leave the session untitled: because the in-flight
+// latch is released when a generation produces no title, a later user message
+// retries the generation and succeeds.
+func TestSessionTitleRetriesAfterFailure(t *testing.T) {
+	ctx := t.Context()
+
+	var mu sync.Mutex
+	var titleGenAttempts int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			mu.Lock()
+			isTitleGen := false
+			for _, m := range req.Messages {
+				if m.Role() == message.RoleSystem {
+					for _, b := range m.GetContent() {
+						if tb, ok := b.(*message.TextBlock); ok && strings.Contains(tb.Text, "short title") {
+							isTitleGen = true
+						}
+					}
+				}
+			}
+			if isTitleGen {
+				titleGenAttempts++
+				attempt := titleGenAttempts
+				mu.Unlock()
+				// Simulate a transient failure (e.g. a slow local model timing
+				// out) on the first attempt, then succeed on the retry.
+				if attempt == 1 {
+					return nil, errors.New("simulated title generation failure")
+				}
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Content:   []message.Block{&message.TextBlock{Text: "\"Database Refactoring\""}},
+						Done:      true,
+					},
+				}, nil
+			}
+			mu.Unlock()
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Content:   []message.Block{&message.TextBlock{Text: "I will help refactor the database."}},
+					Done:      true,
+				},
+			}, nil
+		},
+	}
+	db, _, _, _, mgr := setupTestEnv(t, prov)
+	_ = db
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+	if sess.Title != "" {
+		t.Fatalf("expected initial title to be empty, got %q", sess.Title)
+	}
+
+	// 1. First message: the title generator fails on its first attempt.
+	if err := sess.Send(ctx, api.SendRequest{Content: "Help me refactor the database layer"}); err != nil {
+		t.Fatalf("sess.Send (1): %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait (1): %v", err)
+	}
+
+	// Wait for the first (failed) attempt to fully settle, including the latch
+	// release, so the next message is guaranteed to retry.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		ran := titleGenAttempts >= 1
+		mu.Unlock()
+		sess.Lock()
+		untitled := sess.Title == ""
+		latchReleased := !sess.titleGenerating
+		sess.Unlock()
+		if ran && untitled && latchReleased {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	sess.Lock()
+	gotTitle := sess.Title
+	sess.Unlock()
+	if gotTitle != "" {
+		t.Fatalf("expected empty title after failed generation, got %q", gotTitle)
+	}
+
+	// 2. Second message: because the latch was released, title generation retries
+	// and succeeds.
+	if err := sess.Send(ctx, api.SendRequest{Content: "Continue"}); err != nil {
+		t.Fatalf("sess.Send (2): %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait (2): %v", err)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		sess.Lock()
+		cur := sess.Title
+		sess.Unlock()
+		if cur != "" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	sess.Lock()
+	gotTitle = sess.Title
+	sess.Unlock()
+	if gotTitle != "Database Refactoring" {
+		mu.Lock()
+		attempts := titleGenAttempts
+		mu.Unlock()
+		t.Fatalf("expected title to be generated on retry, got %q (attempts=%d)", gotTitle, attempts)
+	}
+}
+
+// TestTemperatureSupported verifies that title generation only forwards the
+// configured temperature when the resolved model's profile advertises support for
+// it, omitting it otherwise.
+func temperatureSupported(g gateway.Gateway, provider, model string) bool {
+	value := float32(0.1)
+	base, ok := g.GetProfile(provider + "/" + model)
+	var prof *profile.Profile
+	if ok {
+		prof = &base
+	}
+	effective := models.Merge(models.ID(provider+"/"+model), "", nil, prof)
+	resolved, _, err := effective.Configure(models.Settings{Temperature: &value})
+	return err == nil && resolved.Temperature != nil
+}
+
+func TestTemperatureSupported(t *testing.T) {
+	// A model profile that does not advertise temperature support.
+	unsupported := newFakeGateway(&fakeProvider{
+		hasProfile: true,
+		profile:    profile.Profile{Capabilities: profile.Capabilities{}},
+	})
+	if temperatureSupported(unsupported, "prov", "model") {
+		t.Error("expected temperature unsupported for a profile without the temperature capability")
+	}
+
+	// A model profile that advertises temperature support.
+	supported := newFakeGateway(&fakeProvider{
+		hasProfile: true,
+		profile:    profile.Profile{Capabilities: profile.Capabilities{Temperature: true}},
+	})
+	if !temperatureSupported(supported, "prov", "model") {
+		t.Error("expected temperature supported for a profile with the temperature capability")
+	}
+
+	// When no profile is available, preserve the historical behavior.
+	none := newFakeGateway(&fakeProvider{})
+	if !temperatureSupported(none, "prov", "model") {
+		t.Error("expected temperature supported when no profile is available")
+	}
+}
+
+func TestSessionDirectShellEscape(t *testing.T) {
+	ctx := context.Background()
+	provider := &fakeProvider{}
+	db, ws, gw, pub, mgr := setupTestEnv(t, provider)
+	_ = db
+	_ = ws
+	_ = gw
+	_ = pub
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Direct Shell Escape Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// 1. Send direct shell command "echo hello"
+	err = sess.Send(ctx, api.SendRequest{
+		Command: "echo hello",
+	})
+	if err != nil {
+		t.Fatalf("sess.Send command: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// 2. Verify NO LLM turn was triggered
+	provider.mu.Lock()
+	turnCount := len(provider.turns)
+	provider.mu.Unlock()
+	if turnCount != 0 {
+		t.Fatalf("expected 0 LLM turns after direct command, got %d", turnCount)
+	}
+
+	// 3. Verify timeline contains KindCommand entry (not a KindMessage)
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 timeline entry, got %d", len(entries))
+	}
+	if entries[0].Kind != api.TimelineKindCommand {
+		t.Fatalf("expected timeline entry kind %q, got %q", api.TimelineKindCommand, entries[0].Kind)
+	}
+	if entries[0].Command == nil {
+		t.Fatal("expected non-nil entries[0].Command")
+	}
+	if entries[0].Command.Command != "echo hello" {
+		t.Fatalf("expected Command 'echo hello', got %q", entries[0].Command.Command)
+	}
+	if entries[0].Command.ExitCode != 0 {
+		t.Fatalf("expected ExitCode 0, got %d", entries[0].Command.ExitCode)
+	}
+	if strings.TrimSpace(entries[0].Command.Output) != "hello" {
+		t.Fatalf("expected Output 'hello', got %q", entries[0].Command.Output)
+	}
+
+	// sess.History only returns KindMessage entries; verify it returns none
+	msgs, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("sess.History: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected 0 timeline messages in History, got %d", len(msgs))
+	}
+
+	// 4. Verify command was checkpointed in harness state and queue is drained
+	vis := sess.VisibleQueue()
+	if len(vis) != 0 {
+		t.Fatalf("expected visible queue to be empty, got %d", len(vis))
+	}
+	h := sess.Harness
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("h.LoadState: %v", err)
+	}
+	if len(state.Messages) != 1 {
+		t.Fatalf("expected 1 message in harness state, got %d", len(state.Messages))
+	}
+	if harness.SystemKindOf(state.Messages[0]) != harness.SystemKindCommand {
+		t.Fatalf("expected message to be marked SystemKindCommand, got %q", harness.SystemKindOf(state.Messages[0]))
+	}
+	inboxText := state.Messages[0].GetContent().Text()
+	if !strings.Contains(inboxText, `<bash_command command="echo hello" exit_code="0">`) {
+		t.Fatalf("expected text to contain bash_command tag, got %s", inboxText)
+	}
+
+	// 5. Send a normal user prompt and verify harness receives both previous command and new user prompt
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "What did I just run?",
+	})
+	if err != nil {
+		t.Fatalf("sess.Send user prompt: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait user prompt: %v", err)
+	}
+
+	provider.mu.Lock()
+	turns := provider.turns
+	provider.mu.Unlock()
+	if len(turns) != 1 {
+		t.Fatalf("expected 1 LLM turn after user prompt, got %d", len(turns))
+	}
+
+	// The harness should have received messages including the bash command output and the new user prompt
+	reqMsgs := turns[0].messages
+	var foundBashMsg, foundPromptMsg bool
+	for _, m := range reqMsgs {
+		txt := m.GetContent().Text()
+		if strings.Contains(txt, `<bash_command command="echo hello"`) {
+			foundBashMsg = true
+		}
+		if strings.Contains(txt, "What did I just run?") {
+			foundPromptMsg = true
+		}
+	}
+	if !foundBashMsg {
+		t.Fatalf("expected harness request to contain bash_command message, got: %+v", reqMsgs)
+	}
+	if !foundPromptMsg {
+		t.Fatalf("expected harness request to contain prompt message, got: %+v", reqMsgs)
+	}
+
+	// 6. Verify queue is now empty
+	if len(sess.VisibleQueue()) != 0 {
+		t.Fatalf("expected queue to be empty, got %d remaining", len(sess.VisibleQueue()))
+	}
+
+	// 7. Verify timeline messages do NOT have duplicate <bash_command> message
+	timelineMsgs, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("sess.History after turn: %v", err)
+	}
+	for _, m := range timelineMsgs {
+		if strings.Contains(m.GetContent().Text(), "<bash_command") {
+			t.Fatalf("unexpected <bash_command> in History: %s", m.GetContent().Text())
+		}
+	}
+}
+
+func TestSessionEnqueueCommandWhileRunning(t *testing.T) {
+	ctx := context.Background()
+	provider := &fakeProvider{}
+	db, ws, gw, pub, mgr := setupTestEnv(t, provider)
+	_ = db
+	_ = ws
+	_ = gw
+	_ = pub
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Enqueue Command Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// 1. Send first command that sleeps briefly
+	if err := sess.Send(ctx, api.SendRequest{Command: "sleep 0.1 && echo first"}); err != nil {
+		t.Fatalf("sess.Send first command: %v", err)
+	}
+
+	// Wait until command begins executing (and has been popped from the queue)
+	for range 100 {
+		sess.Lock()
+		running := sess.Running
+		sess.Unlock()
+		if running && len(sess.VisibleQueue()) == 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// 2. While running, enqueue second and third commands
+	if err := sess.Send(ctx, api.SendRequest{Command: "echo second"}); err != nil {
+		t.Fatalf("sess.Send second command: %v", err)
+	}
+	if err := sess.Send(ctx, api.SendRequest{Command: "echo third"}); err != nil {
+		t.Fatalf("sess.Send third command: %v", err)
+	}
+
+	// Verify visible queue has 2 commands
+	pending := sess.VisibleQueue()
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 pending commands in visible queue, got %d", len(pending))
+	}
+
+	// 3. Wait for all to complete
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// Verify session is now idle and no pending commands remain
+	sess.Lock()
+	running := sess.Running
+	status := sess.Status
+	sess.Unlock()
+	pending = sess.VisibleQueue()
+	if running || status != api.StatusIdle || len(pending) != 0 {
+		t.Fatalf("expected idle not running with 0 pending commands, got running=%v status=%s pending=%d", running, status, len(pending))
+	}
+
+	// 4. Verify timeline has all 3 commands executed in FIFO order
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 timeline entries, got %d", len(entries))
+	}
+	for i, expectedCmd := range []string{"sleep 0.1 && echo first", "echo second", "echo third"} {
+		if entries[i].Kind != api.TimelineKindCommand {
+			t.Fatalf("entry %d: expected KindCommand, got %q", i, entries[i].Kind)
+		}
+		if entries[i].Command == nil || entries[i].Command.Command != expectedCmd {
+			t.Fatalf("entry %d: expected command %q, got %+v", i, expectedCmd, entries[i].Command)
+		}
+		if entries[i].Command.ExitCode != 0 {
+			t.Fatalf("entry %d: expected exit code 0, got %d", i, entries[i].Command.ExitCode)
+		}
+	}
+
+	// Verify all 3 commands were also checkpointed in harness state
+	h := sess.Harness
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("h.LoadState: %v", err)
+	}
+	if len(state.Messages) != 3 {
+		t.Fatalf("expected 3 harness messages, got %d", len(state.Messages))
+	}
+}
+
+func TestSessionEnqueueCommandDuringTurn(t *testing.T) {
+	ctx := context.Background()
+	turnStarted := make(chan struct{})
+	allowTurnToFinish := make(chan struct{})
+
+	provider := &fakeProvider{
+		handler: func(ctx context.Context, req *llm.Request) ([]string, string, error) {
+			select {
+			case <-turnStarted:
+			default:
+				close(turnStarted)
+			}
+			select {
+			case <-allowTurnToFinish:
+				return []string{"Turn response"}, "", nil
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+		},
+	}
+	db, ws, gw, pub, mgr := setupTestEnv(t, provider)
+	_ = db
+	_ = ws
+	_ = gw
+	_ = pub
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Enqueue Command During Turn",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// 1. Start a turn
+	if err := sess.Send(ctx, api.SendRequest{Content: "Hello"}); err != nil {
+		t.Fatalf("sess.Send message: %v", err)
+	}
+
+	// Wait until turn starts
+	select {
+	case <-turnStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for turn to start")
+	}
+
+	// 2. While turn is running, send a direct command
+	if err := sess.Send(ctx, api.SendRequest{Command: "echo while_turn"}); err != nil {
+		t.Fatalf("sess.Send command during turn: %v", err)
+	}
+
+	pending := sess.VisibleQueue()
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending command, got %d", len(pending))
+	}
+
+	// 3. Allow turn to finish
+	close(allowTurnToFinish)
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- sess.Wait(ctx)
+	}()
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("sess.Wait: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for turn to finish")
+	}
+
+	// 4. Verify the pending command was drained and executed
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+
+	var foundCmd bool
+	for _, e := range entries {
+		if e.Kind == api.TimelineKindCommand && e.Command != nil && e.Command.Command == "echo while_turn" {
+			foundCmd = true
+			if e.Command.ExitCode != 0 {
+				t.Fatalf("expected exit code 0, got %d", e.Command.ExitCode)
+			}
+			if strings.TrimSpace(e.Command.Output) != "while_turn" {
+				t.Fatalf("expected output 'while_turn', got %q", e.Command.Output)
+			}
+		}
+	}
+	if !foundCmd {
+		t.Fatalf("expected KindCommand 'echo while_turn' in timeline, got entries: %+v", entries)
+	}
+}
+
+func TestQueueKindTaskFilteredAndNoEvent(t *testing.T) {
+	ctx := context.Background()
+	turnStarted := make(chan struct{})
+	allowTurnToFinish := make(chan struct{})
+
+	provider := &fakeProvider{
+		handler: func(ctx context.Context, req *llm.Request) ([]string, string, error) {
+			select {
+			case <-turnStarted:
+			default:
+				close(turnStarted)
+			}
+			select {
+			case <-allowTurnToFinish:
+				return []string{"Turn done"}, "", nil
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+		},
+	}
+	_, _, _, pub, mgr := setupTestEnv(t, provider)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Task Queue Filter Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// 1. Start a turn
+	if err := sess.Send(ctx, api.SendRequest{Content: "Hello"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	<-turnStarted
+
+	// 2. Enqueue a user message while running -> should emit QueueUpdatedEvent
+	if err := sess.Send(ctx, api.SendRequest{Content: "Queued user message"}); err != nil {
+		t.Fatalf("sess.Send queued: %v", err)
+	}
+
+	// Verify QueueUpdatedEvent was published for the user message
+	var queueUpdatedCountBefore int
+	for _, ev := range pub.recorded() {
+		if qe, ok := ev.(api.QueueUpdatedEvent); ok {
+			queueUpdatedCountBefore++
+			if len(qe.Queue) != 1 || qe.Queue[0].Kind != api.QueueKindMessage {
+				t.Fatalf("expected 1 item in queue event, got %+v", qe.Queue)
+			}
+		}
+	}
+	if queueUpdatedCountBefore == 0 {
+		t.Fatal("expected QueueUpdatedEvent for queued user message")
+	}
+
+	// 3. Enqueue a task message -> should NOT emit QueueUpdatedEvent and should NOT be in VisibleQueue
+	taskMsg := message.NewUserTextMeta("task complete background", map[string]any{harness.MetaSystemKind: harness.SystemKindTask})
+	sess.Enqueue(taskMsg)
+
+	// Verify task item is NOT in VisibleQueue
+	vis := sess.VisibleQueue()
+	if len(vis) != 1 {
+		t.Fatalf("expected VisibleQueue to have only 1 item, got %d: %+v", len(vis), vis)
+	}
+	if vis[0].Kind != api.QueueKindMessage {
+		t.Fatalf("expected VisibleQueue[0] to be QueueKindMessage, got %s", vis[0].Kind)
+	}
+
+	// Verify internal queue has 2 items: 1 message + 1 task
+	sess.Lock()
+	qLen := len(sess.queue)
+	var hasTaskKind bool
+	for _, it := range sess.queue {
+		if it.Kind == api.QueueKindTask {
+			hasTaskKind = true
+		}
+	}
+	sess.Unlock()
+	if qLen != 2 || !hasTaskKind {
+		t.Fatalf("expected 2 items in internal queue with QueueKindTask, got qLen=%d hasTaskKind=%v", qLen, hasTaskKind)
+	}
+
+	// Verify NO additional QueueUpdatedEvent was published for the task enqueue
+	var queueUpdatedCountAfter int
+	for _, ev := range pub.recorded() {
+		if _, ok := ev.(api.QueueUpdatedEvent); ok {
+			queueUpdatedCountAfter++
+		}
+	}
+	if queueUpdatedCountAfter != queueUpdatedCountBefore {
+		t.Fatalf("unexpected QueueUpdatedEvent received for QueueKindTask (before=%d, after=%d)", queueUpdatedCountBefore, queueUpdatedCountAfter)
+	}
+
+	// 4. Finish the turn and let the queued items process
+	close(allowTurnToFinish)
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+}
+
+func TestSessionTodosRestoreOnLoad(t *testing.T) {
+	ctx := context.Background()
+
+	var turn int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			turn++
+			if turn == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "call-todos-1",
+								Name: "todos",
+								Args: map[string]any{
+									"todos": []any{
+										map[string]any{
+											"content":     "Task A",
+											"active_text": "Working on Task A",
+											"status":      "in_progress",
+										},
+										map[string]any{
+											"content":     "Task B",
+											"active_text": "Task B queued",
+											"status":      "pending",
+										},
+									},
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Checklist updated."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Todos Test",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "Make checklist"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	sess.Lock()
+	if len(sess.Todos) != 2 {
+		t.Fatalf("expected 2 todos in sess.Todos, got %d", len(sess.Todos))
+	}
+	if sess.Todos[0].Content != "Task A" || sess.Todos[0].Status != string(api.TodoStatusInProgress) {
+		t.Fatalf("unexpected sess.Todos[0]: %+v", sess.Todos[0])
+	}
+	sess.Unlock()
+
+	// Verify TodosUpdatedEvent was published
+	var foundTodosEvent bool
+	for _, ev := range pub.recorded() {
+		if te, ok := ev.(api.TodosUpdatedEvent); ok {
+			foundTodosEvent = true
+			if len(te.Todos) != 2 {
+				t.Fatalf("expected 2 todos in published event, got %d", len(te.Todos))
+			}
+		}
+	}
+	if !foundTodosEvent {
+		t.Fatal("expected TodosUpdatedEvent to be published")
+	}
+
+	// Create a new manager to test fresh loadOrCacheSession
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	mgr2, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("New mgr2: %v", err)
+	}
+
+	sess2, err := mgr2.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("mgr2.Get: %v", err)
+	}
+	sess2.Lock()
+	defer sess2.Unlock()
+	if len(sess2.Todos) != 2 {
+		t.Fatalf("expected 2 todos restored in sess2.Todos, got %d", len(sess2.Todos))
+	}
+	if sess2.Todos[0].ActiveText != "Working on Task A" || sess2.Todos[1].Status != string(api.TodoStatusPending) {
+		t.Fatalf("unexpected restored todos in sess2: %+v", sess2.Todos)
+	}
+}
+
+func TestSessionSendCompactDirect(t *testing.T) {
+	ctx := context.Background()
+	provider := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Compacted summary of work"}, "reply-1", nil
+		},
+	}
+	db, ws, gw, pub, mgr := setupTestEnv(t, provider)
+	_ = db
+	_ = ws
+	_ = gw
+	_ = pub
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Direct Compaction Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Invalid input: Compact combined with Message
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "hello",
+		Compact: &api.CompactRequest{Focus: "focus"},
+	})
+	if err == nil {
+		t.Fatal("expected error combining compact with message, got nil")
+	}
+
+	// 1. Initial turn with user message
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "First prompt",
+	})
+	if err != nil {
+		t.Fatalf("sess.Send message: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// 2. Direct compact while idle
+	err = sess.Send(ctx, api.SendRequest{
+		Compact: &api.CompactRequest{Focus: "preserve test instructions"},
+	})
+	if err != nil {
+		t.Fatalf("sess.Send compact: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// 3. Verify timeline contains compacted entry
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+	var hasCompacted bool
+	for _, e := range entries {
+		if e.Kind == api.TimelineKindCompacted {
+			hasCompacted = true
+			if e.Compacted == nil || e.Compacted.Focus != "preserve test instructions" {
+				t.Errorf("unexpected compacted entry: %+v", e.Compacted)
+			}
+		}
+	}
+	if !hasCompacted {
+		t.Errorf("expected KindCompacted entry in timeline")
+	}
+
+	// 4. Compaction rejected if session is currently running
+	sess.Lock()
+	sess.Running = true
+	sess.Unlock()
+	err = sess.Send(ctx, api.SendRequest{
+		Compact: &api.CompactRequest{Focus: "should fail"},
+	})
+	sess.Lock()
+	sess.Running = false
+	sess.Unlock()
+	if !errors.Is(err, ErrSessionRunning) {
+		t.Fatalf("expected ErrSessionRunning when session is running, got %v", err)
+	}
+}
+
+func TestSessionAgentToolScopingAndRebuildOnAgentChange(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"OK"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	// Create coder agent
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	coderContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: coder
+spec:
+  tools:
+    - view
+    - ls
+    - load_skill
+  skills: ["*"]
+  policies:
+    tools:
+      include:
+        - view
+        - ls
+        - load_skill
+---
+Coder agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "coder.agent.md"), []byte(coderContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create reviewer agent with only view
+	reviewerContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: reviewer
+spec:
+  tools:
+    - view
+  policies:
+    tools:
+      include:
+        - view
+---
+Reviewer agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.agent.md"), []byte(reviewerContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Create session configured with coder agent
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Agent Tool Scoping Test",
+		Config: api.SessionConfig{
+			Agent: "coder",
+		},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// First turn: builds tools for coder
+	if err := sess.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// Verify container has view, ls, load_skill
+	defs := sess.Tools.Definitions()
+	if len(defs) != 3 {
+		t.Fatalf("expected 3 tools for coder, got %d: %v", len(defs), defs)
+	}
+	for _, d := range defs {
+		if d.Name != "view" && d.Name != "ls" && d.Name != "load_skill" {
+			t.Errorf("unexpected tool in coder definitions: %s", d.Name)
+		}
+	}
+
+	// 2. Update session to reviewer agent
+	_, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{
+			Agent: "reviewer",
+		},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Update: %v", err)
+	}
+
+	// Second turn: triggers rebuilding tools for reviewer
+	if err := sess.Send(ctx, api.SendRequest{Content: "review now"}); err != nil {
+		t.Fatalf("sess.Send 2: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait 2: %v", err)
+	}
+
+	// Verify container now ONLY has view
+	defsReviewer := sess.Tools.Definitions()
+	if len(defsReviewer) != 1 || defsReviewer[0].Name != "view" {
+		t.Fatalf("expected 1 tool (view) for reviewer, got %d: %v", len(defsReviewer), defsReviewer)
+	}
+}
+
+func TestSessionDenyAllAgentHasZeroTools(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"OK"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// deny-all agent: include a non-existent tool so no tool matches the allowlist.
+	denyAllContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: deny-all
+spec:
+  tools: ["*"]
+  policies:
+    tools:
+      include:
+        - nonexistent-tool
+---
+Deny-all agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "deny-all.agent.md"), []byte(denyAllContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// full-access agent: no policies, so it keeps every workspace tool.
+	fullAccessContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: full-access
+spec:
+  tools: ["*"]
+---
+Full-access agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "full-access.agent.md"), []byte(fullAccessContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Deny-all agent must build a container with zero tools (fail-closed).
+	sessDeny, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Deny-All Session",
+		Config: api.SessionConfig{Agent: "deny-all"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (deny-all): %v", err)
+	}
+	if err := sessDeny.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+		t.Fatalf("sessDeny.Send: %v", err)
+	}
+	if err := sessDeny.Wait(ctx); err != nil {
+		t.Fatalf("sessDeny.Wait: %v", err)
+	}
+	if defs := sessDeny.Tools.Definitions(); len(defs) != 0 {
+		t.Fatalf("expected 0 tools for deny-all agent, got %d: %v", len(defs), defs)
+	}
+
+	// 2. Full-access agent must build a container with the default tool set.
+	sessFull, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Full-Access Session",
+		Config: api.SessionConfig{Agent: "full-access"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (full-access): %v", err)
+	}
+	if err := sessFull.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+		t.Fatalf("sessFull.Send: %v", err)
+	}
+	if err := sessFull.Wait(ctx); err != nil {
+		t.Fatalf("sessFull.Wait: %v", err)
+	}
+	if defs := sessFull.Tools.Definitions(); len(defs) == 0 {
+		t.Fatalf("expected >0 tools for full-access agent, got 0")
+	}
+}
+
+// TestSessionDeferredToolsAndToolSearch verifies eager vs. deferred tool
+// resolution, automatic tool_search activation, and the >20 eager-tools
+// diagnostic.
+func TestSessionDeferredToolsAndToolSearch(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"OK"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// all-eager: every policy-allowed tool is in spec.tools, so nothing is
+	// deferred and tool_search is not activated.
+	allEager := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: all-eager
+spec:
+  tools:
+    - view
+  policies:
+    tools:
+      include:
+        - view
+---
+All-eager agent.
+`
+	// some-deferred: view is eager; ls and grep are policy-allowed but not in
+	// spec.tools, so they load as deferred and tool_search is activated.
+	someDeferred := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: some-deferred
+spec:
+  tools:
+    - view
+  policies:
+    tools:
+      include:
+        - view
+        - ls
+        - grep
+---
+Some-deferred agent.
+`
+	// many-tools: loads every effective tool eagerly (> MaxRecommendedEagerTools).
+	manyTools := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: many-tools
+spec:
+  tools: ["*"]
+---
+Many-tools agent.
+`
+	for _, a := range []struct{ name, content string }{
+		{"all-eager", allEager},
+		{"some-deferred", someDeferred},
+		{"many-tools", manyTools},
+	} {
+		if err := os.WriteFile(filepath.Join(agentsDir, a.name+".agent.md"), []byte(a.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Inject enough custom tools to push many-tools over the eager threshold.
+	toolsDir := filepath.Join(agentsDir, "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 10 {
+		name := fmt.Sprintf("ctool%02d", i)
+		manifest := fmt.Sprintf(`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: %s
+  description: Custom tool %s
+spec:
+  command: ["sh", "-c"]
+---
+Custom tool.
+`, name, name)
+		if err := os.WriteFile(filepath.Join(toolsDir, name+".tool.md"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. All policy-allowed tools eager => tool_search is not registered.
+	sessAll, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "All Eager",
+		Config: api.SessionConfig{Agent: "all-eager"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (all-eager): %v", err)
+	}
+	if err := sessAll.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+		t.Fatalf("sessAll.Send: %v", err)
+	}
+	if err := sessAll.Wait(ctx); err != nil {
+		t.Fatalf("sessAll.Wait: %v", err)
+	}
+	for _, d := range sessAll.Tools.Definitions() {
+		if d.Name == "tool_search" {
+			t.Fatalf("expected tool_search NOT in all-eager definitions, got %v", sessAll.Tools.Definitions())
+		}
+	}
+
+	// 2. Deferred tools => tool_search is eager and discovers deferred tools.
+	sessDef, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Some Deferred",
+		Config: api.SessionConfig{Agent: "some-deferred"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (some-deferred): %v", err)
+	}
+	if err := sessDef.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+		t.Fatalf("sessDef.Send: %v", err)
+	}
+	if err := sessDef.Wait(ctx); err != nil {
+		t.Fatalf("sessDef.Wait: %v", err)
+	}
+
+	// view eager, tool_search eager, ls and grep deferred.
+	defs := sessDef.Tools.Definitions()
+	checkTool := func(name string, wantDefer bool) {
+		t.Helper()
+		var found bool
+		for _, d := range defs {
+			if d.Name == name {
+				found = true
+				if d.DeferLoading != wantDefer {
+					t.Errorf("tool %q: DeferLoading = %v, want %v", name, d.DeferLoading, wantDefer)
+				}
+				return
+			}
+		}
+		if !found {
+			t.Errorf("expected tool %q in definitions, got %v", name, defs)
+		}
+	}
+	checkTool("view", false)
+	checkTool("tool_search", false)
+	checkTool("ls", true)
+	checkTool("grep", true)
+
+	// tool_search.Prepare returns a non-nil, read-only safe plan and the
+	// permission gate allows it.
+	plan, err := sessDef.Tools.Prepare(ctx, &message.ToolCall{
+		Name: "tool_search",
+		Args: map[string]any{"query": "grep"},
+	})
+	if err != nil {
+		t.Fatalf("tool_search prepare: %v", err)
+	}
+	if plan == nil {
+		t.Fatalf("expected non-nil plan from tool_search prepare")
+	}
+	decision, _, err := sessDef.PermManager.Evaluate(plan)
+	if err != nil {
+		t.Fatalf("PermManager.Evaluate: %v", err)
+	}
+	if decision != tools.AccessAllow {
+		t.Errorf("expected tool_search plan to be allowed, got %v", decision)
+	}
+
+	// Executing tool_search with "grep" returns a reference to the grep tool.
+	res, err := sessDef.Tools.Execute(ctx, &message.ToolCall{
+		Name: "tool_search",
+		Args: map[string]any{"query": "grep"},
+	})
+	if err != nil {
+		t.Fatalf("tool_search execute: %v", err)
+	}
+	var foundGrep bool
+	for _, b := range res.Content {
+		if ref, ok := b.(*message.ToolReferenceBlock); ok && ref.ToolName == "grep" {
+			foundGrep = true
+		}
+	}
+	if !foundGrep {
+		t.Errorf("expected tool_search to return a ToolReferenceBlock for grep, got %+v", res.Content)
+	}
+
+	// 3. > 20 eager tools => too_many_eager_tools diagnostic.
+	sessMany, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Many Tools",
+		Config: api.SessionConfig{Agent: "many-tools"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (many-tools): %v", err)
+	}
+	var hasDiag bool
+	for _, d := range sessMany.Diagnostics {
+		if d.Code == "too_many_eager_tools" {
+			hasDiag = true
+		}
+	}
+	if !hasDiag {
+		t.Errorf("expected too_many_eager_tools diagnostic, got %+v", sessMany.Diagnostics)
+	}
+}
+
+func TestSessionSlashCommandSkillResolution(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Skill acknowledged."}, uuid.NewString(), nil
+		},
+	}
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+	_ = db
+	_ = gw
+	_ = pub
+
+	wsDir := ws.RootDir()
+	skillDir := filepath.Join(wsDir, ".agents", "skills", "test-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: test-skill
+  description: A test skill
+spec:
+  title: Test Skill
+---
+Follow these instructions carefully.`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title: "Slash Command Skill Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "/test-skill help me do something"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	hist, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) < 1 {
+		t.Fatalf("expected at least 1 message in history, got %d", len(hist))
+	}
+	firstMsg := hist[0]
+	text := msgText(firstMsg)
+	if !strings.Contains(text, `name="test-skill"`) {
+		t.Errorf("expected skill name attribute in: %s", text)
+	}
+	if !strings.Contains(text, `path=".agents/skills/test-skill"`) {
+		t.Errorf("expected skill path attribute in: %s", text)
+	}
+	if !strings.Contains(text, `Supporting assets and files for this skill are located in ".agents/skills/test-skill".`) {
+		t.Errorf("expected supporting assets note in: %s", text)
+	}
+}
+
+// TestSessionSlashCommandActivatesDeferredSkillTools verifies that invoking a
+// /skill-name slash command activates the skill's deferred tools into the
+// expanded user message via tool-reference blocks, while policy-denied tools are
+// not activated and remain denied by the permission gate.
+func TestSessionSlashCommandActivatesDeferredSkillTools(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Skill acknowledged."}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	wsDir := ws.RootDir()
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The skill declares view (deferred) and bash (policy-denied).
+	skillDir := filepath.Join(agentsDir, "skills", "slash-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: slash-skill
+  description: A skill that activates deferred tools
+spec:
+  tools:
+    - view
+    - bash
+---
+Follow these skill instructions.`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent: load_skill is eager (in spec.tools); view is policy-allowed but not
+	// in spec.tools (deferred); bash is excluded by the agent policy ceiling.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: slash-agent
+spec:
+  skills:
+    - slash-skill
+  tools:
+    - load_skill
+  policies:
+    tools:
+      include:
+        - view
+        - load_skill
+      exclude:
+        - bash
+---
+Slash agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "slash-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Slash Skill Deferred Tools",
+		Config: api.SessionConfig{Agent: "slash-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Resolve the /slash-skill slash invocation.
+	rendered, err := sess.resolveSlashCommand(message.NewUserText("/slash-skill do something"))
+	if err != nil {
+		t.Fatalf("resolveSlashCommand: %v", err)
+	}
+
+	// The expanded user message must contain the skill text and a
+	// ToolReferenceBlock for the deferred view tool, but no reference for the
+	// policy-denied bash tool.
+	var hasText, hasViewRef, hasBashRef bool
+	for _, b := range rendered.GetContent() {
+		switch blk := b.(type) {
+		case *message.TextBlock:
+			if strings.Contains(blk.Text, "Follow these skill instructions.") {
+				hasText = true
+			}
+		case *message.ToolReferenceBlock:
+			switch blk.ToolName {
+			case "view":
+				hasViewRef = true
+			case "bash":
+				hasBashRef = true
+			}
+		}
+	}
+	if !hasText {
+		t.Errorf("expected skill text instructions in expanded message, got %+v", rendered.GetContent())
+	}
+	if !hasViewRef {
+		t.Errorf("expected ToolReferenceBlock for deferred view, got %+v", rendered.GetContent())
+	}
+	if hasBashRef {
+		t.Errorf("did not expect ToolReferenceBlock for policy-denied bash, got %+v", rendered.GetContent())
+	}
+
+	// The permission gate continues to deny the excluded bash tool.
+	decision, _, err := sess.PermManager.Evaluate(&tools.Plan{ToolName: "bash", Action: api.ActionExec, Safety: api.SafetyUnsafe})
+	if err != nil {
+		t.Fatalf("PermManager.Evaluate: %v", err)
+	}
+	if decision != tools.AccessDeny {
+		t.Errorf("expected PermManager to deny bash, got %v", decision)
+	}
+}
+
+// TestSessionSlashCommandRichTemplate verifies that a /command template can
+// reference {{.Agent.*}}, {{.Command.Name}}, and {{len .Command.Tools}} and that
+// those values render accurately once the command is resolved through
+// Catalog.ResolveCommand.
+func TestSessionSlashCommandRichTemplate(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	wsDir := ws.RootDir()
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// rich-agent enables rich-cmd and grants view + write.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: rich-agent
+spec:
+  commands:
+    - rich-cmd
+  tools:
+    - view
+    - write
+---
+Rich agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "rich-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// rich-cmd references the executing agent, its own name, and the count of
+	// its resolved (policy-filtered) tools.
+	cmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: rich-cmd
+  description: A rich command
+spec:
+  tools:
+    - view
+    - write
+---
+Agent: {{.Agent.Name}}, Command: {{.Command.Name}}, Tools: {{len .Command.Tools}}`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "rich-cmd.command.md"), []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Rich Template",
+		Config: api.SessionConfig{Agent: "rich-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	rendered, err := sess.resolveSlashCommand(message.NewUserText("/rich-cmd"))
+	if err != nil {
+		t.Fatalf("resolveSlashCommand: %v", err)
+	}
+
+	text := msgText(rendered)
+	if !strings.Contains(text, "Agent: rich-agent") {
+		t.Errorf("expected {{.Agent.Name}} to render as rich-agent, got: %s", text)
+	}
+	if !strings.Contains(text, "Command: rich-cmd") {
+		t.Errorf("expected {{.Command.Name}} to render as rich-cmd, got: %s", text)
+	}
+	if !strings.Contains(text, "Tools: 2") {
+		t.Errorf("expected {{len .Command.Tools}} to render as 2, got: %s", text)
+	}
+}
+
+// TestSessionSlashCommandEmbedsSkillsAndActivatesTools verifies that a /command
+// declaring spec.skills, spec.rules, and spec.tools embeds the skill's and
+// rule's rendered instructions as <embedded_skill> and <embedded_rule> blocks and
+// activates the command's deferred tools via ToolReferenceBlocks (including tools
+// declared by the command's skills), while omitting tools denied by the agent's
+// policy ceiling.
+func TestSessionSlashCommandEmbedsSkillsAndActivatesTools(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	wsDir := ws.RootDir()
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(agentsDir, "skills", "my-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// my-skill declares view (deferred, policy-allowed) and bash (policy-denied).
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: my-skill
+  description: A skill that activates deferred tools
+spec:
+  tools:
+    - view
+    - bash
+---
+Follow my-skill instructions.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "skills", "my-skill", "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// my-rule is eagerly embedded as a constraint when the command runs.
+	ruleContent := `---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: my-rule
+  description: A rule embedded by the command
+spec:
+  triggers:
+    always: true
+---
+Follow my-rule constraints.`
+	if err := os.MkdirAll(filepath.Join(agentsDir, "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "rules", "my-rule.rule.md"), []byte(ruleContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// cmd-embed enables my-skill and my-rule and declares view; the agent's
+	// policy allows view + load_skill but excludes bash.
+	cmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: cmd-embed
+  description: A command that embeds a skill and a rule
+spec:
+  skills:
+    - my-skill
+  rules:
+    - my-rule
+  tools:
+    - view
+---
+Run the embedded skill.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "cmd-embed.command.md"), []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: embed-agent
+spec:
+  skills:
+    - my-skill
+  commands:
+    - cmd-embed
+  tools:
+    - load_skill
+  policies:
+    tools:
+      include:
+        - view
+        - load_skill
+      exclude:
+        - bash
+---
+Embed agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "embed-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Embed Skills",
+		Config: api.SessionConfig{Agent: "embed-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	rendered, err := sess.resolveSlashCommand(message.NewUserText("/cmd-embed do something"))
+	if err != nil {
+		t.Fatalf("resolveSlashCommand: %v", err)
+	}
+
+	// The expanded user message must embed the skill's and rule's instructions
+	// and activate the deferred view tool, but not the policy-denied bash tool.
+	var hasSkillEmbed, hasRuleEmbed, hasViewRef, hasBashRef bool
+	for _, b := range rendered.GetContent() {
+		switch blk := b.(type) {
+		case *message.TextBlock:
+			if strings.Contains(blk.Text, `<embedded_skill name="my-skill"`) {
+				hasSkillEmbed = true
+			}
+			if strings.Contains(blk.Text, `<embedded_rule name="my-rule"`) {
+				hasRuleEmbed = true
+			}
+		case *message.ToolReferenceBlock:
+			switch blk.ToolName {
+			case "view":
+				hasViewRef = true
+			case "bash":
+				hasBashRef = true
+			}
+		}
+	}
+	if !hasSkillEmbed {
+		t.Errorf("expected <embedded_skill name=\"my-skill\"...> in expanded message, got %+v", rendered.GetContent())
+	}
+	if !hasRuleEmbed {
+		t.Errorf("expected <embedded_rule name=\"my-rule\"...> in expanded message, got %+v", rendered.GetContent())
+	}
+	if !hasViewRef {
+		t.Errorf("expected ToolReferenceBlock for deferred view (from spec.tools + skill), got %+v", rendered.GetContent())
+	}
+	if hasBashRef {
+		t.Errorf("did not expect ToolReferenceBlock for policy-denied bash, got %+v", rendered.GetContent())
+	}
+}
+
+// TestSessionSlashCommandRejectsUnenabled verifies that a /command that is not
+// enabled for the active agent (and declares no explicit spec.agent override) is
+// rejected with an error by resolveSlashCommand.
+func TestSessionSlashCommandRejectsUnenabled(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	wsDir := ws.RootDir()
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// restricted-agent enables only allowed-cmd.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: restricted-agent
+spec:
+  commands:
+    - allowed-cmd
+---
+Restricted agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "restricted-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// allowed-cmd is enabled; forbidden-cmd is not and declares no agent override.
+	allowedContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: allowed-cmd
+---
+Allowed.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "allowed-cmd.command.md"), []byte(allowedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	forbiddenContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: forbidden-cmd
+---
+Forbidden.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "forbidden-cmd.command.md"), []byte(forbiddenContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Reject Unenabled",
+		Config: api.SessionConfig{Agent: "restricted-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	if _, err := sess.resolveSlashCommand(message.NewUserText("/forbidden-cmd")); err == nil {
+		t.Fatal("expected error resolving command not enabled for the agent, got nil")
+	}
+}
+
+// setupTwoModelEnv writes a workspace with a fake provider exposing two
+// completion models (fake-default-model and fast-model) so that a command's
+// spec.models can select a model distinct from the session default.
+func setupTwoModelEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspace, *fakeGateway, *testPublisher, *testCoordinator) {
+	t.Helper()
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	provDir := filepath.Join(agentsDir, "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeProvider := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: fake
+spec:
+  type: fake
+  models:
+    - id: fake-default-model
+      name: fake-default-model
+      capabilities:
+        completion: true
+    - id: fast-model
+      name: fast-model
+      capabilities:
+        completion: true
+`
+	if err := os.WriteFile(filepath.Join(provDir, "fake.yaml"), []byte(fakeProvider), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(context.Background()); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+	return db, ws, gw, pub, mgr
+}
+
+// TestSessionCommandInlineModelOverride verifies that a command declaring
+// spec.models runs its turn on the resolved model and restores the session's
+// original model when the turn exits.
+func TestSessionCommandInlineModelOverride(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"done"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTwoModelEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// model-cmd runs inline but declares a distinct model via spec.models.
+	cmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: model-cmd
+spec:
+  context: inline
+  models:
+    - fast-model
+---
+Run with the fast model.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "model-cmd.command.md"), []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Model Override",
+		Config: api.SessionConfig{Agent: "main", Model: "fake/fake-default-model"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "/model-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// The turn must have executed on the command's model.
+	turns := prov.recordedTurns()
+	if len(turns) == 0 {
+		t.Fatal("expected at least one recorded LLM turn")
+	}
+	if turns[len(turns)-1].model != "fake/fast-model" {
+		t.Errorf("expected turn to run on fake/fast-model, got %q", turns[len(turns)-1].model)
+	}
+
+	// The session's configured model must be restored after the turn exits.
+	sess.Lock()
+	restored := sess.Config.Model
+	sess.Unlock()
+	if restored != "fake/fake-default-model" {
+		t.Errorf("expected session model restored to fake/fake-default-model, got %q", restored)
+	}
+}
+
+// TestSessionCommandCleanContextSpawnsSubagent verifies that a command declaring
+// context: clean runs in a forked child session with an empty conversation
+// history and the parent's agent.
+func TestSessionCommandCleanContextSpawnsSubagent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: clean-cmd
+spec:
+  context: clean
+---
+Run in a clean subagent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "clean-cmd.command.md"), []byte(cleanContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Clean Context",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Seed the parent with a prior conversation turn that must NOT leak into
+	// the clean child.
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello parent"}); err != nil {
+		t.Fatalf("parent Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent Wait: %v", err)
+	}
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "/clean-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+
+	// The command runs in a child session; the parent itself should not have
+	// started a turn.
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for context: clean command")
+	}
+
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	// The child must start with an empty conversation history (clean slate):
+	// the only non-assistant message should be the command itself, with no
+	// trace of the parent's prior history.
+	state, err := child.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("child.Harness.LoadState: %v", err)
+	}
+	for _, m := range state.Messages {
+		if m.Role() == message.RoleUser && msgText(m) == "hello parent" {
+			t.Fatalf("clean child leaked parent history message %q", msgText(m))
+		}
+	}
+	if child.Config.Agent != "main" {
+		t.Errorf("expected child agent to inherit main, got %q", child.Config.Agent)
+	}
+}
+
+// TestSessionCommandSubagentRecordsInvocationOnParent verifies that delegating a
+// slash command to a subagent still records the caller's message on the invoking
+// session's timeline, so the thread stays complete and clients can confirm the
+// message they sent. The child's copy of the prompt gets its own ID because
+// timeline IDs are unique across sessions.
+func TestSessionCommandSubagentRecordsInvocationOnParent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: record-cmd
+spec:
+  context: clean
+---
+Run in a clean subagent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "record-cmd.command.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Delegating Parent",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	msgID := uuid.Must(uuid.NewV7()).String()
+	if err := sess.Send(ctx, api.SendRequest{ID: msgID, Content: "/record-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for the delegated command")
+	}
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	parentEntries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("parent Timeline.List: %v", err)
+	}
+	var confirmed bool
+	for _, e := range parentEntries {
+		if e.Kind != api.TimelineKindMessage || e.Message == nil {
+			continue
+		}
+		if e.Message.Role() == message.RoleUser && e.Message.GetID() == msgID {
+			confirmed = true
+		}
+	}
+	if !confirmed {
+		t.Fatalf("expected the invoking message %q recorded on the parent timeline, got %d entries", msgID, len(parentEntries))
+	}
+
+	childEntries, err := child.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("child Timeline.List: %v", err)
+	}
+	for _, e := range childEntries {
+		if e.Message != nil && e.Message.GetID() == msgID {
+			t.Fatalf("child reused the parent message ID %q; timeline IDs must stay unique across sessions", msgID)
+		}
+	}
+}
+
+// TestSessionCommandForkContextSpawnsSubagent verifies that a command declaring
+// context: fork runs in a child session pre-populated with the parent's prior
+// conversation history.
+func TestSessionCommandForkContextSpawnsSubagent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	forkContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: fork-cmd
+spec:
+  context: fork
+---
+Run in a forked subagent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "fork-cmd.command.md"), []byte(forkContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Fork Context",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Seed the parent with a prior conversation turn.
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello parent"}); err != nil {
+		t.Fatalf("parent Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent Wait: %v", err)
+	}
+
+	parentState, err := sess.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("parent.Harness.LoadState: %v", err)
+	}
+	if len(parentState.Messages) == 0 {
+		t.Fatal("expected parent to have prior conversation history")
+	}
+
+	// Invoke the fork command.
+	if err := sess.Send(ctx, api.SendRequest{Content: "/fork-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for context: fork command")
+	}
+
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	// The child must be pre-populated with the parent's prior history plus the
+	// command message.
+	childState, err := child.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("child.Harness.LoadState: %v", err)
+	}
+	if len(childState.Messages) < len(parentState.Messages)+1 {
+		t.Fatalf("expected child to have parent history + command (>= %d messages), got %d", len(parentState.Messages)+1, len(childState.Messages))
+	}
+	// The first message must be the parent's prior user message.
+	if childState.Messages[0].Role() != message.RoleUser || msgText(childState.Messages[0]) != "hello parent" {
+		t.Errorf("expected first child message to be parent's prior user message, got %s %q", childState.Messages[0].Role(), msgText(childState.Messages[0]))
+	}
+}
+
+// TestSessionCommandForkContextCopiesAllChannels verifies that a context: fork
+// command copies every checkpoint channel (Messages, Todos, Context) from the
+// parent session into the forked child, not just the conversation messages.
+func TestSessionCommandForkContextCopiesAllChannels(t *testing.T) {
+	ctx := context.Background()
+
+	var turn int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			turn++
+			// The first turn (the parent) produces a todos tool call so the
+			// parent's checkpoint carries a non-message channel.
+			if turn == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "call-todos-1",
+								Name: "todos",
+								Args: map[string]any{
+									"todos": []any{
+										map[string]any{
+											"content":     "Parent task",
+											"active_text": "Working on parent task",
+											"status":      "in_progress",
+										},
+									},
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			// Subsequent turns (the todos follow-up and the child's command turn)
+			// produce a plain assistant reply without touching the todos channel.
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Done."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	forkContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: fork-cmd
+spec:
+  context: fork
+---
+Run in a forked subagent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "fork-cmd.command.md"), []byte(forkContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Fork All Channels",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Seed the parent with a turn that produces a todos channel.
+	if err := sess.Send(ctx, api.SendRequest{Content: "make checklist"}); err != nil {
+		t.Fatalf("parent Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent Wait: %v", err)
+	}
+
+	parentState, err := sess.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("parent.Harness.LoadState: %v", err)
+	}
+	if len(parentState.Todos) == 0 {
+		t.Fatal("expected parent to have a non-empty Todos channel")
+	}
+
+	// Invoke the fork command.
+	if err := sess.Send(ctx, api.SendRequest{Content: "/fork-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for context: fork command")
+	}
+
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	// The child must inherit every channel from the parent, not just messages.
+	childState, err := child.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("child.Harness.LoadState: %v", err)
+	}
+	if len(childState.Messages) < len(parentState.Messages)+1 {
+		t.Fatalf("expected child to have parent history + command (>= %d messages), got %d", len(parentState.Messages)+1, len(childState.Messages))
+	}
+	// The Todos channel must be copied from the parent and survive the child's
+	// command turn (which does not invoke the todos tool).
+	if len(childState.Todos) != 1 {
+		t.Fatalf("expected child to inherit 1 parent todo, got %d", len(childState.Todos))
+	}
+	if childState.Todos[0].Content != "Parent task" || childState.Todos[0].Status != string(api.TodoStatusInProgress) {
+		t.Errorf("unexpected forked todos: %+v", childState.Todos)
+	}
+	// The Context channel must also be inherited (non-zero token accounting).
+	if childState.Context.UsedTokens == 0 {
+		t.Errorf("expected child to inherit a non-zero Context channel, got %+v", childState.Context)
+	}
+}
+
+// TestSessionCommandDeduplicatesLoadedTools verifies that when the same command
+// activates the same deferred tool on the same thread twice, the second
+// ToolReferenceBlock is stripped from the message and the tool is not re-recorded
+// in the LoadedTools channel.
+func TestSessionCommandDeduplicatesLoadedTools(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent: view is policy-allowed but not in spec.tools, so it loads as a
+	// deferred tool. load_skill is eager. The agent enables dedup-cmd.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: dedup-agent
+spec:
+  commands:
+    - dedup-cmd
+  tools:
+    - load_skill
+  policies:
+    tools:
+      include:
+        - view
+        - load_skill
+---
+Dedup agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "dedup-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Command: activates the deferred view tool. It declares no context mode and
+	// no agent override, so it runs on the session's own thread.
+	cmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: dedup-cmd
+spec:
+  tools:
+    - view
+---
+Run the dedup command.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "dedup-cmd.command.md"), []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Dedup Loaded Tools",
+		Config: api.SessionConfig{Agent: "dedup-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// The first invocation activates the deferred view tool.
+	if err := sess.Send(ctx, api.SendRequest{Content: "/dedup-cmd"}); err != nil {
+		t.Fatalf("first Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("first Wait: %v", err)
+	}
+
+	state, err := sess.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState after first send: %v", err)
+	}
+	if !slices.Contains(state.LoadedTools, "view") {
+		t.Errorf("expected view recorded in LoadedTools after first send, got %v", state.LoadedTools)
+	}
+	if got := countToolRefBlocks(state.Messages, "view"); got != 1 {
+		t.Errorf("expected 1 view ToolReferenceBlock after first send, got %d", got)
+	}
+
+	// The second invocation must not re-activate view: the duplicate reference is
+	// stripped and view is not re-recorded.
+	if err := sess.Send(ctx, api.SendRequest{Content: "/dedup-cmd"}); err != nil {
+		t.Fatalf("second Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("second Wait: %v", err)
+	}
+
+	state, err = sess.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState after second send: %v", err)
+	}
+	loadedCount := 0
+	for _, name := range state.LoadedTools {
+		if name == "view" {
+			loadedCount++
+		}
+	}
+	if got := loadedCount; got != 1 {
+		t.Errorf("expected view recorded exactly once in LoadedTools, got %d (%v)", got, state.LoadedTools)
+	}
+	if got := countToolRefBlocks(state.Messages, "view"); got != 1 {
+		t.Errorf("expected the duplicate view ToolReferenceBlock to be stripped, got %d total", got)
+	}
+}
+
+// TestSessionCommandAgentOverrideSpawnsSubagent verifies that a command declaring
+// spec.agent different from the session's agent runs in a forked child session
+// targeting that agent.
+func TestSessionCommandAgentOverrideSpawnsSubagent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// explore is a builtin agent available to all sessions.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: explore
+spec:
+  commands:
+    - explore-cmd
+---
+Explore agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "explore.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentCmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: explore-cmd
+spec:
+  agent: explore
+---
+Run on the explore agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "explore-cmd.command.md"), []byte(agentCmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Agent Override",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Seed the parent with a prior conversation turn that must NOT leak into
+	// the agent-override child.
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello parent"}); err != nil {
+		t.Fatalf("parent Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent Wait: %v", err)
+	}
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "/explore-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for spec.agent override command")
+	}
+
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	if child.Config.Agent != "explore" {
+		t.Errorf("expected child agent to be explore, got %q", child.Config.Agent)
+	}
+	// A spec.agent override runs on a clean slate (no fork of parent history).
+	state, err := child.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("child.Harness.LoadState: %v", err)
+	}
+	for _, m := range state.Messages {
+		if m.Role() == message.RoleUser && msgText(m) == "hello parent" {
+			t.Fatalf("agent-override child leaked parent history message %q", msgText(m))
+		}
+	}
+}
+
+func TestDirectSessionPackageAPIs(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, _ := setupTestEnv(t, nil)
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	// 1. Test SessionDir
+	dir, err := SessionDir(ws.RootDir(), "test-sess-123")
+	if err != nil {
+		t.Fatalf("SessionDir: %v", err)
+	}
+	if !strings.HasSuffix(dir, filepath.Join("sessions", "test-sess-123")) {
+		t.Errorf("unexpected SessionDir: %s", dir)
+	}
+
+	// 2. Test Preview
+	cat := ws.Catalog()
+	catalog, err := models.Build(cat, gw)
+	if err != nil {
+		t.Fatalf("models.Build: %v", err)
+	}
+	cfg, model, diags, found, err := Preview(ctx, ws, catalog, api.SessionConfig{
+		Agent: "main",
+		Model: "fake/fake-default-model",
+	})
+	if err != nil {
+		t.Fatalf("Preview error: %v", err)
+	}
+	if cfg.Agent != "main" || cfg.Model != "fake/fake-default-model" {
+		t.Errorf("unexpected preview config: %+v", cfg)
+	}
+	if !found || model.ID != "fake/fake-default-model" {
+		t.Errorf("unexpected preview model: found=%v, id=%s", found, model.ID)
+	}
+	if len(diags) != 1 || diags[0].Code != "temperature_unknown" {
+		t.Errorf("unexpected preview diagnostics: %+v", diags)
+	}
+
+	// 3. Test New
+	store, err := NewStore(ctx, db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	sess, err := New(ctx, Config{
+		Title:       "Direct Session",
+		Session:     api.SessionConfig{Agent: "main", Model: "fake/fake-default-model"},
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Catalog:     func() *models.Catalog { return catalog },
+		Permissions: permMgr,
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	defer sess.Close()
+
+	if sess.ID == "" {
+		t.Fatal("expected non-empty session ID")
+	}
+	if sess.Timeline == nil || sess.Journal == nil || sess.Harness == nil {
+		t.Fatal("expected initialized Timeline, Journal, and Harness")
+	}
+
+	// 4. Test Matches
+	if err := sess.Matches(api.CreateSessionRequest{Title: "Direct Session", Config: api.SessionConfig{Agent: "main", Model: "fake/fake-default-model"}}); err != nil {
+		t.Errorf("Matches expected nil error, got: %v", err)
+	}
+	if err := sess.Matches(api.CreateSessionRequest{Title: "Different Title"}); !errors.Is(err, ErrSessionConflict) {
+		t.Errorf("Matches expected ErrSessionConflict on different title, got: %v", err)
+	}
+
+	// 5. Test Update
+	if err := sess.Update(ctx, api.UpdateSessionRequest{
+		Title: "Updated Direct Title",
+		Config: api.SessionConfig{
+			Mode: api.ModeAuto,
+		},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if sess.Title != "Updated Direct Title" {
+		t.Errorf("expected updated title, got %s", sess.Title)
+	}
+	if sess.Config.Mode != api.ModeAuto {
+		t.Errorf("expected updated mode, got %s", sess.Config.Mode)
+	}
+
+	// 6. Test Refresh
+	sess.Refresh(ctx)
+
+	// 7. Test CheckpointTo and Open
+	if err := sess.CheckpointTo(ctx, store); err != nil {
+		t.Fatalf("CheckpointTo: %v", err)
+	}
+	dbSess, err := store.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	opened, err := Open(ctx, dbSess, Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Catalog:     func() *models.Catalog { return catalog },
+		Permissions: permMgr,
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer opened.Close()
+
+	if opened.ID != sess.ID {
+		t.Errorf("opened.ID = %s, want %s", opened.ID, sess.ID)
+	}
+	if opened.Title != "Updated Direct Title" {
+		t.Errorf("opened.Title = %s, want %s", opened.Title, "Updated Direct Title")
+	}
+}
+
+// TestPreviewResolvesModelAlias verifies that passing an alias or
+// provider/@alias shorthand in SessionConfig.Model resolves to the canonical
+// provider/model-id qualified ID through the session resolution path.
+func TestPreviewResolvesModelAlias(t *testing.T) {
+	ctx := context.Background()
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-session-alias-test")
+	t.Cleanup(func() {
+		xdg.ClearCache()
+	})
+
+	wsDir := t.TempDir()
+	manifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: alias-test
+spec:
+  defaultProvider: fake
+  modelAliases:
+    fast: fake/fake-default-model
+    default: fake/fake-default-model
+---
+`
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeProvider := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: fake
+spec:
+  type: fake
+  models:
+    - id: fake-default-model
+      name: fake-default-model
+      aliases:
+        - fast
+      capabilities:
+        completion: true
+`
+	if err := os.WriteFile(filepath.Join(provDir, "fake.yaml"), []byte(fakeProvider), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(ctx, wsDir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	catalog, err := models.Build(ws.Catalog(), nil)
+	if err != nil {
+		t.Fatalf("models.Build: %v", err)
+	}
+
+	for _, ref := range []string{"@fast", "@default", "fake/@fast"} {
+		cfg, model, _, found, err := Preview(ctx, ws, catalog, api.SessionConfig{Agent: "main", Model: ref})
+		if err != nil {
+			t.Fatalf("Preview(%q) error: %v", ref, err)
+		}
+		if !found || model.ID != "fake/fake-default-model" {
+			t.Errorf("Preview(%q) resolved model = %s, found=%v; want fake/fake-default-model", ref, model.ID, found)
+		}
+		if cfg.Model != "fake/fake-default-model" {
+			t.Errorf("Preview(%q) resolved config.Model = %q, want fake/fake-default-model", ref, cfg.Model)
+		}
+	}
+}
+
+func TestSessionSendValidation(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{}
+	_, _, _, _, mgr := setupTestEnv(t, prov)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Validation Test"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// 1. Uninitialized session
+	var nilSess *Session
+	if err := nilSess.Send(ctx, api.SendRequest{Content: "test"}); err == nil || !strings.Contains(err.Error(), "uninitialized session") {
+		t.Errorf("nil session Send err = %v, want uninitialized error", err)
+	}
+
+	// 2. Empty message
+	if err := sess.Send(ctx, api.SendRequest{}); !errors.Is(err, ErrEmptyMessage) {
+		t.Errorf("empty Send err = %v, want %v", err, ErrEmptyMessage)
+	}
+
+	// 3. Invalid UUIDv7 ID
+	if err := sess.Send(ctx, api.SendRequest{ID: "invalid-uuid", Content: "hello"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "invalid message id") {
+		t.Errorf("invalid id err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 4. Question combined with ID
+	validID := uuid.Must(uuid.NewV7()).String()
+	if err := sess.Send(ctx, api.SendRequest{ID: validID, Question: &api.QuestionResponse{RequestID: "q1"}}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot combine question/decision with id") {
+		t.Errorf("question with id err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 5. Decision combined with ID
+	if err := sess.Send(ctx, api.SendRequest{ID: validID, Decision: &api.PermissionDecision{RequestID: "p1", Kind: api.DecisionAllowOnce}}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot combine question/decision with id") {
+		t.Errorf("decision with id err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 6. Compact combined with other input
+	if err := sess.Send(ctx, api.SendRequest{Compact: &api.CompactRequest{}, Content: "text"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot combine compaction request with other input") {
+		t.Errorf("compact with content err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 7. Question combined with other input
+	if err := sess.Send(ctx, api.SendRequest{Question: &api.QuestionResponse{RequestID: "q1"}, Command: "ls"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot combine question response with other input") {
+		t.Errorf("question with command err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 8. Decision combined with other input
+	if err := sess.Send(ctx, api.SendRequest{Decision: &api.PermissionDecision{RequestID: "p1"}, Command: "ls"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot specify both message and decision") {
+		t.Errorf("decision with command err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 9. Command combined with message
+	if err := sess.Send(ctx, api.SendRequest{Command: "ls", Content: "hello"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot specify both message and command") {
+		t.Errorf("command with content err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 10. Unsupported block types in user message
+	for _, block := range []api.Block{
+		{Type: "image"},
+		{Type: api.BlockReasoning, Text: "thought"},
+		{Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "tc1", Name: "view"}},
+	} {
+		err := sess.Send(ctx, api.SendRequest{Content: "text", Blocks: []api.Block{block}})
+		if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "block 0") {
+			t.Errorf("invalid block %+v err = %v, want ErrInvalidConfig block 0", block, err)
+		}
+	}
+
+	// 11. Empty text block
+	emptyBlock := api.Block{Type: api.BlockText, Text: ""}
+	err = sess.Send(ctx, api.SendRequest{Blocks: []api.Block{emptyBlock}})
+	if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "invalid or unsupported block 0") {
+		t.Errorf("empty text block err = %v, want ErrInvalidConfig block 0", err)
+	}
+
+	// 12. Valid Send with explicit UUIDv7 ID
+	if err := sess.Send(ctx, api.SendRequest{ID: validID, Content: "valid message with ID"}); err != nil {
+		t.Fatalf("valid Send err: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait err: %v", err)
+	}
+	hist, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("History err: %v", err)
+	}
+	if len(hist) < 1 || hist[0].GetID() != validID {
+		t.Errorf("expected first message ID %s, got %+v", validID, hist)
+	}
+}
+
+func TestSessionSendFileMentionAccess(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{}
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "File Mention Test"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// 1. Pasted prose containing @file:.env in SendRequest.Content WITHOUT Attachments succeeds as ordinary text and does NOT 403!
+	err = sess.Send(ctx, api.SendRequest{Content: "Here is a log with @file:.env embedded in text."})
+	if err != nil {
+		t.Fatalf("expected prose containing @file:.env without Attachments to succeed, got: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait err: %v", err)
+	}
+
+	// 2. Structured SendRequest.Attachments targeting .env returns 403 Forbidden
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Please review",
+		Attachments: []api.Attachment{
+			{Kind: api.AttachmentFile, Ref: "@file:.env", Target: ".env"},
+		},
+	})
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 APIError for .env attachment, got: %v", err)
+	}
+
+	// 3. Structured SendRequest.Attachments targeting escaping path returns 403 Forbidden
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Read outside",
+		Attachments: []api.Attachment{
+			{Kind: api.AttachmentFile, Ref: "@../outside.txt", Target: "../outside.txt"},
+		},
+	})
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 APIError for ../outside.txt attachment, got: %v", err)
+	}
+
+	// 4. Structured SendRequest.Attachments targeting repo internal returns 403 Forbidden
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Read git config",
+		Attachments: []api.Attachment{
+			{Kind: api.AttachmentFile, Ref: "@.git/config", Target: ".git/config"},
+		},
+	})
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 APIError for .git/config attachment, got: %v", err)
+	}
+
+	// 5. Valid structured Attachments succeed and round-trip through timeline (SQLite)
+	testAtts := []api.Attachment{
+		{Kind: api.AttachmentFile, Ref: "@app.go", Target: "app.go", StartLine: 10, EndLine: 20},
+		{Kind: api.AttachmentRule, Ref: "@rule:test-rule", Target: "test-rule"},
+	}
+	err = sess.Send(ctx, api.SendRequest{
+		Content:     "Check @app.go#L10-L20 and @rule:test-rule",
+		Attachments: testAtts,
+	})
+	if err != nil {
+		t.Fatalf("expected valid SendRequest with Attachments to succeed, got: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait err: %v", err)
+	}
+
+	// 6. Timeline reload preserves Message.Attachments after SQLite round-trip
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline.List: %v", err)
+	}
+	var foundMsgEntry *timeline.Entry
+	for i := range entries {
+		if entries[i].Kind == api.TimelineKindMessage && entries[i].Message != nil && entries[i].Message.Role() == "user" {
+			text := entries[i].Message.GetContent().Text()
+			if strings.Contains(text, "Check @app.go#L10-L20") {
+				foundMsgEntry = &entries[i]
+				break
+			}
+		}
+	}
+	if foundMsgEntry == nil {
+		t.Fatalf("expected to find timeline message entry for user prompt")
+	}
+
+	apiEntry, err := ToAPITimelineEntry(*foundMsgEntry)
+	if err != nil {
+		t.Fatalf("ToAPITimelineEntry: %v", err)
+	}
+	if apiEntry.Message == nil {
+		t.Fatalf("expected non-nil apiEntry.Message")
+	}
+	if len(apiEntry.Message.Attachments) != 2 {
+		t.Fatalf("expected 2 attachments preserved after SQLite round-trip, got %d: %+v", len(apiEntry.Message.Attachments), apiEntry.Message.Attachments)
+	}
+	if apiEntry.Message.Attachments[0].Ref != "@app.go" || apiEntry.Message.Attachments[0].StartLine != 10 {
+		t.Errorf("attachment 0 mismatch: %+v", apiEntry.Message.Attachments[0])
+	}
+	if apiEntry.Message.Attachments[1].Target != "test-rule" {
+		t.Errorf("attachment 1 mismatch: %+v", apiEntry.Message.Attachments[1])
+	}
+
+	// Also verify re-opening session coordinator against the same DB preserves Message.Attachments
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	mgr2, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("newTestCoordinator (reopen): %v", err)
+	}
+	t.Cleanup(func() { _ = mgr2.Close() })
+
+	reopenedSess, err := mgr2.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("mgr2.Get: %v", err)
+	}
+	reopenedEntries, err := reopenedSess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("reopened Timeline.List: %v", err)
+	}
+	var foundReopened *timeline.Entry
+	for i := range reopenedEntries {
+		if reopenedEntries[i].Kind == api.TimelineKindMessage && reopenedEntries[i].Message != nil && reopenedEntries[i].Message.Role() == "user" {
+			text := reopenedEntries[i].Message.GetContent().Text()
+			if strings.Contains(text, "Check @app.go#L10-L20") {
+				foundReopened = &reopenedEntries[i]
+				break
+			}
+		}
+	}
+	if foundReopened == nil {
+		t.Fatalf("expected to find reopened timeline message entry")
+	}
+	reopenedAPIEntry, err := ToAPITimelineEntry(*foundReopened)
+	if err != nil {
+		t.Fatalf("ToAPITimelineEntry on reopened: %v", err)
+	}
+	if len(reopenedAPIEntry.Message.Attachments) != 2 {
+		t.Fatalf("expected 2 attachments in reopened session, got %d", len(reopenedAPIEntry.Message.Attachments))
+	}
+}
+
+// TestHumanAgentTriggerEnforcement verifies that top-level human sessions may
+// not select or invoke agents whose triggers exclude "human" (such as the
+// built-in "explore" agent, which sets triggers: [agent]), while subagent
+// sessions are exempt from the restriction.
+func TestHumanAgentTriggerEnforcement(t *testing.T) {
+	ctx := context.Background()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	// The built-in "explore" agent must be loaded and restricted to the
+	// "agent" trigger so the enforcement below is meaningful.
+	if snap, ok := ws.Catalog().GetAgent("explore"); ok {
+		if snap.Agent.CanHumanTrigger() {
+			t.Fatalf("expected built-in explore agent to exclude the human trigger, got triggers %v", snap.Agent.Triggers)
+		}
+	} else {
+		t.Fatalf("expected built-in explore agent to be present in the catalog")
+	}
+
+	// 1. Creating a top-level session with a restricted agent fails.
+	if _, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Restricted",
+		Config: api.SessionConfig{Agent: "explore"},
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Create with restricted agent err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 2. Previewing a session with a restricted agent fails.
+	if _, _, _, _, err := mgr.Preview(ctx, api.SessionConfig{Agent: "explore"}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Preview with restricted agent err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 3. Updating an existing top-level session to a restricted agent fails.
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Mutable"})
+	if err != nil {
+		t.Fatalf("Create base session err: %v", err)
+	}
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Agent: "explore"},
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Update to restricted agent err = %v, want ErrInvalidConfig", err)
+	}
+	// The session agent must remain unchanged after the rejected update.
+	if got := sess.Config.Agent; got == "explore" {
+		t.Errorf("expected session agent to remain unchanged after rejected update, got %q", got)
+	}
+
+	// 4. Spawning "explore" as a subagent (with a parent) succeeds.
+	parent, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Parent"})
+	if err != nil {
+		t.Fatalf("Create parent session err: %v", err)
+	}
+	child, err := New(ctx, Config{
+		Title:       "Child",
+		ParentID:    parent.ID,
+		Parent:      parent,
+		Session:     api.SessionConfig{Agent: "explore"},
+		DB:          mgr.cfg.DB,
+		Workspace:   ws,
+		Gateway:     mgr.cfg.Gateway,
+		Permissions: mgr.cfg.Permissions,
+		Publisher:   mgr.cfg.Publisher,
+		Logger:      mgr.cfg.Logger,
+	})
+	if err != nil {
+		t.Fatalf("New subagent with restricted agent err = %v, want nil", err)
+	}
+	defer child.Close()
+	if child.Config.Agent != "explore" {
+		t.Errorf("expected subagent agent %q, got %q", "explore", child.Config.Agent)
+	}
+}
+
+// TestSessionRenderSystemPromptDeferredTools verifies that renderSystemPrompt
+// renders the tool_search section and <deferred_tools> directory when the agent
+// has deferred custom and MCP tools, and omits it when the agent has none.
+func TestSessionRenderSystemPromptDeferredTools(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// One eager custom tool, one deferred custom tool, and two deferred MCP tools.
+	tools := []struct {
+		file    string
+		content string
+	}{
+		{
+			"eager-tool.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: eager-tool
+  description: An eager tool
+spec:
+  command: ["sh", "-c"]
+---
+Eager tool.
+`,
+		},
+		{
+			"linter.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: linter
+  description: Run the linter
+spec:
+  command: ["golangci-lint", "run"]
+---
+Linter tool.
+`,
+		},
+		{
+			"gh-create.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: mcp__github__create_issue
+  description: Create a GitHub issue
+spec:
+  command: ["sh", "-c"]
+---
+Create issue.
+`,
+		},
+		{
+			"gh-list.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: mcp__github__list_prs
+  description: List GitHub pull requests
+spec:
+  command: ["sh", "-c"]
+---
+List PRs.
+`,
+		},
+	}
+	for _, tl := range tools {
+		if err := os.WriteFile(filepath.Join(agentsDir, "tools", tl.file), []byte(tl.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// deferred-agent extends main so it renders the main template; eager-tool is
+	// eager while linter + the two MCP tools are deferred.
+	deferredAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: deferred-agent
+spec:
+  extends: main
+  tools:
+    - eager-tool
+  policies:
+    tools:
+      include:
+        - eager-tool
+        - linter
+        - mcp__github__create_issue
+        - mcp__github__list_prs
+---
+Deferred agent.
+`
+	// all-eager-agent extends main but declares no MCP tools and loads every
+	// custom tool eagerly, so nothing is deferred.
+	allEagerAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: all-eager-agent
+spec:
+  extends: main
+  tools:
+    - eager-tool
+    - linter
+  policies:
+    tools:
+      include:
+        - eager-tool
+        - linter
+---
+All-eager agent.
+`
+	for _, a := range []struct {
+		name    string
+		content string
+	}{
+		{"deferred-agent", deferredAgent},
+		{"all-eager-agent", allEagerAgent},
+	} {
+		if err := os.WriteFile(filepath.Join(agentsDir, a.name+".agent.md"), []byte(a.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, err := New(ctx, Config{
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		Title:       "Deferred Tools",
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer sess.Close()
+
+	// 1. The deferred agent renders the tool_search section and the
+	//    <deferred_tools> directory listing linter and the github MCP server.
+	prompt := sess.renderSystemPrompt("deferred-agent")
+	if !strings.Contains(prompt, "### `tool_search` tool") {
+		t.Errorf("expected tool_search section in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "<deferred_tools>") || !strings.Contains(prompt, "</deferred_tools>") {
+		t.Errorf("expected <deferred_tools> block in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "linter") {
+		t.Errorf("expected deferred tool 'linter' in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "github") || !strings.Contains(prompt, "mcp__github__*") {
+		t.Errorf("expected github MCP server summary (mcp__github__*) in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "create_issue") || !strings.Contains(prompt, "list_prs") {
+		t.Errorf("expected github short tool names in prompt, got:\n%s", prompt)
+	}
+
+	// 2. The all-eager agent has no deferred tools, so the tool_search section
+	//    and <deferred_tools> block are omitted.
+	eagerPrompt := sess.renderSystemPrompt("all-eager-agent")
+	if strings.Contains(eagerPrompt, "### `tool_search` tool") {
+		t.Errorf("did not expect tool_search section for all-eager agent, got:\n%s", eagerPrompt)
+	}
+	if strings.Contains(eagerPrompt, "<deferred_tools>") {
+		t.Errorf("did not expect <deferred_tools> for all-eager agent, got:\n%s", eagerPrompt)
+	}
+}
+
+// TestSessionRenderSystemPromptRules verifies that renderSystemPrompt appends a
+// <workspace_rules> block for always-active rules and renders the
+// <available_rules> directory for conditional rules, and omits both when the
+// agent has no rules.
+func TestSessionRenderSystemPromptRules(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	rulesDir := filepath.Join(agentsDir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// An always-active rule (injected into <workspace_rules>) and a conditional
+	// rule (surfaced in <available_rules> for on-demand loading).
+	rules := []struct {
+		file    string
+		content string
+	}{
+		{
+			"security-baseline.rule.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: security-baseline
+  description: Security guardrails
+spec:
+  priority: 100
+  triggers:
+    always: true
+---
+Never log secrets or credentials.
+`,
+		},
+		{
+			"go-error-handling.rule.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: go-error-handling
+  description: Go error handling
+spec:
+  priority: 50
+  triggers:
+    globs: ["**/*.go"]
+    keywords: ["error", "fmt"]
+---
+Always wrap and propagate errors in Go.
+`,
+		},
+	}
+	for _, r := range rules {
+		if err := os.WriteFile(filepath.Join(rulesDir, r.file), []byte(r.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// rules-agent extends main so it renders the main template and resolves the
+	// workspace rules.
+	rulesAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: rules-agent
+spec:
+  extends: main
+---
+Rules agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "rules-agent.agent.md"), []byte(rulesAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, err := New(ctx, Config{
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		Title:       "Rules",
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	// 1. The always-active rule is statically appended in <workspace_rules>.
+	prompt := sess.renderSystemPrompt("rules-agent")
+	if !strings.Contains(prompt, "<workspace_rules>") || !strings.Contains(prompt, "</workspace_rules>") {
+		t.Errorf("expected <workspace_rules> block in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "security-baseline") || !strings.Contains(prompt, "Never log secrets") {
+		t.Errorf("expected always rule 'security-baseline' in <workspace_rules>, got:\n%s", prompt)
+	}
+
+	// 2. The conditional rule is surfaced in <available_rules>.
+	if !strings.Contains(prompt, "<available_rules>") || !strings.Contains(prompt, "</available_rules>") {
+		t.Errorf("expected <available_rules> block in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "go-error-handling") {
+		t.Errorf("expected conditional rule 'go-error-handling' in <available_rules>, got:\n%s", prompt)
+	}
+
+	// 3. The conditional rule must not be statically injected into
+	//    <workspace_rules> (only always-active rules belong there). The agent
+	//    template's rules_and_guidelines prose mentions `<workspace_rules>` in
+	//    backticks, so anchor on the rendered block signature (opening tag
+	//    followed by a newline) to isolate the appended block.
+	if wsStart := strings.Index(prompt, "<workspace_rules>\n"); wsStart >= 0 {
+		if wsEnd := strings.Index(prompt[wsStart:], "</workspace_rules>"); wsEnd >= 0 {
+			block := prompt[wsStart : wsStart+wsEnd]
+			if strings.Contains(block, "go-error-handling") {
+				t.Errorf("conditional rule 'go-error-handling' should not appear in <workspace_rules>: %q", block)
+			}
+		}
+	}
+
+	// 4. The "no blocks" case is covered by TestSessionRenderSystemPromptNoRules,
+	//    which uses a rule-free workspace. Always-active rules are attached to
+	//    every agent in scope regardless of the agent's `rules` field, so a
+	//    `rules: []` agent in this workspace would still receive the always-active
+	//    security-baseline rule.
+}
+
+// TestSessionRenderSystemPromptNoRules verifies that when a workspace has no
+// rules at all, the system prompt omits both the <workspace_rules> and
+// <available_rules> blocks.
+func TestSessionRenderSystemPromptNoRules(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	sess, err := New(ctx, Config{
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		Title:       "NoRules",
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	prompt := sess.renderSystemPrompt("")
+	if strings.Contains(prompt, "<workspace_rules>") {
+		t.Errorf("did not expect <workspace_rules> for rule-free workspace, got:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "<available_rules>") {
+		t.Errorf("did not expect <available_rules> for rule-free workspace, got:\n%s", prompt)
+	}
+}
+
+// TestSessionRuleTimelineEntry verifies that a RuleLoaded event is persisted to
+// the session timeline as a TimelineKindRule entry and published as an
+// EntryAddedEvent carrying the RuleRecord. This exercises the exact
+// appendTimeline + publishEntryAdded path that the turn loop uses when it
+// receives a harness.RuleLoaded event.
+func TestSessionRuleTimelineEntry(t *testing.T) {
+	ctx := context.Background()
+	_, _, _, pub, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Rule Timeline"})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	pub.reset()
+
+	record := api.RuleRecord{
+		Rule:    "go-error-handling",
+		Trigger: "manual",
+		Matched: "@rule:go-error-handling",
+		Path:    ".agents/rules/go-error-handling.rule.md",
+	}
+	entry := timeline.NewRuleEntry(record)
+	if err := sess.appendTimeline(ctx, entry); err != nil {
+		t.Fatalf("appendTimeline: %v", err)
+	}
+
+	// Verify the timeline contains the entry.
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+	var found *timeline.Entry
+	for i := range entries {
+		if entries[i].Kind == api.TimelineKindRule {
+			found = &entries[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a TimelineKindRule entry in the timeline, got %+v", entries)
+	}
+	if found.Rule == nil || found.Rule.Rule != "go-error-handling" || found.Rule.Trigger != "manual" || found.Rule.Matched != "@rule:go-error-handling" {
+		t.Fatalf("unexpected rule record: %+v", found.Rule)
+	}
+
+	// Verify the published EntryAddedEvent carries the Rule field.
+	var publishedRule *api.RuleRecord
+	for _, ev := range pub.recorded() {
+		if eae, ok := ev.(api.EntryAddedEvent); ok && eae.Entry.Kind == api.TimelineKindRule {
+			publishedRule = eae.Entry.Rule
+		}
+	}
+	if publishedRule == nil || publishedRule.Rule != "go-error-handling" || publishedRule.Trigger != "manual" {
+		t.Fatalf("expected a published EntryAddedEvent with Rule, got %+v", publishedRule)
+	}
+}
+
+// TestSessionRuleLoadedStreamIntegration drives a full turn where a tool call
+// touches a file matching a conditional rule, verifying the harness RuleLoaded
+// event is persisted as a TimelineKindRule entry, published as an
+// EntryAddedEvent, and that the injected <system_reminders> message reaches the
+// model without appearing as a timeline message entry.
+func TestSessionRuleLoadedStreamIntegration(t *testing.T) {
+	ctx := context.Background()
+
+	var turnCount int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			turnCount++
+			if turnCount == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "tc-rule-view",
+								Name: "view",
+								Args: map[string]any{"path": "main.go"},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			// Turn 2: the rule reminder must be visible to the model even though
+			// it never surfaces as a visible timeline message.
+			var sawReminder bool
+			for _, m := range req.Messages {
+				if u, ok := m.(*message.User); ok && strings.Contains(u.GetContent().Text(), "<system_reminders>") &&
+					strings.Contains(u.GetContent().Text(), "go-globs") {
+					sawReminder = true
+					break
+				}
+			}
+			if !sawReminder {
+				return nil, errors.New("expected <system_reminders> rule message in second LLM turn")
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content:   []message.Block{&message.TextBlock{Text: "Done."}},
+					Done:      true,
+				},
+			}, nil
+		},
+	}
+
+	_, ws, _, pub, mgr := setupTestEnv(t, prov)
+
+	if err := os.WriteFile(filepath.Join(ws.RootDir(), "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile main.go: %v", err)
+	}
+	rulesDir := filepath.Join(ws.RootDir(), ".agents", "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll rules: %v", err)
+	}
+	ruleManifest := `---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: go-globs
+  description: Go file conventions
+spec:
+  priority: 20
+  triggers:
+    globs: ["**/*.go"]
+---
+Always wrap and propagate errors in Go.
+`
+	if err := os.WriteFile(filepath.Join(rulesDir, "go-globs.rule.md"), []byte(ruleManifest), 0o644); err != nil {
+		t.Fatalf("WriteFile rule: %v", err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Rule Stream"})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	pub.reset()
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "Read main.go"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	// 1. The timeline holds exactly one rule entry describing the glob trigger.
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline.List: %v", err)
+	}
+	var ruleEntries []timeline.Entry
+	var messageEntries int
+	for _, e := range entries {
+		switch e.Kind {
+		case api.TimelineKindRule:
+			ruleEntries = append(ruleEntries, e)
+		case api.TimelineKindMessage:
+			messageEntries++
+		}
+	}
+	if len(ruleEntries) != 1 {
+		t.Fatalf("expected 1 TimelineKindRule entry, got %d (%+v)", len(ruleEntries), entries)
+	}
+	rec := ruleEntries[0].Rule
+	if rec == nil || rec.Rule != "go-globs" || rec.Trigger != "glob" || rec.Matched != "main.go" {
+		t.Fatalf("unexpected rule record: %+v", rec)
+	}
+
+	// 2. A matching EntryAddedEvent was published for the rule entry.
+	var sawPublished bool
+	for _, ev := range pub.recorded() {
+		if eae, ok := ev.(api.EntryAddedEvent); ok && eae.Entry.Kind == api.TimelineKindRule &&
+			eae.Entry.Rule != nil && eae.Entry.Rule.Rule == "go-globs" {
+			sawPublished = true
+			break
+		}
+	}
+	if !sawPublished {
+		t.Fatal("expected published EntryAddedEvent with go-globs rule record")
+	}
+
+	// 3. The hidden reminder must not leak into the visible timeline messages.
+	//    Expected visible messages: User, Assistant(ToolCall), Tool, Assistant.
+	history, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("Timeline.Messages: %v", err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("expected 4 visible history messages, got %d: %+v", len(history), history)
+	}
+	for _, m := range history {
+		if u, ok := m.(*message.User); ok && harness.SystemKindOf(u) != "" {
+			t.Errorf("hidden %q reminder leaked into timeline messages", harness.SystemKindOf(u))
+		}
+	}
+	if messageEntries != 4 {
+		t.Errorf("expected 4 message timeline entries, got %d", messageEntries)
+	}
+}
+
+// TestSessionSandboxEnvIsolatesProviderAndUserSecrets verifies that configured
+// ModelProvider auth.env keys, TaskSmith's global ~/.config/tasksmith/.env, and
+// TASKSMITH_* variables stay out of the session sandbox while preserving the
+// user's developer shell environment and refreshing live on workspace reload.
+func TestSessionSandboxEnvIsolatesProviderAndUserSecrets(t *testing.T) {
+	ctx := context.Background()
+
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-leak-check")
+	t.Setenv("ROTATED_CORP_LLM_KEY", "corp-llm-secret")
+	t.Setenv("GH_TOKEN", "ghp_user_cli_token")
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-session-test")
+
+	_, ws, _, _, mgr := setupTestEnv(t, &fakeProvider{})
+
+	userEnvPath, err := xdg.SubConfigDir(".env")
+	if err != nil {
+		t.Fatalf("xdg.SubConfigDir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(userEnvPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userEnvPath, []byte("GLOBAL_SETUP_KEY=from-user-config-env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	providerYAML := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: anthropic
+spec:
+  type: anthropic
+  auth:
+    type: api-key
+    env: ANTHROPIC_API_KEY
+  models:
+    - id: claude-test
+      name: claude-test
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "anthropic.provider.yaml"), []byte(providerYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.RootDir(), ".env"), []byte("APP_FIXTURE_SECRET=local-test-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	if ws.Env()["ANTHROPIC_API_KEY"] != "sk-ant-leak-check" {
+		t.Fatal("expected workspace Env() to keep ANTHROPIC_API_KEY for gateway resolution")
+	}
+	if ws.Env()["GLOBAL_SETUP_KEY"] != "from-user-config-env" {
+		t.Fatal("expected workspace Env() to keep ~/.config/tasksmith/.env values")
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "env provenance"})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	env := sess.Sandbox.Env()
+	for _, blocked := range []string{"ANTHROPIC_API_KEY", "GLOBAL_SETUP_KEY", "TASKSMITH_APPNAME"} {
+		if got, ok := env[blocked]; ok {
+			t.Errorf("sandbox env leaked %s=%q to subprocesses", blocked, got)
+		}
+	}
+	if env["GH_TOKEN"] != "ghp_user_cli_token" {
+		t.Errorf("sandbox env dropped user GH_TOKEN: %q", env["GH_TOKEN"])
+	}
+	if env["APP_FIXTURE_SECRET"] != "local-test-secret" {
+		t.Errorf("sandbox env dropped trusted project .env APP_FIXTURE_SECRET: %q", env["APP_FIXTURE_SECRET"])
+	}
+	if env["PATH"] == "" {
+		t.Error("sandbox env lost PATH")
+	}
+
+	// Before corp.provider.yaml exists, ROTATED_CORP_LLM_KEY is an ordinary host env var.
+	if env["ROTATED_CORP_LLM_KEY"] != "corp-llm-secret" {
+		t.Fatalf("expected unconfigured host var before reload, got %q", env["ROTATED_CORP_LLM_KEY"])
+	}
+
+	// Configure a new provider and update project .env, then reload and refresh the open session.
+	corpYAML := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: corp
+spec:
+  type: openai
+  endpoint: https://llm.corp.example
+  auth:
+    type: api-key
+    env: ROTATED_CORP_LLM_KEY
+  models:
+    - id: corp-chat
+      name: corp-chat
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "corp.provider.yaml"), []byte(corpYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.RootDir(), ".env"), []byte("APP_FIXTURE_SECRET=reloaded-test-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload after provider update: %v", err)
+	}
+	sess.Refresh(ctx)
+
+	refreshed := sess.Sandbox.Env()
+	if got, ok := refreshed["ROTATED_CORP_LLM_KEY"]; ok {
+		t.Errorf("refreshed sandbox env still exposed newly configured provider key ROTATED_CORP_LLM_KEY=%q", got)
+	}
+	if refreshed["APP_FIXTURE_SECRET"] != "reloaded-test-secret" {
+		t.Errorf("refreshed sandbox env did not pick up updated project .env: %q", refreshed["APP_FIXTURE_SECRET"])
+	}
+}
+
+// newSandboxPolicyCoordinator builds an isolated workspace/coordinator whose
+// WORKSPACE.md optionally declares workspace-level policies.tools.readOnly and
+// whose .agents directory optionally carries a strict-agent with the same
+// policy, so tests can create sessions under each read-only trigger.
+func newSandboxPolicyCoordinator(t *testing.T, wsPolicies string, restricted bool) *testCoordinator {
+	t.Helper()
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-session-sandbox-policy-test")
+	t.Cleanup(func() {
+		xdg.ClearCache()
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "sandbox-policy.db")
+	db, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	wsDir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: sandbox-policy\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n" + wsPolicies + "---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	strictAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: strict-agent\n  description: Read-only agent\nspec:\n  triggers:\n    - human\n  subagents:\n    - child-agent\n  policies:\n    tools:\n      readOnly: true\n---\nSTRICT_AGENT_PROMPT_MARKER\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "strict-agent.agent.md"), []byte(strictAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plainAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: plain-agent\n  description: Plain agent\nspec:\n  triggers:\n    - human\n  subagents:\n    - child-agent\n---\nPLAIN_AGENT_PROMPT_MARKER\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "plain-agent.agent.md"), []byte(plainAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: child-agent\n  description: Subagent without explicit policies\nspec:\n  triggers:\n    - subagent\n---\nCHILD_AGENT_PROMPT_MARKER\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "child-agent.agent.md"), []byte(childAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(context.Background(), wsDir,
+		workspace.WithBuiltinFS(builtin.FS()),
+		workspace.WithRestrictedMode(restricted),
+	)
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	mgr, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return newFakeGateway(&fakeProvider{}) },
+		Publisher:   &testPublisher{},
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("newTestCoordinator: %v", err)
+	}
+	return mgr
+}
+
+func TestSessionSandboxModeSelection(t *testing.T) {
+	ctx := context.Background()
+	wantNative := sandbox.DefaultMode()
+
+	_, _, _, _, mgr := setupTestEnv(t, &fakeProvider{})
+
+	sessDefault, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "default sandbox"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sessDefault.Sandbox.Mode() != wantNative {
+		t.Errorf("default session sandbox mode = %v, want %v", sessDefault.Sandbox.Mode(), wantNative)
+	}
+
+	sessLocal, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "local sandbox",
+		Config: api.SessionConfig{Sandbox: "local"},
+	})
+	if err != nil {
+		t.Fatalf("Create local: %v", err)
+	}
+	if sessLocal.Sandbox.Mode() != sandbox.ModeLocal {
+		t.Errorf("explicit local request sandbox mode = %v, want %v", sessLocal.Sandbox.Mode(), sandbox.ModeLocal)
+	}
+
+	sessNative, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "native sandbox",
+		Config: api.SessionConfig{Sandbox: "native"},
+	})
+	if err != nil {
+		t.Fatalf("Create native: %v", err)
+	}
+	if sessNative.Sandbox.Mode() != wantNative {
+		t.Errorf("native request sandbox mode = %v, want %v", sessNative.Sandbox.Mode(), wantNative)
+	}
+
+	if _, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "invalid sandbox",
+		Config: api.SessionConfig{Sandbox: "docker"},
+	}); err == nil {
+		t.Error("Create with unknown sandbox backend should error")
+	}
+}
+
+func TestSessionSandboxModeImmutableAndReported(t *testing.T) {
+	ctx := context.Background()
+	wantNative := sandbox.DefaultMode()
+
+	_, _, _, _, mgr := setupTestEnv(t, &fakeProvider{})
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "reported sandbox",
+		Config: api.SessionConfig{Sandbox: "local"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sess.Sandbox.Mode() != sandbox.ModeLocal {
+		t.Errorf("session sandbox mode = %v, want %v", sess.Sandbox.Mode(), sandbox.ModeLocal)
+	}
+	if apiSess := ToAPISession(sess); apiSess.SandboxMode != sandbox.ModeLocal {
+		t.Errorf("api.Session.SandboxMode = %q, want %q", apiSess.SandboxMode, sandbox.ModeLocal)
+	}
+
+	other, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "reported sandbox",
+		Config: api.SessionConfig{Sandbox: "native"},
+	})
+	if err != nil {
+		t.Fatalf("Create conflicting sandbox request: %v", err)
+	}
+	if other.ID == sess.ID {
+		t.Error("differing sandbox requests must not reuse the same session")
+	}
+	if other.Sandbox.Mode() != wantNative {
+		t.Errorf("native request sandbox mode = %v, want %v", other.Sandbox.Mode(), wantNative)
+	}
+
+	if err := sess.Update(ctx, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Sandbox: "native"},
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Update sandbox backend error = %v, want ErrInvalidConfig", err)
+	}
+	if sess.Sandbox.Mode() != sandbox.ModeLocal {
+		t.Errorf("session sandbox mode changed after rejected update: %v", sess.Sandbox.Mode())
+	}
+
+	if err := sess.Update(ctx, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Sandbox: "local"},
+	}); err != nil {
+		t.Errorf("idempotent local update should succeed, got %v", err)
+	}
+
+	implicit, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "implicit sandbox"})
+	if err != nil {
+		t.Fatalf("Create implicit: %v", err)
+	}
+	if err := implicit.Update(ctx, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Sandbox: wantNative},
+	}); err != nil {
+		t.Errorf("update matching the effective backend should be a no-op, got %v", err)
+	}
+	if err := implicit.Update(ctx, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Sandbox: "docker"},
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Update with unknown backend error = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestSubagentSandboxModePersistsAcrossRestore(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Subagent answer"}, uuid.NewString(), nil
+		},
+	}
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	parent, err := New(ctx, Config{
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		Title:       "Local parent",
+		Session:     api.SessionConfig{Sandbox: "local"},
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New parent: %v", err)
+	}
+	t.Cleanup(func() { _ = parent.Close() })
+
+	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+		Agent:     "explore",
+		Title:     "Persisted sandbox child",
+		Prompt:    "Find all interfaces",
+		Workspace: "inherit",
+	})
+	if err != nil {
+		t.Fatalf("InvokeSubagent: %v", err)
+	}
+	children := parent.Children()
+	if len(children) != 1 || children[0].ID != out.SessionID {
+		t.Fatalf("expected one registered child, got %+v", children)
+	}
+	child := children[0]
+	t.Cleanup(func() { _ = child.Close() })
+
+	if child.Config.Sandbox != sandbox.ModeLocal {
+		t.Errorf("child persisted Sandbox = %q, want %q", child.Config.Sandbox, sandbox.ModeLocal)
+	}
+
+	restored, err := Open(ctx, &Session{ID: child.ID, Title: child.Title, Config: child.Config}, Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("Open restored child: %v", err)
+	}
+	t.Cleanup(func() { _ = restored.Close() })
+
+	if restored.Sandbox.Mode() != sandbox.ModeLocal {
+		t.Errorf("restored child sandbox mode = %v, want %v (parent link absent on restore)", restored.Sandbox.Mode(), sandbox.ModeLocal)
+	}
+}
+
+func TestSessionReadOnlyPolicyEnforcement(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("plain workspace stays writable", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", false)
+		sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "plain"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if sess.Sandbox.ReadOnly() {
+			t.Error("plain workspace session sandbox should not be read-only")
+		}
+	})
+
+	t.Run("restricted workspace is read-only", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", true)
+		sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "restricted"})
+		if err != nil {
+			t.Fatalf("Create restricted: %v", err)
+		}
+		if !sess.Sandbox.ReadOnly() {
+			t.Error("restricted workspace session sandbox should be read-only")
+		}
+	})
+
+	t.Run("workspace policies.tools.readOnly is enforced", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "  policies:\n    tools:\n      readOnly: true\n", false)
+		sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "ws readonly"})
+		if err != nil {
+			t.Fatalf("Create ws readonly: %v", err)
+		}
+		if !sess.Sandbox.ReadOnly() {
+			t.Error("workspace policies.tools.readOnly should make session sandbox read-only")
+		}
+	})
+
+	t.Run("agent policies.tools.readOnly is enforced", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", false)
+		sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+			Title:  "agent readonly",
+			Config: api.SessionConfig{Agent: "strict-agent"},
+		})
+		if err != nil {
+			t.Fatalf("Create agent readonly: %v", err)
+		}
+		if !sess.Sandbox.ReadOnly() {
+			t.Error("agent policies.tools.readOnly should make session sandbox read-only")
+		}
+	})
+}
+
+func TestSessionReadOnlyPolicySubagentInheritance(t *testing.T) {
+	ctx := context.Background()
+
+	newChild := func(t *testing.T, mgr *testCoordinator, parent *Session, agent string) *Session {
+		t.Helper()
+		child, err := New(ctx, Config{
+			Title:       "child " + agent,
+			Parent:      parent,
+			Session:     api.SessionConfig{Agent: agent, Sandbox: "local"},
+			DB:          mgr.cfg.DB,
+			Workspace:   mgr.cfg.Workspace,
+			Gateway:     mgr.cfg.Gateway,
+			Catalog:     mgr.cfg.Catalog,
+			Permissions: mgr.cfg.Permissions,
+			Publisher:   &testPublisher{},
+			Logger:      log.Default(),
+		})
+		if err != nil {
+			t.Fatalf("New child: %v", err)
+		}
+		t.Cleanup(func() { _ = child.Close() })
+		return child
+	}
+
+	t.Run("child of read-only parent inherits read-only", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", false)
+		parent, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+			Title:  "strict parent",
+			Config: api.SessionConfig{Agent: "strict-agent"},
+		})
+		if err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+		if !parent.Sandbox.ReadOnly() {
+			t.Fatal("strict-agent parent sandbox must be read-only")
+		}
+		child := newChild(t, mgr, parent, "child-agent")
+		if !child.Sandbox.ReadOnly() {
+			t.Error("subagent must inherit parent read-only kernel ceiling")
+		}
+	})
+
+	t.Run("child of writable parent stays writable", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", false)
+		parent, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+			Title:  "plain parent",
+			Config: api.SessionConfig{Agent: "plain-agent"},
+		})
+		if err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+		if parent.Sandbox.ReadOnly() {
+			t.Fatal("plain-agent parent sandbox must be writable")
+		}
+		child := newChild(t, mgr, parent, "child-agent")
+		if child.Sandbox.ReadOnly() {
+			t.Error("subagent of writable parent must stay writable")
+		}
+	})
+}

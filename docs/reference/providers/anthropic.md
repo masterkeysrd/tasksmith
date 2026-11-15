@@ -1,0 +1,120 @@
+# Anthropic Provider
+
+The **Anthropic** provider connects TaskSmith to Anthropic's Claude family of models via the Anthropic Messages API (`https://api.anthropic.com`).
+
+---
+
+## 1. Overview & Capabilities
+
+Anthropic models serve as primary System 2 reasoning and conversational agents in TaskSmith:
+- **Completion (`completion` — System 2)**: Multi-turn reasoning, coding, and tool execution using models such as `claude-sonnet-5-5`, `claude-opus-5-5`, and `claude-haiku-5-5`.
+- **Decision (`decision` — System 1)**: Evaluates classification and routing via TaskSmith's completion fallback adapter, wrapping Claude with structured output schemas.
+- **Extended Thinking & Prompt Caching**: Natively supports thinking effort levels (`thinking.type: effort`) and automatic prompt prefix caching for reduced latency and token cost.
+
+---
+
+## 2. Quick Start
+
+### Step 1: Set Your API Key
+
+Define `ANTHROPIC_API_KEY` in your workspace `.env` (or globally in `~/.config/tasksmith/.env`):
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-api03-...
+```
+
+### Step 2: Configure Provider Manifest
+
+Create `.agents/providers/anthropic.yaml`:
+
+```yaml
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: anthropic
+spec:
+  type: anthropic
+  endpoint: https://api.anthropic.com
+  defaultModels:
+    completion: claude-sonnet-5-5
+  auth:
+    type: env
+    env: ANTHROPIC_API_KEY
+  models:
+    - id: claude-sonnet-5-5
+      name: claude-sonnet-5-5
+      label: Claude 5.5 Sonnet
+      limits:
+        context: 1000000
+        output: 128000
+      capabilities:
+        completion: true
+        tools: true
+        attachment: true
+        thinking:
+          - type: effort
+            default: medium
+            isDefault: true
+            allowedEfforts: [low, medium, high]
+      cost:
+        input: 0.000003
+        output: 0.000015
+        cacheRead: 0.0000003
+        cacheWrite: 0.00000375
+    - id: claude-opus-5-5
+      name: claude-opus-5-5
+      label: Claude 5.5 Opus
+      limits:
+        context: 1000000
+        output: 128000
+      capabilities:
+        completion: true
+        tools: true
+        thinking:
+          - type: effort
+            default: high
+            isDefault: true
+            allowedEfforts: [low, medium, high]
+    - id: claude-haiku-5-5
+      name: claude-haiku-5-5
+      label: Claude 5.5 Haiku
+      limits:
+        context: 200000
+        output: 64000
+      capabilities:
+        completion: true
+        tools: true
+```
+
+---
+
+## 3. Extended Thinking & Prompt Caching
+
+- **Thinking**: Use `/effort` for model-supported effort levels or `/budget` for supported token budgets. Available values depend on the resolved model profile. When budgeted or adaptive extended thinking is active, TaskSmith omits configured temperature and displays a session warning.
+- **Prompt Caching**: TaskSmith enables Anthropic's *automatic* prompt caching on every session turn: each request carries a top-level `cache_control` marker, so Anthropic caches everything up to the last cacheable block (system prompt, tools, and conversation history) and serves the previously-sent prefix as cache reads on later turns. Title-generation calls skip caching, since their one-shot prompts can never produce a hit worth the write cost. Prefixes below Anthropic's minimum cacheable size (1024 tokens on current Claude models) are simply billed normally. Declare `cost.cacheRead` and `cost.cacheWrite` to track savings in session metrics.
+
+For the complete manifest schema and capability properties, see the [Providers Overview](../providers.md).
+
+---
+
+## 4. Custom Endpoints & Reverse Proxies
+
+For enterprise setups using AWS Bedrock, Google Vertex AI, or an internal API gateway, set `spec.endpoint`, `spec.headers`, and `spec.auth.type: bearer`:
+
+```yaml
+spec:
+  endpoint: https://anthropic-proxy.corp.internal.net
+  headers:
+    X-Corporate-ID: engineering-ai
+  auth:
+    type: bearer
+    env: CORP_ANTHROPIC_TOKEN
+```
+
+---
+
+## Related Documentation
+
+- [Providers Overview & Manifest Reference](../providers.md)
+- [Gateway Architecture](../../architecture/gateway.md)
+- [OpenAI Provider Guide](./openai.md)

@@ -1,0 +1,39 @@
+package icon
+
+import (
+	"github.com/lrstanley/go-nf/glyphs/neo"
+	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
+)
+
+// FileIconProps defines properties for the FileIcon component.
+type FileIconProps struct {
+	Path  string
+	IsDir bool
+}
+
+// FileIcon resolves a Nerd Font icon dynamically by the given file path.
+// It relies on the go-nf library's internal map-lookup cache (which is O(1) and extremely fast),
+// and falls back to a default file icon if no matching icon is found.
+var FileIcon = kitex.FC("FileIcon", func(props FileIconProps) kitex.Node {
+	t := theme.UseTheme()
+	dark := t.Type != "light"
+
+	if props.IsDir {
+		return kitex.Span(kitex.SpanProps{
+			Style: style.S().Foreground(t.Color.Text.Secondary),
+		}, Directory)
+	}
+
+	res := neo.ByPath(props.Path)
+	if res == nil {
+		return kitex.Span(kitex.SpanProps{
+			Style: style.S().Foreground(t.Color.Text.Secondary),
+		}, File)
+	}
+
+	return kitex.Span(kitex.SpanProps{
+		Style: style.S().Foreground(res.Color(dark)),
+	}, kitex.Text(res.String()))
+})

@@ -1,0 +1,252 @@
+package permissions
+
+import (
+	"fmt"
+	"net/url"
+	"path"
+	"regexp"
+	"strings"
+
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+)
+
+// ParseRule parses a permission rule string in "tool(pattern)" format into its
+// constituent tool name and pattern components.
+func ParseRule(raw string) (toolName, pattern string, err error) {
+	raw = strings.TrimSpace(raw)
+	openIdx := strings.Index(raw, "(")
+	if openIdx < 0 || !strings.HasSuffix(raw, ")") {
+		return "", "", fmt.Errorf("%w: rule %q must be in tool(pattern) format", ErrInvalidRule, raw)
+	}
+
+	toolName = raw[:openIdx]
+	if toolName == "" || strings.ContainsAny(toolName, " \t\n\r()") {
+		return "", "", fmt.Errorf("%w: invalid tool name in %q", ErrInvalidRule, raw)
+	}
+	if strings.Index(raw, ")") != len(raw)-1 || strings.Count(raw, "(") != 1 {
+		return "", "", fmt.Errorf("%w: invalid rule format %q", ErrInvalidRule, raw)
+	}
+	pattern = strings.TrimSpace(raw[openIdx+1 : len(raw)-1])
+	if pattern == "" || strings.ContainsAny(pattern, "()") {
+		return "", "", fmt.Errorf("%w: invalid pattern in %q", ErrInvalidRule, raw)
+	}
+
+	return toolName, pattern, nil
+}
+
+// FormatRule builds a normalized "tool(pattern)" rule string, defaulting an empty
+// pattern to "*".
+func FormatRule(toolName, pattern string) string {
+	toolName = strings.TrimSpace(toolName)
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		pattern = "*"
+	}
+	return fmt.Sprintf("%s(%s)", toolName, pattern)
+}
+
+// UnsandboxedToolName maps a regular tool name to the rule namespace its
+// unsandboxed bypass plans are matched and granted under. Keeping unsandboxed
+// execution in a separate namespace means a regular bash(git *) allow rule can
+// never auto-approve a bypass_sandbox retry; users must grant
+// bash_unsandboxed(git *) explicitly.
+func UnsandboxedToolName(toolName string) string {
+	return toolName + "_unsandboxed"
+}
+
+// IsUnsandboxedToolName reports whether rule tool names target the
+// unsandboxed execution namespace.
+func IsUnsandboxedToolName(name string) bool {
+	return strings.HasSuffix(name, "_unsandboxed")
+}
+
+// MatchRule checks whether rule matches the planned tool invocation.
+func MatchRule(rule string, plan *tools.Plan) bool {
+	if plan == nil {
+		return false
+	}
+	toolName, pattern, err := ParseRule(rule)
+	if err != nil {
+		return false
+	}
+
+	if plan.BypassSandbox {
+		// A bypass plan only matches rules in its own unsandboxed namespace;
+		// the wildcard rule matches everything, as elsewhere.
+		if toolName != "*" && toolName != UnsandboxedToolName(plan.ToolName) {
+			return false
+		}
+		return matchTarget(pattern, plan.Target)
+	}
+
+	// A sandboxed plan never matches an unsandboxed-namespace rule: granting
+	// bash_unsandboxed(...) must not silently widen sandboxed approvals.
+	if IsUnsandboxedToolName(toolName) {
+		return false
+	}
+
+	if toolName != "*" && !matchPattern(toolName, plan.ToolName) {
+		return false
+	}
+
+	return matchTarget(pattern, plan.Target)
+}
+
+func matchTarget(pattern, target string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" || pattern == "*" {
+		return true
+	}
+	if pattern == target {
+		return true
+	}
+
+	// URL host matching when url.Parse(target) has a non-empty u.Host.
+	if u, err := url.Parse(target); err == nil && u.Host != "" {
+		if pattern == u.Host || pattern == u.Hostname() || matchPattern(pattern, u.Host) || matchPattern(pattern, u.Hostname()) {
+			return true
+		}
+	}
+
+	// Directory prefix /** glob matching.
+	if before, ok := strings.CutSuffix(pattern, "/**"); ok {
+		prefix := strings.TrimSuffix(before, "/")
+		if prefix == "" || prefix == "." {
+			return true
+		}
+		if target == prefix || strings.HasPrefix(target, prefix+"/") {
+			return true
+		}
+	}
+
+	// Command / string prefix * matching (without **).
+	if strings.HasSuffix(pattern, "*") && !strings.Contains(pattern, "**") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		if strings.HasPrefix(target, prefix) || strings.TrimSpace(prefix) == target {
+			return true
+		}
+	}
+
+	return matchPattern(pattern, target)
+}
+
+func matchPattern(pattern, target string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "*" {
+		return true
+	}
+	if pattern == target {
+		return true
+	}
+	if ok, err := path.Match(pattern, target); err == nil && ok {
+		return true
+	}
+	reStr := globToRegex(pattern)
+	if re, err := regexp.Compile(reStr); err == nil {
+		return re.MatchString(target)
+	}
+	return false
+}
+
+func globToRegex(glob string) string {
+	var sb strings.Builder
+	sb.WriteString("^")
+	for i := 0; i < len(glob); i++ {
+		ch := glob[i]
+		switch ch {
+		case '*':
+			if i+1 < len(glob) && glob[i+1] == '*' {
+				sb.WriteString(".*")
+				i++
+				if i+1 < len(glob) && glob[i+1] == '/' {
+					i++
+				}
+			} else {
+				sb.WriteString("[^/]*")
+			}
+		case '?':
+			sb.WriteString("[^/]")
+		case '.', '+', '(', ')', '|', '^', '$', '{', '}', '\\':
+			sb.WriteByte('\\')
+			sb.WriteByte(ch)
+		default:
+			sb.WriteByte(ch)
+		}
+	}
+	sb.WriteString("$")
+	return sb.String()
+}
+
+func isEnvAssignment(f string) bool {
+	return !strings.HasPrefix(f, "-") && strings.Contains(f, "=")
+}
+
+func isShellOperator(s string) bool {
+	switch s {
+	case "&&", "||", ";", "|", "&", ">", ">>", "<":
+		return true
+	default:
+		return false
+	}
+}
+
+func deriveCommandGrantRules(toolName, target string) []string {
+	fields := strings.Fields(target)
+	for len(fields) > 0 && isEnvAssignment(fields[0]) {
+		fields = fields[1:]
+	}
+	if len(fields) == 0 {
+		return []string{FormatRule(toolName, "*")}
+	}
+	cmd := strings.TrimRight(fields[0], ";&|")
+	if cmd == "" || strings.ContainsAny(cmd, "()\"'\n\r") || len(cmd) > 40 {
+		return []string{FormatRule(toolName, "*")}
+	}
+	if len(fields) >= 2 {
+		sub := fields[1]
+		if !strings.HasPrefix(sub, "-") &&
+			!isShellOperator(sub) &&
+			!strings.ContainsAny(sub, "()\"'=/\\;|&<>") &&
+			len(sub) <= 24 {
+			return deduplicateRules([]string{
+				FormatRule(toolName, cmd+" "+sub+" *"),
+				FormatRule(toolName, cmd+" *"),
+			})
+		}
+	}
+	return []string{FormatRule(toolName, cmd+" *")}
+}
+
+// DeriveGrantRules generates candidate "tool(pattern)" permission rules
+// suitable for PermissionRequest.GrantPatterns based on action and target.
+func DeriveGrantRules(toolName string, action api.ActionType, target string) []string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return []string{FormatRule(toolName, "*")}
+	}
+
+	if toolName == "bash" || action == api.ActionExec {
+		return deriveCommandGrantRules(toolName, target)
+	}
+
+	switch action {
+	case api.ActionRead, api.ActionWrite, api.ActionDelete:
+		rules := []string{FormatRule(toolName, target)}
+		dir := path.Dir(target)
+		if dir != "." && dir != "" && dir != "/" {
+			rules = append(rules, FormatRule(toolName, dir+"/**"))
+		}
+		return deduplicateRules(rules)
+	case api.ActionNet:
+		if u, err := url.Parse(target); err == nil && u.Host != "" {
+			return deduplicateRules([]string{
+				FormatRule(toolName, u.Host),
+				FormatRule(toolName, target),
+			})
+		}
+		return []string{FormatRule(toolName, target)}
+	default:
+		return []string{FormatRule(toolName, target)}
+	}
+}

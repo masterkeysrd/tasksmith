@@ -1,0 +1,45 @@
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: typesafe
+spec:
+  type: typesafe
+  endpoint: https://api.typesafe.ai
+  defaultModels:
+    decision: jev-latest
+  auth:
+    type: bearer
+    env: TYPESAFE_API_KEY
+  models:
+    - id: jev-latest
+      name: jev-latest
+      label: Jev Latest
+      limits:
+        context: 64000
+      capabilities:
+        completion: false
+        decision: true
+    - id: jev-preview
+      name: jev-preview
+      label: Jev Preview
+      limits:
+        context: 64000
+      capabilities:
+        completion: false
+        decision: true
+    - id: jev-1.14.0
+      name: jev-1.14.0
+      label: Jev 1.14.0
+      limits:
+        context: 64000
+      capabilities:
+        completion: false
+        decision: true
+    - id: jev-1.13.0
+      name: jev-1.13.0
+      label: Jev 1.13.0
+      limits:
+        context: 64000
+      capabilities:
+        completion: false
+        decision: true

@@ -1,0 +1,388 @@
+package builtin
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+)
+
+type bashTool struct {
+	std        *std.Std
+	sandbox    sandbox.Sandbox
+	guard      *shellguard.Guard
+	tasks      tasks.Store
+	sandboxCfg sandboxcfg.Manager
+}
+
+// unsandboxedSummary prefixes a plan summary so every UI surface shows the
+// missing kernel boundary before the user approves.
+func unsandboxedSummary(summary string) string {
+	return "Run UNSANDBOXED on host: " + summary
+}
+
+func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, error) {
+	cmdStr := strings.TrimSpace(in.Command)
+	if cmdStr == "" {
+		return nil, fmt.Errorf("%w: command is required", std.ErrInvalidArgument)
+	}
+
+	summary := fmt.Sprintf("Run shell command: %s", cmdStr)
+	if desc := strings.TrimSpace(in.Description); desc != "" {
+		summary = desc
+	}
+
+	analysisCmd := cmdStr
+	if strings.TrimSpace(in.Dir) != "" {
+		relDir, err := t.sandbox.FS().ResolvePath(in.Dir)
+		if err != nil {
+			return nil, err
+		}
+		analysisCmd = fmt.Sprintf("cd %q && %s", relDir, cmdStr)
+	}
+
+	ops, analyzeErr := t.guard.Analyze(analysisCmd)
+
+	var worstAction api.ActionType
+	var worstSafety api.SafetyLevel
+	if analyzeErr != nil {
+		// An unanalyzable command is treated as unsafe execution, but it must
+		// still flow through the read-only ceiling and bypass handling below
+		// so bypass_sandbox cannot slip past them; only excludedCommands
+		// matching (which needs the analyzed AST posture) is skipped.
+		worstAction = api.ActionExec
+		worstSafety = api.SafetyUnsafe
+		ops = nil
+	} else {
+		worstAction = api.ActionRead
+		worstSafety = api.SafetySafe
+		for _, op := range ops {
+			if op.Action.Severity() > worstAction.Severity() {
+				worstAction = op.Action
+			}
+			if op.Safety.Severity() > worstSafety.Severity() {
+				worstSafety = op.Safety
+			}
+		}
+		if worstAction == api.ActionUnknown {
+			worstAction = api.ActionExec
+		}
+	}
+
+	readOnly := worstAction == api.ActionRead && worstSafety == api.SafetySafe
+
+	plan := &tools.Plan{
+		ToolName: ToolBash,
+		Action:   worstAction,
+		Safety:   worstSafety,
+		Target:   cmdStr,
+		Paths:    t.collectPaths(ops),
+		Summary:  summary,
+		ReadOnly: readOnly,
+	}
+
+	// A read-only session or read-only plan classification is a ceiling the
+	// unsandboxed path can never cross, so skip both bypass and exclusion.
+	if t.sandbox.ReadOnly() {
+		if in.BypassSandbox {
+			return nil, fmt.Errorf("%w: bypass_sandbox is not allowed while the session is read-only", std.ErrInvalidArgument)
+		}
+		return plan, nil
+	}
+
+	eff, effErr := t.effectiveSandbox()
+	if in.BypassSandbox {
+		if effErr != nil || !eff.AllowUnsandboxed {
+			reason := "sandbox.json could not be read"
+			if effErr == nil {
+				reason = "allowUnsandboxed is disabled (restricted workspace or sandbox.json lock)"
+			}
+			return nil, fmt.Errorf("%w: bypass_sandbox rejected: %s", std.ErrInvalidArgument, reason)
+		}
+		plan.Unsandboxed = true
+		plan.BypassSandbox = true
+		plan.Safety = api.SafetyUnsafe
+		plan.ReadOnly = false
+		plan.Summary = unsandboxedSummary(summary)
+		return plan, nil
+	}
+
+	// Trusted excludedCommands patterns exempt matching commands from the
+	// kernel sandbox while normal bash(...) rules and modes still decide.
+	if analyzeErr == nil && effErr == nil && len(eff.ExcludedCommands) > 0 && !readOnly &&
+		shellguard.MatchExcludedCommand(cmdStr, eff.ExcludedCommands) {
+		plan.Unsandboxed = true
+	}
+	return plan, nil
+}
+
+func (t *bashTool) effectiveSandbox() (sandboxcfg.Effective, error) {
+	if t.sandboxCfg == nil {
+		return sandboxcfg.Effective{}, fmt.Errorf("sandbox settings unavailable")
+	}
+	return t.sandboxCfg.EffectiveFor(t.sandbox.Platform().WorkDir)
+}
+
+// collectPaths gathers deduplicated, workspace-relative, slash-separated target
+// paths from the analyzed shell operations' CWD and file operands. These feed
+// rule glob matching so triggers.globs can match every path a command touches,
+// not just the primary command string.
+func (t *bashTool) collectPaths(ops []shellguard.Operation) []string {
+	if len(ops) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var paths []string
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
+		rel := filepath.ToSlash(p)
+		if r, err := t.sandbox.FS().ResolvePath(p); err == nil {
+			rel = r
+		}
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			return
+		}
+		if _, ok := seen[rel]; ok {
+			return
+		}
+		seen[rel] = struct{}{}
+		paths = append(paths, rel)
+	}
+	for _, op := range ops {
+		add(op.CWD)
+		add(op.Path)
+	}
+	return paths
+}
+
+func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutput, error) {
+	wait := 60 * time.Second
+	if in.RunInBackground {
+		wait = 500 * time.Millisecond
+	}
+	if in.WaitMs > 0 {
+		wait = time.Duration(in.WaitMs) * time.Millisecond
+	}
+
+	w := tools.NewSpillWriter(ctx)
+	defer w.Close()
+
+	sw := tools.NewSafeWriter(w)
+	defer sw.Close()
+
+	title := strings.TrimSpace(in.Description)
+	if title == "" {
+		title = strings.TrimSpace(in.Command)
+	}
+
+	// The tasks store runs Fn under its own background context, so the
+	// per-command read-only and unsandboxed tags are captured here from the
+	// tool-execution context and passed explicitly.
+	readOnlyExec := tools.ReadOnlyExecutionFromContext(ctx)
+	unsandboxedExec := tools.UnsandboxedExecutionFromContext(ctx)
+
+	task := &tasks.Task{
+		Kind:         "bash",
+		Title:        title,
+		Command:      in.Command,
+		Wait:         wait,
+		AcceptsInput: true,
+		Fn: func(taskCtx context.Context, out io.Writer, stdin io.Reader) (int, error) {
+			mw := io.MultiWriter(out, sw)
+			res, err := t.std.Bash(taskCtx, std.BashRequest{
+				Command:     in.Command,
+				Dir:         in.Dir,
+				StdinReader: stdin,
+				Output:      mw,
+				ReadOnly:    readOnlyExec,
+				Unsandboxed: unsandboxedExec,
+			})
+			if err != nil {
+				return -1, err
+			}
+			return res.ExitCode, nil
+		},
+	}
+
+	if err := t.tasks.Add(task); err != nil {
+		return api.BashOutput{}, err
+	}
+	err := task.Run(ctx)
+	sw.Close()
+
+	if err != nil && !task.Backgrounded() {
+		if task.Status() == api.TaskStatusFailed && task.ExitCode() >= 0 {
+			return api.BashOutput{
+				Output:     w.String(),
+				ExitCode:   task.ExitCode(),
+				DurationMs: task.Duration().Milliseconds(),
+				Status:     string(task.Status()),
+			}, nil
+		}
+		return api.BashOutput{}, err
+	}
+
+	if task.Backgrounded() {
+		initial := strings.TrimSpace(w.String())
+		bgNotice := fmt.Sprintf("<background_task task_id=%q status=%q log_path=%q>\nCommand is running in the background. You do not need to poll this task's status — the system will automatically notify and wake you up when it finishes execution. You can continue with other work, or stop calling tools to wait. Use the `tasks` tool to check intermediate logs, send input, or kill the task.\n</background_task>", task.ID, task.Status(), task.LogPath())
+		outStr := bgNotice
+		if initial != "" {
+			outStr = initial + "\n\n" + bgNotice
+		}
+		return api.BashOutput{
+			Output:     outStr,
+			ExitCode:   0,
+			DurationMs: task.Duration().Milliseconds(),
+			TaskID:     task.ID,
+			Status:     string(task.Status()),
+		}, nil
+	}
+
+	return api.BashOutput{
+		Output:     w.String(),
+		ExitCode:   task.ExitCode(),
+		DurationMs: task.Duration().Milliseconds(),
+		Status:     string(task.Status()),
+	}, nil
+}
+
+type tasksTool struct {
+	tasks tasks.Store
+}
+
+func (t *tasksTool) Prepare(_ context.Context, in api.TasksInput) (*tools.Plan, error) {
+	switch in.Action {
+	case "list":
+		return &tools.Plan{
+			ToolName: ToolTasks,
+			Action:   api.ActionRead,
+			Safety:   api.SafetySafe,
+			Target:   "list",
+			Summary:  "List background tasks",
+			ReadOnly: true,
+		}, nil
+	case "status":
+		taskID := strings.TrimSpace(in.TaskID)
+		if taskID == "" {
+			return nil, fmt.Errorf("%w: task_id is required for status", std.ErrInvalidArgument)
+		}
+		return &tools.Plan{
+			ToolName: ToolTasks,
+			Action:   api.ActionRead,
+			Safety:   api.SafetySafe,
+			Target:   taskID,
+			Summary:  fmt.Sprintf("Check status of task %s", taskID),
+			ReadOnly: true,
+		}, nil
+	case "kill":
+		taskID := strings.TrimSpace(in.TaskID)
+		if taskID == "" {
+			return nil, fmt.Errorf("%w: task_id is required for kill", std.ErrInvalidArgument)
+		}
+		return &tools.Plan{
+			ToolName: ToolTasks,
+			Action:   api.ActionExec,
+			Safety:   api.SafetySafe,
+			Target:   fmt.Sprintf("kill %s", taskID),
+			Summary:  fmt.Sprintf("Kill background task %s", taskID),
+			ReadOnly: false,
+		}, nil
+	case "send_input":
+		taskID := strings.TrimSpace(in.TaskID)
+		if taskID == "" {
+			return nil, fmt.Errorf("%w: task_id is required for send_input", std.ErrInvalidArgument)
+		}
+		if in.Input == "" {
+			return nil, fmt.Errorf("%w: input is required for send_input", std.ErrInvalidArgument)
+		}
+		return &tools.Plan{
+			ToolName: ToolTasks,
+			Action:   api.ActionExec,
+			Safety:   api.SafetySafe,
+			Target:   fmt.Sprintf("send_input %s", taskID),
+			Summary:  fmt.Sprintf("Send input to background task %s", taskID),
+			ReadOnly: false,
+		}, nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported action %q", std.ErrInvalidArgument, in.Action)
+	}
+}
+
+func (t *tasksTool) Execute(ctx context.Context, in api.TasksInput) (api.TasksOutput, error) {
+	if in.Action == "" || in.Action != "list" && in.Action != "status" && in.Action != "kill" && in.Action != "send_input" {
+		return api.TasksOutput{}, fmt.Errorf("%w: unsupported action %q", std.ErrInvalidArgument, in.Action)
+	}
+
+	if in.Action == "list" {
+		snaps := t.tasks.List()
+		items := make([]api.TasksTask, 0, len(snaps))
+		for _, snap := range snaps {
+			items = append(items, api.TasksTask{
+				ID:         snap.ID,
+				Kind:       snap.Kind,
+				Title:      snap.Title,
+				Command:    snap.Command,
+				Status:     string(snap.Status),
+				ExitCode:   snap.ExitCode,
+				Error:      snap.Error,
+				LogPath:    snap.LogPath,
+				DurationMs: snap.DurationMs,
+			})
+		}
+		return api.TasksOutput{
+			Tasks:   items,
+			Message: fmt.Sprintf("%d background task(s).", len(items)),
+		}, nil
+	}
+
+	task, ok := t.tasks.Get(strings.TrimSpace(in.TaskID))
+	if !ok {
+		return api.TasksOutput{}, tasks.ErrTaskNotFound
+	}
+
+	switch in.Action {
+	case "status":
+		snap := task.Snapshot()
+		tail, _ := task.Tail(in.Limit)
+		tail = tools.Spill(ctx, tail)
+		return api.TasksOutput{
+			Status:   string(snap.Status),
+			ExitCode: snap.ExitCode,
+			LogPath:  snap.LogPath,
+			Output:   tail,
+			Message:  fmt.Sprintf("Task %s is %s.", snap.ID, snap.Status),
+		}, nil
+	case "kill":
+		if err := task.Kill(); err != nil {
+			return api.TasksOutput{}, err
+		}
+		return api.TasksOutput{
+			Status:  string(api.TaskStatusCanceled),
+			Message: fmt.Sprintf("Killed task %s.", task.ID),
+		}, nil
+	case "send_input":
+		if err := task.WriteInput(in.Input); err != nil {
+			return api.TasksOutput{}, err
+		}
+		return api.TasksOutput{
+			Status:  string(api.TaskStatusRunning),
+			Message: fmt.Sprintf("Sent input to task %s.", task.ID),
+		}, nil
+	default:
+		return api.TasksOutput{}, fmt.Errorf("%w: unsupported action %q", std.ErrInvalidArgument, in.Action)
+	}
+}

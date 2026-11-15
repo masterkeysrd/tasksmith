@@ -1,2 +1,4 @@
+# Environment variables and secrets
 env.sh
-.DS_Store
+# Added by goreleaser init:
+dist/

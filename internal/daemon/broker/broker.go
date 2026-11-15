@@ -1,0 +1,569 @@
+package broker
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// Event is something that happened. It carries no routing information: which
+// subscribers receive it is decided by the topics it is published to.
+type Event interface {
+	// EventType names the kind of event, such as "chunk". It is what a receiver
+	// switches on to read the event; it is not a topic.
+	EventType() string
+}
+
+// Message is an [Event] addressed to a topic. It is what a [Subscriber]
+// receives.
+type Message struct {
+	ID    string
+	Topic string
+	Event Event
+}
+
+const (
+	// bufferSize is how many undelivered messages a subscriber may hold.
+	bufferSize = 1024
+
+	// DefaultRingSize is the default topic ring buffer capacity.
+	DefaultRingSize = 128
+
+	// MaxTopics bounds the number of topics a single subscriber may hold.
+	MaxTopics = 256
+)
+
+var (
+	// ErrClosed is the reason of a subscriber that was closed by its owner.
+	ErrClosed = errors.New("broker: subscriber closed")
+
+	// ErrOverflow is the reason of a subscriber that was closed because it
+	// could not keep up and its buffer filled. It has missed messages, so it
+	// must resubscribe and reload its state rather than carry on.
+	ErrOverflow = errors.New("broker: subscriber fell behind")
+
+	// ErrNotRegistered is returned when a subscriber that is not registered
+	// with a [Broker] subscribes to a topic.
+	ErrNotRegistered = errors.New("broker: subscriber is not registered")
+
+	// ErrExists is returned when a subscriber ID is already registered.
+	ErrExists = errors.New("broker: subscriber ID already registered")
+
+	// ErrInvalidTopic is returned for a topic that is not a well-formed name.
+	ErrInvalidTopic = errors.New("broker: invalid topic")
+
+	// ErrTooManyTopics is returned when a subscription would exceed
+	// [MaxTopics].
+	ErrTooManyTopics = errors.New("broker: too many topics")
+
+	// ErrInvalidCursor is returned when a non-empty since cursor is not a canonical UUIDv7.
+	ErrInvalidCursor = errors.New("broker: invalid cursor")
+
+	// ErrNeedSync is returned when a subscriber's since cursor is older than the
+	// oldest retained message in a topic's ring buffer.
+	ErrNeedSync = errors.New("broker: subscriber cursor is out of date")
+)
+
+// Option configures a [Broker].
+type Option func(*Broker)
+
+// WithTopicBufferSize configures a function that returns the ring buffer capacity
+// for a given topic. Values <= 0 fall back to DefaultRingSize.
+func WithTopicBufferSize(fn func(topic string) int) Option {
+	return func(b *Broker) {
+		b.ringSizeFn = fn
+	}
+}
+
+// ValidateTopic reports whether topic is a well-formed name: non-empty
+// dot-separated segments with no whitespace and no wildcard characters. Topics
+// are matched exactly, so there are no patterns.
+func ValidateTopic(topic string) error {
+	if topic == "" {
+		return fmt.Errorf("%w: empty", ErrInvalidTopic)
+	}
+	if strings.ContainsAny(topic, " \t\r\n*>") {
+		return fmt.Errorf("%w: %q has whitespace or a wildcard", ErrInvalidTopic, topic)
+	}
+	for segment := range strings.SplitSeq(topic, ".") {
+		if segment == "" {
+			return fmt.Errorf("%w: %q has an empty segment", ErrInvalidTopic, topic)
+		}
+	}
+	return nil
+}
+
+type topicRing struct {
+	buf     []Message
+	cap     int
+	start   int
+	count   int
+	evicted bool
+}
+
+func newTopicRing(capacity int) *topicRing {
+	if capacity <= 0 {
+		capacity = DefaultRingSize
+	}
+	return &topicRing{
+		buf: make([]Message, capacity),
+		cap: capacity,
+	}
+}
+
+func (r *topicRing) push(msg Message) {
+	if r.count < r.cap {
+		idx := (r.start + r.count) % r.cap
+		r.buf[idx] = msg
+		r.count++
+	} else {
+		r.buf[r.start] = msg
+		r.start = (r.start + 1) % r.cap
+		r.evicted = true
+	}
+}
+
+func (r *topicRing) oldest() Message {
+	if r.count == 0 {
+		return Message{}
+	}
+	return r.buf[r.start]
+}
+
+func (r *topicRing) messagesSince(since string) []Message {
+	if r.count == 0 {
+		return nil
+	}
+	var res []Message
+	for i := 0; i < r.count; i++ {
+		idx := (r.start + i) % r.cap
+		msg := r.buf[idx]
+		if since == "" || msg.ID > since {
+			res = append(res, msg)
+		}
+	}
+	return res
+}
+
+// Broker delivers published events to the subscribers that subscribed to their
+// exact topic. It keeps an index from topic to subscribers, so publishing
+// touches only the subscribers that asked for it.
+//
+// Lock order is the broker's lock, then a subscriber's lock.
+type Broker struct {
+	mu          sync.Mutex
+	subscribers map[string]*Subscriber
+	topics      map[string]map[*Subscriber]struct{}
+	rings       map[string]*topicRing
+	ringSizeFn  func(topic string) int
+	lastID      string
+}
+
+// New returns a broker with no subscribers.
+func New(opts ...Option) *Broker {
+	b := &Broker{
+		subscribers: make(map[string]*Subscriber),
+		topics:      make(map[string]map[*Subscriber]struct{}),
+		rings:       make(map[string]*topicRing),
+	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
+}
+
+func (b *Broker) ringSizeFor(topic string) int {
+	if b.ringSizeFn != nil {
+		if sz := b.ringSizeFn(topic); sz > 0 {
+			return sz
+		}
+	}
+	return DefaultRingSize
+}
+
+func (b *Broker) nextIDLocked() string {
+	u := uuid.Must(uuid.NewV7())
+	id := strings.ToLower(u.String())
+	if b.lastID == "" || id > b.lastID {
+		b.lastID = id
+		return id
+	}
+
+	// Increment trailing 12 hex digits (rand_b) of b.lastID.
+	lastTail := b.lastID[24:]
+	val, err := strconv.ParseUint(lastTail, 16, 64)
+	if err == nil && val < 0xffffffffffff {
+		val++
+		id = fmt.Sprintf("%s%012x", b.lastID[:24], val)
+		b.lastID = id
+		return id
+	}
+
+	for {
+		u = uuid.Must(uuid.NewV7())
+		id = strings.ToLower(u.String())
+		if id > b.lastID {
+			b.lastID = id
+			return id
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// DeleteTopic deletes the ring buffer for topic so deleted sessions do not leak memory.
+func (b *Broker) DeleteTopic(topic string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.rings, topic)
+}
+
+// Add registers a subscriber. It returns [ErrExists] if the ID is taken or the
+// subscriber already belongs to a broker, and the close reason if it was
+// closed.
+func (b *Broker) Add(sub *Subscriber) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if _, ok := b.subscribers[sub.id]; ok {
+		return fmt.Errorf("%w: %q", ErrExists, sub.id)
+	}
+
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	if sub.closed {
+		return sub.err
+	}
+	if sub.broker != nil {
+		return fmt.Errorf("%w: %q already belongs to a broker", ErrExists, sub.id)
+	}
+	sub.broker = b
+	b.subscribers[sub.id] = sub
+	return nil
+}
+
+// Remove unregisters a subscriber, drops all of its subscriptions and closes
+// it with [ErrClosed]. It is safe to call more than once.
+func (b *Broker) Remove(sub *Subscriber) {
+	b.remove(sub, ErrClosed)
+}
+
+func (b *Broker) remove(sub *Subscriber, reason error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.removeSubscriberLocked(sub, reason)
+}
+
+func (b *Broker) removeSubscriberLocked(sub *Subscriber, reason error) {
+	if b.subscribers[sub.id] == sub {
+		delete(b.subscribers, sub.id)
+	}
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	for topic := range sub.topics {
+		b.dropLocked(topic, sub)
+	}
+	sub.topics = make(map[string]struct{})
+	sub.closeLocked(reason)
+}
+
+// Get returns the registered subscriber with the given ID.
+func (b *Broker) Get(id string) (*Subscriber, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	sub, ok := b.subscribers[id]
+	return sub, ok
+}
+
+// Len returns the number of registered subscribers.
+func (b *Broker) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return len(b.subscribers)
+}
+
+// HasSubscribers reports whether any subscriber is currently subscribed to
+// topic. Sessions use it to tell whether a client is attached that could
+// answer an interactive prompt.
+func (b *Broker) HasSubscribers(topic string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return len(b.topics[topic]) > 0
+}
+
+// Publish delivers event to every subscriber subscribed to topic.
+// A subscriber whose buffer is full is closed with [ErrOverflow] and removed,
+// so a slow subscriber can never silently miss part of a stream.
+func (b *Broker) Publish(topic string, event Event) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	id := b.nextIDLocked()
+	message := Message{ID: id, Topic: topic, Event: event}
+
+	ring := b.rings[topic]
+	if ring == nil {
+		ring = newTopicRing(b.ringSizeFor(topic))
+		b.rings[topic] = ring
+	}
+	ring.push(message)
+
+	for sub := range b.topics[topic] {
+		switch sub.deliver(message) {
+		case deliveredOK:
+		case deliveredOverflow:
+			b.removeSubscriberLocked(sub, ErrOverflow)
+		}
+	}
+}
+
+func (b *Broker) subscribe(sub *Subscriber, since string, topics []string) ([]string, error) {
+	for _, topic := range topics {
+		if err := ValidateTopic(topic); err != nil {
+			return nil, err
+		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+
+	if sub.closed {
+		return nil, sub.err
+	}
+	if sub.broker != b || b.subscribers[sub.id] != sub {
+		return nil, ErrNotRegistered
+	}
+
+	var added []string
+	for _, topic := range topics {
+		if _, ok := sub.topics[topic]; ok || slices.Contains(added, topic) {
+			continue
+		}
+		added = append(added, topic)
+	}
+	if len(sub.topics)+len(added) > MaxTopics {
+		return nil, fmt.Errorf("%w: limit is %d", ErrTooManyTopics, MaxTopics)
+	}
+
+	if since != "" {
+		for _, topic := range added {
+			ring := b.rings[topic]
+			if ring != nil && ring.evicted && ring.count > 0 && since < ring.oldest().ID {
+				return nil, fmt.Errorf("%w: topic %q", ErrNeedSync, topic)
+			}
+		}
+	}
+
+	for _, topic := range added {
+		if since != "" && b.rings[topic] != nil {
+			for _, msg := range b.rings[topic].messagesSince(since) {
+				select {
+				case sub.ch <- msg:
+				default:
+					for t := range sub.topics {
+						b.dropLocked(t, sub)
+					}
+					sub.topics = make(map[string]struct{})
+					delete(b.subscribers, sub.id)
+					sub.closeLocked(ErrOverflow)
+					return nil, ErrOverflow
+				}
+			}
+		}
+		sub.topics[topic] = struct{}{}
+		index := b.topics[topic]
+		if index == nil {
+			index = make(map[*Subscriber]struct{})
+			b.topics[topic] = index
+		}
+		index[sub] = struct{}{}
+	}
+	return added, nil
+}
+
+func (b *Broker) unsubscribe(sub *Subscriber, topics []string) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+
+	var removed []string
+	for _, topic := range topics {
+		if _, ok := sub.topics[topic]; !ok {
+			continue
+		}
+		delete(sub.topics, topic)
+		b.dropLocked(topic, sub)
+		removed = append(removed, topic)
+	}
+	return removed
+}
+
+// dropLocked removes sub from the topic index. b.mu must be held.
+func (b *Broker) dropLocked(topic string, sub *Subscriber) {
+	index := b.topics[topic]
+	delete(index, sub)
+	if len(index) == 0 {
+		delete(b.topics, topic)
+	}
+}
+
+type deliveryResult int
+
+const (
+	deliveredOK deliveryResult = iota
+	deliveredClosed
+	deliveredOverflow
+)
+
+// Subscriber is one connected stream of messages. It receives only the
+// messages published to topics it explicitly subscribed to.
+type Subscriber struct {
+	id string
+	ch chan Message
+
+	// done is closed when the subscriber is closed, whatever the reason. The
+	// message channel is never closed, so a publisher can never send on a
+	// closed channel; receivers select on both.
+	done chan struct{}
+
+	mu     sync.Mutex
+	broker *Broker
+	topics map[string]struct{}
+	closed bool
+	err    error
+}
+
+// NewSubscriber returns a subscriber with the given ID and no subscriptions.
+// Register it with [Broker.Add] before subscribing.
+func NewSubscriber(id string) *Subscriber {
+	return &Subscriber{
+		id:     id,
+		ch:     make(chan Message, bufferSize),
+		done:   make(chan struct{}),
+		topics: make(map[string]struct{}),
+	}
+}
+
+// ID returns the subscriber's identifier.
+func (s *Subscriber) ID() string { return s.id }
+
+// Subscribe adds topics and returns the ones that were not already held. The
+// subscriber must be registered with a broker. If any topic is invalid, or the
+// topic limit would be exceeded, none are added.
+func (s *Subscriber) Subscribe(topics ...string) ([]string, error) {
+	return s.SubscribeSince("", topics...)
+}
+
+// SubscribeSince adds topics and replays messages with ID > since. The
+// subscriber must be registered with a broker.
+func (s *Subscriber) SubscribeSince(since string, topics ...string) ([]string, error) {
+	if since != "" {
+		parsed, err := uuid.Parse(since)
+		if err != nil || parsed.Version() != 7 || parsed.String() != since {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidCursor, since)
+		}
+	}
+	s.mu.Lock()
+	broker := s.broker
+	s.mu.Unlock()
+	if broker == nil {
+		return nil, ErrNotRegistered
+	}
+	return broker.subscribe(s, since, topics)
+}
+
+// Unsubscribe removes topics and returns the ones that were held. Topics the
+// subscriber was not subscribed to are ignored.
+func (s *Subscriber) Unsubscribe(topics ...string) []string {
+	s.mu.Lock()
+	broker := s.broker
+	s.mu.Unlock()
+	if broker == nil {
+		return nil
+	}
+	return broker.unsubscribe(s, topics)
+}
+
+// Topics returns the topics the subscriber is subscribed to, sorted.
+func (s *Subscriber) Topics() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	topics := make([]string, 0, len(s.topics))
+	for topic := range s.topics {
+		topics = append(topics, topic)
+	}
+	slices.Sort(topics)
+	return topics
+}
+
+// Ch returns the channel messages are delivered on. It is never closed: stop
+// reading when [Subscriber.Done] is closed.
+func (s *Subscriber) Ch() <-chan Message { return s.ch }
+
+// Done is closed when the subscriber is closed.
+func (s *Subscriber) Done() <-chan struct{} { return s.done }
+
+// Err explains why the subscriber was closed: [ErrClosed] when its owner
+// closed it, [ErrOverflow] when it fell behind. It is nil while open.
+func (s *Subscriber) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.err
+}
+
+// Close unregisters the subscriber and releases its subscriptions. It is safe
+// to call more than once and from any goroutine.
+func (s *Subscriber) Close() {
+	s.mu.Lock()
+	broker := s.broker
+	s.mu.Unlock()
+
+	if broker != nil {
+		broker.Remove(s)
+		return
+	}
+	s.mu.Lock()
+	s.closeLocked(ErrClosed)
+	s.mu.Unlock()
+}
+
+// deliver queues message without blocking. A full buffer means the subscriber
+// has lost messages, so it is closed instead of dropping them silently.
+func (s *Subscriber) deliver(message Message) deliveryResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return deliveredClosed
+	}
+	select {
+	case s.ch <- message:
+		return deliveredOK
+	default:
+		s.closeLocked(ErrOverflow)
+		return deliveredOverflow
+	}
+}
+
+// closeLocked marks the subscriber closed once. s.mu must be held.
+func (s *Subscriber) closeLocked(reason error) {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.err = reason
+	close(s.done)
+}

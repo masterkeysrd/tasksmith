@@ -1,0 +1,63 @@
+{
+  "name": "gruvbox",
+  "extends": "dark",
+  "type": "dark",
+  "palette": {
+    "dark0": "#282828",
+    "dark1": "#3c3836",
+    "dark2": "#504945",
+    "dark3": "#665c54",
+    "dark4": "#7c6f64",
+    "light0": "#fbf1c7",
+    "light1": "#ebdbb2",
+    "light2": "#d5c4a1",
+    "light4": "#a89984",
+    "red": "#fb4934",
+    "green": "#b8bb26",
+    "yellow": "#fabd2f",
+    "blue": "#83a598",
+    "purple": "#d3869b",
+    "aqua": "#8ec07c",
+    "orange": "#fe8019"
+  },
+  "colors": {
+    "text": {
+      "primary": "light1",
+      "secondary": "light2",
+      "muted": "light4",
+      "accent": "yellow",
+      "info": "blue",
+      "success": "green",
+      "warning": "yellow",
+      "error": "red"
+    },
+    "surface": {
+      "canvas": "dark0",
+      "panel": "dark1",
+      "elevated": "dark2",
+      "code": "dark1",
+      "hover": "dark2",
+      "active": "dark3",
+      "selected": "dark2"
+    },
+    "border": {
+      "default": "dark2",
+      "subtle": "dark1",
+      "focus": "yellow",
+      "accent": "yellow"
+    },
+    "icon": {
+      "primary": "aqua"
+    },
+    "syntax": {
+      "keyword": "red",
+      "function": "green",
+      "string": "green",
+      "number": "purple",
+      "type": "yellow",
+      "comment": "dark4",
+      "operator": "blue",
+      "variable": "light1"
+    }
+  }
+}

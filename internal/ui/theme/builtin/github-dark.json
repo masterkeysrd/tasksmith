@@ -1,0 +1,40 @@
+{
+  "name": "github-dark",
+  "extends": "dark",
+  "type": "dark",
+  "palette": {
+    "bg": "#0d1117",
+    "bg_subtle": "#161b22",
+    "fg": "#c9d1d9",
+    "fg_secondary": "#b1bac4",
+    "muted": "#8b949e",
+    "border": "#30363d",
+    "blue": "#58a6ff",
+    "green": "#3fb950",
+    "yellow": "#d29922",
+    "orange": "#ffa657",
+    "red": "#f85149",
+    "purple": "#bc8cff",
+    "cyan": "#39c5cf"
+  },
+  "colors": {
+    "text": {
+      "primary": "fg",
+      "secondary": "fg_secondary",
+      "muted": "muted"
+    },
+    "surface": {
+      "canvas": "bg",
+      "panel": "bg_subtle"
+    },
+    "border": {
+      "default": "border"
+    },
+    "icon": {
+      "primary": "cyan"
+    },
+    "agent": {
+      "brand": "purple"
+    }
+  }
+}

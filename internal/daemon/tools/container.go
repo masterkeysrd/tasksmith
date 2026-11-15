@@ -1,0 +1,412 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/google/uuid"
+	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/tool"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
+)
+
+// CommandRunner executes a program inside the session environment without
+// shell interpretation and synchronizes external file changes afterwards.
+// Satisfied by *std.Std, mirroring how the harness narrows Std.Bash behind
+// BashRunner; custom tools depend only on this seam.
+type CommandRunner interface {
+	Exec(ctx context.Context, req std.ExecRequest) (*std.ExecResult, error)
+}
+
+// Config holds the mandatory dependencies required to construct a [Container].
+type Config struct {
+	Tools        []Tool
+	Sandbox      sandbox.Sandbox
+	Workspace    *workspace.Workspace
+	Logger       log.Interface
+	Spiller      Spiller
+	AllowedTools []string
+	// Agent is the active agent definition, injected into custom tool render
+	// options so command and instruction templates can reference
+	// {{.Agent.Name}} and {{.Agent.Description}}. It may be nil for agentless
+	// sessions, in which case those template fields resolve to empty values.
+	Agent *warp.Agent
+	// DeferredTools is the set of tool names that should be withheld from the
+	// initial model context (DeferLoading: true) and instead discovered via
+	// tool_search. Deferred tools must also appear in AllowedTools so that they
+	// are constructed and registered in the container; they are merely held back
+	// from the first request's tool definitions.
+	DeferredTools []string
+	// ToolSearchFactory constructs the built-in tool_search tool from the
+	// deferred tools' definitions. It is invoked (and tool_search registered)
+	// only when there is at least one deferred tool.
+	ToolSearchFactory func(defs []tool.Definition) Tool
+	// MCPCaller is the MCP runtime used to execute tools discovered on MCP
+	// servers. When nil, no MCP tool is registered: the servers stay discoverable
+	// in listings but nothing can invoke their tools.
+	MCPCaller MCPCaller
+	// CommandRunner is the execution surface command-backed custom tools run
+	// through (satisfied by the session's *std.Std), so process output
+	// synchronizes external file changes into the change journal like the
+	// built-in bash tool.
+	CommandRunner CommandRunner
+	// Tasks is the session's background task registry. Command-backed custom
+	// tools run as tasks so a slow tool auto-backgrounds at the wait window
+	// instead of blocking the turn indefinitely.
+	Tasks tasks.Store
+}
+
+// Validate ensures that all required dependencies are non-nil. Zero silent
+// fallbacks are permitted.
+func (c Config) Validate() error {
+	if c.Sandbox == nil {
+		return fmt.Errorf("%w: sandbox is required", ErrInvalidConfig)
+	}
+	if c.Workspace == nil {
+		return fmt.Errorf("%w: workspace is required", ErrInvalidConfig)
+	}
+	if c.Logger == nil {
+		return fmt.Errorf("%w: logger is required", ErrInvalidConfig)
+	}
+	if c.CommandRunner == nil {
+		return fmt.Errorf("%w: command runner is required", ErrInvalidConfig)
+	}
+	if c.Tasks == nil {
+		return fmt.Errorf("%w: task store is required", ErrInvalidConfig)
+	}
+	for i, t := range c.Tools {
+		if t == nil {
+			return fmt.Errorf("%w: tool at index %d cannot be nil", ErrInvalidConfig, i)
+		}
+	}
+	return nil
+}
+
+// Container manages registered [Tool] instances, custom workspace command
+// tools, and two-phase Prepare/Execute orchestration.
+type Container interface {
+	Definitions() []tool.Definition
+	List() []Tool
+	Get(name string) (Tool, bool)
+	Prepare(ctx context.Context, tc *message.ToolCall) (*Plan, error)
+	Execute(ctx context.Context, tc *message.ToolCall) (*message.Tool, error)
+}
+
+type container struct {
+	sandbox       sandbox.Sandbox
+	workspace     *workspace.Workspace
+	agent         *warp.Agent
+	logger        log.Interface
+	spiller       Spiller
+	mcpCaller     MCPCaller
+	commandRunner CommandRunner
+	tasks         tasks.Store
+	order         []string
+	tools         map[string]Tool
+	locksMu       sync.Mutex
+	pathLocks     map[string]*sync.Mutex
+	allowedTools  []string
+}
+
+var _ Container = (*container)(nil)
+
+// NewContainer validates cfg and constructs a [Container] from cfg.Tools plus
+// any custom command tools declared in cfg.Workspace.Tools().
+func NewContainer(cfg Config) (Container, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	sp := cfg.Spiller
+	if sp == nil {
+		var err error
+		sp, err = NewSpiller(SpillerConfig{Workspace: cfg.Workspace})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	c := &container{
+		sandbox:       cfg.Sandbox,
+		workspace:     cfg.Workspace,
+		agent:         cfg.Agent,
+		logger:        cfg.Logger.ForComponent("tools"),
+		spiller:       sp,
+		mcpCaller:     cfg.MCPCaller,
+		commandRunner: cfg.CommandRunner,
+		tasks:         cfg.Tasks,
+		tools:         make(map[string]Tool, len(cfg.Tools)),
+		pathLocks:     make(map[string]*sync.Mutex),
+		allowedTools:  cfg.AllowedTools,
+	}
+
+	for _, t := range cfg.Tools {
+		c.addTool(t)
+	}
+
+	if err := c.registerCustomTools(); err != nil {
+		return nil, err
+	}
+
+	if err := c.registerMCPTools(); err != nil {
+		return nil, err
+	}
+
+	if err := c.applyDeferredLoading(cfg); err != nil {
+		return nil, err
+	}
+
+	return c, nil
+}
+
+// applyDeferredLoading marks the configured deferred tools (DeferLoading: true)
+// and, when at least one deferred tool exists, constructs and registers the
+// built-in tool_search tool (DeferLoading: false) so the deferred tools can be
+// discovered and loaded into the active toolset.
+func (c *container) applyDeferredLoading(cfg Config) error {
+	if len(cfg.DeferredTools) == 0 {
+		return nil
+	}
+
+	var deferred []tool.Definition
+	for _, name := range cfg.DeferredTools {
+		t, ok := c.tools[name]
+		if !ok {
+			continue
+		}
+		// Mark the tool deferred; the mutation is reflected in Definition().
+		t.SetDeferLoading(true)
+		def := t.Definition()
+		def.DeferLoading = true
+		deferred = append(deferred, def)
+	}
+
+	if len(deferred) == 0 {
+		return nil
+	}
+
+	if cfg.ToolSearchFactory == nil {
+		return nil
+	}
+
+	searchTool := cfg.ToolSearchFactory(deferred)
+	if searchTool != nil {
+		searchTool.SetDeferLoading(false)
+		c.addTool(searchTool)
+	}
+	return nil
+}
+
+func (c *container) addTool(t Tool) {
+	name := t.Name()
+	if _, exists := c.tools[name]; !exists {
+		c.order = append(c.order, name)
+	}
+	c.tools[name] = t
+}
+
+// Definitions returns the LLM tool definitions for all registered tools in
+// registration order.
+func (c *container) Definitions() []tool.Definition {
+	defs := make([]tool.Definition, 0, len(c.order))
+	for _, name := range c.order {
+		if t, ok := c.tools[name]; ok {
+			defs = append(defs, t.Definition())
+		}
+	}
+	return defs
+}
+
+// List returns all registered [Tool] instances in registration order.
+func (c *container) List() []Tool {
+	list := make([]Tool, 0, len(c.order))
+	for _, name := range c.order {
+		if t, ok := c.tools[name]; ok {
+			list = append(list, t)
+		}
+	}
+	return list
+}
+
+// Get retrieves a registered [Tool] by name.
+func (c *container) Get(name string) (Tool, bool) {
+	t, ok := c.tools[name]
+	return t, ok
+}
+
+// Prepare validates the tool call and delegates pre-flight analysis to the
+// target [Tool.Prepare] implementation.
+func (c *container) Prepare(ctx context.Context, tc *message.ToolCall) (*Plan, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if tc == nil {
+		return nil, fmt.Errorf("%w: tool call is nil", ErrToolNotFound)
+	}
+
+	t, ok := c.tools[tc.Name]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrToolNotFound, tc.Name)
+	}
+
+	plan, err := t.Prepare(ctx, tc.Args)
+	if err != nil {
+		return nil, err
+	}
+	if plan != nil {
+		plan.ToolCallID = tc.ID
+		if plan.ToolName == "" {
+			plan.ToolName = tc.Name
+		}
+	}
+	return plan, nil
+}
+
+// lockPath acquires the per-path mutex for targetPath and returns an unlock function.
+func (c *container) lockPath(targetPath string) func() {
+	key := filepath.ToSlash(filepath.Clean(strings.TrimSpace(targetPath)))
+	c.locksMu.Lock()
+	if c.pathLocks == nil {
+		c.pathLocks = make(map[string]*sync.Mutex)
+	}
+	mu, ok := c.pathLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		c.pathLocks[key] = mu
+	}
+	c.locksMu.Unlock()
+
+	mu.Lock()
+	return mu.Unlock
+}
+
+// Execute invokes the target [Tool.Execute], serializing concurrent mutations
+// to the same file path, wrapping any validation or execution error into a
+// non-fatal [*message.Tool] with IsError: true, and assigning a single UUIDv7
+// message ID.
+func (c *container) Execute(ctx context.Context, tc *message.ToolCall) (*message.Tool, error) {
+	if tc == nil {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return nil, fmt.Errorf("tools: generate tool message id: %w", err)
+		}
+		resp := &message.Tool{
+			IsError: true,
+			Content: message.Content{&message.TextBlock{Text: "tools: tool call is nil"}},
+		}
+		resp.ID = id.String()
+		return resp, nil
+	}
+
+	t, ok := c.tools[tc.Name]
+	var resp *message.Tool
+	if !ok {
+		err := fmt.Errorf("%w: %s", ErrToolNotFound, tc.Name)
+		resp = &message.Tool{
+			ToolCallID: tc.ID,
+			Name:       tc.Name,
+			IsError:    true,
+			Content:    message.Content{&message.TextBlock{Text: err.Error()}},
+		}
+	} else {
+		if targetPath, shouldLock := c.mutatingPathForTool(t, tc.Args); shouldLock {
+			unlock := c.lockPath(targetPath)
+			defer unlock()
+		}
+
+		var execErr error
+		ctx = scope.With(ctx, scope.Scope{ToolCallID: tc.ID, ToolName: tc.Name})
+		if _, ok := SpillerFrom(ctx); !ok && c.spiller != nil {
+			ctx = WithSpiller(ctx, c.spiller)
+		}
+		resp, execErr = t.Execute(ctx, tc)
+		if execErr != nil {
+			resp = &message.Tool{
+				ToolCallID: tc.ID,
+				Name:       tc.Name,
+				IsError:    true,
+				Content:    message.Content{&message.TextBlock{Text: execErr.Error()}},
+			}
+		} else if resp == nil {
+			resp = &message.Tool{
+				ToolCallID: tc.ID,
+				Name:       tc.Name,
+			}
+		}
+	}
+
+	id, err := uuid.NewV7()
+	if err != nil {
+		return nil, fmt.Errorf("tools: generate tool message id: %w", err)
+	}
+	resp.ID = id.String()
+
+	return resp, nil
+}
+
+func (c *container) mutatingPathForTool(t Tool, args map[string]any) (string, bool) {
+	if t.Definition().Annotation.IsReadOnly || args == nil {
+		return "", false
+	}
+	raw, ok := args["path"].(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return "", false
+	}
+	if rel, err := c.sandbox.FS().ResolvePath(raw); err == nil {
+		return rel, true
+	}
+	return strings.TrimSpace(raw), true
+}
+
+// ActivationBlocks activates a command or skill's policy-allowed tools into
+// the model's context: a ToolReferenceBlock for each deferred tool registered
+// in container, and an inline ToolDefinitionBlock for any policy-allowed tool
+// in cat that is not registered in container. Tools are deduplicated by name.
+func ActivationBlocks(container Container, cat *workspace.Catalog, resolvedTools []*warp.Tool) []message.Block {
+	if len(resolvedTools) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(resolvedTools))
+	var blocks []message.Block
+	for _, wt := range resolvedTools {
+		if wt == nil || seen[wt.Metadata.Name] {
+			continue
+		}
+		seen[wt.Metadata.Name] = true
+
+		if container != nil {
+			if t, ok := container.Get(wt.Metadata.Name); ok {
+				if t.Definition().DeferLoading {
+					blocks = append(blocks, &message.ToolReferenceBlock{ToolName: wt.Metadata.Name})
+				}
+				continue
+			}
+		}
+		if cat != nil {
+			if def, ok := cat.GetTool(wt.Metadata.Name); ok {
+				blocks = append(blocks, warpToolDefinitionBlock(def))
+			}
+		}
+	}
+	return blocks
+}
+
+func warpToolDefinitionBlock(wt *warp.Tool) *message.ToolDefinitionBlock {
+	def := tool.Definition{
+		Name:        wt.Metadata.Name,
+		Description: wt.Spec.Instructions,
+	}
+	if def.Description == "" {
+		def.Description = wt.Metadata.Description
+	}
+	return def.ToBlock()
+}

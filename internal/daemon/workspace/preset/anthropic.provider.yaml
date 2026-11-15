@@ -1,0 +1,37 @@
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: anthropic
+spec:
+  type: anthropic
+  endpoint: https://api.anthropic.com
+  defaultModels:
+    completion: claude-sonnet-5-5
+  auth:
+    type: env
+    env: ANTHROPIC_API_KEY
+  models:
+    - id: claude-haiku-5-5
+      name: claude-haiku-5-5
+      label: Claude 5.5 Haiku
+      limits:
+        context: 200000
+        output: 64000
+    - id: claude-sonnet-5-5
+      name: claude-sonnet-5-5
+      label: Claude 5.5 Sonnet
+      limits:
+        context: 1000000
+        output: 128000
+    - id: claude-opus-5-5
+      name: claude-opus-5-5
+      label: Claude 5.5 Opus
+      limits:
+        context: 1000000
+        output: 128000
+    - id: claude-fable-5-2
+      name: claude-fable-5-2
+      label: Claude 5.2 Fable
+      limits:
+        context: 1000000
+        output: 128000

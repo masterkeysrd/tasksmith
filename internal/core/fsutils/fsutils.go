@@ -1,0 +1,131 @@
+package fsutils
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// ErrEmptyPath is returned when a provided path is blank or consists only of whitespace.
+var ErrEmptyPath = errors.New("fsutils: path must not be empty")
+
+// CleanPath trims whitespace from dir, returns [ErrEmptyPath] if empty,
+// resolves it to an absolute path, evaluates symlinks if possible, and returns
+// the canonical cleaned path.
+func CleanPath(dir string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return "", ErrEmptyPath
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("fsutils: resolve path %q: %w", dir, err)
+	}
+	if eval, evalErr := filepath.EvalSymlinks(absDir); evalErr == nil {
+		absDir = eval
+	}
+	return filepath.Clean(absDir), nil
+}
+
+// ExpandAndCleanPath trims targetPath, expands ~ with homeDir (if provided),
+// and returns a cleaned path relative to baseDir (if targetPath is relative and baseDir is non-empty),
+// or a cleaned absolute path otherwise.
+func ExpandAndCleanPath(targetPath, baseDir, homeDir string) string {
+	p := strings.TrimSpace(targetPath)
+	if homeDir != "" {
+		homeClean := filepath.Clean(homeDir)
+		if p == "~" {
+			p = homeClean
+		} else if strings.HasPrefix(p, "~/") {
+			p = filepath.Join(homeClean, p[2:])
+		}
+	}
+	if filepath.IsAbs(p) || baseDir == "" {
+		return filepath.Clean(p)
+	}
+	return filepath.Clean(filepath.Join(baseDir, p))
+}
+
+// ResolveConfigPath expands a leading "~" or "~/" in targetPath using the
+// current user's home directory, then resolves the result against baseDir when
+// targetPath is relative and baseDir is non-empty. It is meant for paths authored
+// in configuration files, where both "~" and a path relative to the declaring
+// file are natural to write. Failing to determine the home directory leaves "~"
+// untouched rather than failing the caller.
+func ResolveConfigPath(targetPath, baseDir string) string {
+	p := strings.TrimSpace(targetPath)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
+	return ExpandAndCleanPath(p, baseDir, home)
+}
+
+// IsInsideDir reports whether targetPath is equal to or located within dir.
+// Both paths are cleaned before checking.
+func IsInsideDir(targetPath, dir string) bool {
+	dirClean := filepath.Clean(dir)
+	resClean := filepath.Clean(targetPath)
+	if resClean == dirClean {
+		return true
+	}
+	if dirClean == string(filepath.Separator) {
+		return strings.HasPrefix(resClean, string(filepath.Separator))
+	}
+	return strings.HasPrefix(resClean, dirClean+string(filepath.Separator))
+}
+
+// PortablePath converts targetPath into a portable representation. If targetPath
+// is located within rootDir, it returns the relative path from rootDir. Otherwise,
+// if located within homeDir, it returns the path prefixed with "~". If it cannot
+// be made relative, the cleaned targetPath is returned.
+func PortablePath(targetPath, rootDir, homeDir string) string {
+	if strings.TrimSpace(targetPath) == "" {
+		return ""
+	}
+	cleanTarget := filepath.Clean(targetPath)
+	if rootDir != "" {
+		cleanRoot := filepath.Clean(rootDir)
+		if rel, err := filepath.Rel(cleanRoot, cleanTarget); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	if homeDir != "" {
+		cleanHome := filepath.Clean(homeDir)
+		if rel, err := filepath.Rel(cleanHome, cleanTarget); err == nil && !strings.HasPrefix(rel, "..") {
+			return filepath.Join("~", rel)
+		}
+	}
+	return cleanTarget
+}
+
+// ResolveDeepestExisting canonicalizes p by evaluating symlinks on p if it
+// exists, or on its deepest existing ancestor while appending the remaining
+// (not-yet-created) path components lexically. This keeps path confinement and
+// OS kernel sandbox rules anchored to canonical vnode paths even when a parent
+// directory is a symlink (e.g. /var -> /private/var on macOS) and the leaf
+// does not exist yet.
+func ResolveDeepestExisting(p string) string {
+	p = filepath.Clean(strings.TrimSpace(p))
+	if p == "" {
+		return p
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Clean(resolved)
+	}
+	var rest []string
+	cur := p
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = append([]string{filepath.Base(cur)}, rest...)
+		cur = parent
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Clean(filepath.Join(append([]string{resolved}, rest...)...))
+		}
+	}
+}

@@ -1,0 +1,93 @@
+# Permission & Guard Engine
+
+The **Permission & Guard Engine** is the security enforcement subsystem in TaskSmith that controls tool execution, validates shell commands, and prevents unauthorized filesystem or network operations.
+
+---
+
+## 1. Architectural Overview
+
+```mermaid
+flowchart TD
+    subgraph Invocation ["Tool Invocation"]
+        ToolCall["Tool Call Request\n(bash, edit, write, view, web_fetch)"]
+    end
+
+    subgraph EvaluationPipeline ["Layered Permission Pipeline"]
+        ModeCheck{"Session Mode Check\n(default | plan | auto)"}
+        PathGuard{"Path Confinement (guard)\nWithin Workspace Boundary?"}
+        ShellGuard{"Shell AST Inspection (shellguard)\nCompound Syntax Analysis"}
+        RuleEngine{"Rule Matching Hierarchy\n(deny -> allow -> ask)"}
+    end
+
+    subgraph Resolution ["Resolution & Dispatch"]
+        AutoExecute["Auto-Approved\n(Execute in Sandbox)"]
+        UserPrompt["Interactive Prompt\n(CLI Approval Request)"]
+        Reject["Access Denied\n(Return Security Error)"]
+    end
+
+    ToolCall --> ModeCheck
+    ModeCheck -->|Plan Mode & Mutating Tool| Reject
+    ModeCheck -->|Allowed by Mode| PathGuard
+
+    PathGuard -->|Path Traversal / Escape| Reject
+    PathGuard -->|Path Confined| ShellGuard
+
+    ShellGuard -->|Destructive / Blocked Pattern| Reject
+    ShellGuard -->|Syntactically Safe| RuleEngine
+
+    RuleEngine -->|Explicit Deny| Reject
+    RuleEngine -->|Explicit Allow| AutoExecute
+    RuleEngine -->|Explicit Ask / Default| UserPrompt
+
+    UserPrompt -->|User Approves (once, session, workspace)| AutoExecute
+    UserPrompt -->|User Denies| Reject
+```
+
+---
+
+## 2. Core Architectural Design
+
+### 1. Layered Evaluation Pipeline
+Every tool call issued by an agent passes through a multi-stage security pipeline before reaching the execution environment:
+- **Session Mode Enforcement**: Evaluates the tool against the active session mode. In **Plan Mode** (`plan`), all mutating tools (`write`, `edit`, `bash`) are automatically blocked. In **Auto Mode** (`auto`), pre-approved non-destructive operations execute autonomously.
+- **Hierarchical Rule Engine**: Custom permission rules are evaluated in strict priority order: **`deny` $\to$ `allow` $\to$ `ask`**. A matching `deny` rule immediately terminates execution with an error, taking precedence over all other settings.
+
+### 2. Shell AST Inspection (`shellguard`)
+Rather than relying on naive regex pattern matching, TaskSmith parses every shell command into an Abstract Syntax Tree (AST):
+- **Deep Syntax Decomposition**: Pipelines (`a | b`), sequential commands (`a && b`, `a ; b`), subshells `(a)`, and command substitutions (`$(a)`, `` `a` ``) are unpacked and analyzed individually.
+- **Smuggling Prevention**: Attackers cannot bypass guards by hiding dangerous commands inside quoted variables, encoded subshells, or deep pipe chains.
+- **Destructive Command Classification**: High-risk system patterns (such as root deletions, raw device writes, and unconfined network downloads piped into shells) are intercepted and rejected before execution.
+
+### 3. Path Confinement & Boundary Guards (`guard`)
+File manipulation tools (`view`, `edit`, `write`, `glob`) use workspace boundaries and explicit read-only directories:
+- **Built-in resources**: Reads in `$XDG_DATA_HOME/tasksmith/builtin/` are classified safe; writes and deletes are unsafe, including when the directory overlaps the workspace. Permission modes and explicit rules still apply.
+- **Path Canonicalization**: Evaluates relative paths and resolves symlinks to ensure targets remain within the workspace root directory.
+- **Boundary Validation**: Traversal attempts (`../../etc/passwd`) or symlinks resolving to external files are immediately blocked at the guard layer before reaching the sandbox filesystem capability.
+
+### 4. Scoped Approvals & Persistence
+When a tool invocation requires explicit user approval, the interactive prompt allows the user to scope their decision:
+- **`once`**: Applies exclusively to the single in-flight tool call.
+- **`session`**: Stored in-memory for the duration of the active CLI session, auto-approving matching invocations until exit.
+- **`workspace`**: Persisted to the workspace's local state directory (`~/.local/share/tasksmith/workspaces/<hash>/permissions.json`), automatically allowing matching operations in future sessions for that project.
+- **`global`**: Configured globally in `~/.config/tasksmith/permissions.json` across all projects on the workstation.
+
+### 5. Trust Gate & Restricted Mode Boundary
+Before any session initializes or executes agent instructions, the directory passes through the **Trust Gate**:
+- **Trust Verification (`trust.json`)**: Machine-wide trust records are evaluated from `~/.local/share/tasksmith/trust.json`. Trust can be granted with `folder` scope (exact directory) or `parent` scope (all subdirectories).
+- **Executable Configuration Fingerprinting**: TaskSmith computes an SHA-256 digest over executable configuration files (`.agents/tools/*.tool.md`, `.agents/mcps/*.mcp.yaml`, and `.env`). If an upstream checkout modifies these definitions, the fingerprint mismatch invalidates trust and triggers an interactive trust re-prompt.
+- **Restricted Mode**: When trust has not been granted or is declined:
+  - Custom project tools and project MCP servers are omitted from the agent catalog.
+  - Workspace `.env` files are ignored, preventing untrusted repositories from harvesting or exfiltrating local environment variables.
+  - All file mutations require interactive authorization, and shell execution is strictly restricted.
+
+### 6. Monotonic Context Exclusion
+Persistent permission settings in `permissions.json` (`disabledTools` and `disabledMcps`) form a monotonic union across global and project configurations:
+- Disabled tools and MCP servers are pruned directly from the agent's tool definitions during turn assembly.
+- Because disabled tools never enter the model's token context, the model cannot attempt to invoke them, eliminating hallucinated calls and execution denials.
+
+### 7. Unsandboxed Execution Namespace
+Per-command kernel-sandbox bypasses live in a dedicated permission namespace so ordinary approvals can never authorize them:
+- **Namespace isolation**: an unsandboxed bypass plan only matches `bash_unsandboxed(...)` allow rules (or the `*` catch-all); sandboxed plans never match `*_unsandboxed` rules, so granting one variant never widens the other. Deny rules span both namespaces: `bash(git *)` blocks sandboxed and unsandboxed git alike, while `bash_unsandboxed(git *)` denies only the kernel-bypassing variant.
+- **Prompt-always**: bypass plans require an explicit matching allow rule in every permission mode, including `auto`; mode-based auto-approval never covers them, and the sandbox backend rejects them outright in read-only posture (`ErrReadOnly`).
+- **Excluded commands** (`sandbox.json` `excludedCommands`) take the opposite route: strict AST matching (rejecting redirections, substitutions, dynamic arguments, subshells, `cd`/`eval`, and background operators) marks a plan unsandboxed at execution time while ordinary `bash(...)` rules and modes still decide approval.
+- **Runtime posture**: the session pushes a live `RuntimePolicy` (autoAllowBash plus whether the enforced backend is native) into the permission engine on startup and workspace reload, so `autoAllowBash` widens exactly safe, sandboxed bash plans in `default`/`accept_edits` and nothing else.
