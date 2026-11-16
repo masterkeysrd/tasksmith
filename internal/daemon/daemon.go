@@ -1057,12 +1057,9 @@ func (d *Daemon) scanGlobalProviders() []api.ProviderSummary {
 	var summaries []api.ProviderSummary
 
 	for _, p := range presets {
-		authEnv := ""
-		if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
-			authEnv = p.Spec.Auth.Env
-		}
+		authEnv := workspace.ProviderAuthPrimaryEnv(p.Spec.Auth)
 
-		authType := "env"
+		authType := "bearer"
 		if p.Spec.Auth != nil && p.Spec.Auth.Type != "" {
 			authType = string(p.Spec.Auth.Type)
 		}
@@ -1170,8 +1167,7 @@ func (d *Daemon) checkMissingCredentials(cleanDir string) []string {
 								break
 							}
 						}
-						if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
-							envVar := p.Spec.Auth.Env
+						if envVar := workspace.ProviderAuthPrimaryEnv(p.Spec.Auth); envVar != "" {
 							val := os.Getenv(envVar)
 							if strings.TrimSpace(val) == "" && localEnv != nil {
 								val = localEnv[envVar]
@@ -1260,8 +1256,12 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 	if apiKey == "" && req.AuthEnv != "" {
 		apiKey = strings.TrimSpace(os.Getenv(req.AuthEnv))
 	}
-	if apiKey == "" && foundPreset != nil && foundPreset.Spec.Auth != nil && foundPreset.Spec.Auth.Env != "" {
-		apiKey = strings.TrimSpace(os.Getenv(foundPreset.Spec.Auth.Env))
+	presetEnv := ""
+	if foundPreset != nil {
+		presetEnv = workspace.ProviderAuthPrimaryEnv(foundPreset.Spec.Auth)
+	}
+	if apiKey == "" && presetEnv != "" {
+		apiKey = strings.TrimSpace(os.Getenv(presetEnv))
 	}
 
 	if provName == "ollama" {
@@ -1284,16 +1284,10 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 		}, nil
 	}
 
-	if foundPreset != nil && foundPreset.Spec.Auth != nil && foundPreset.Spec.Auth.Type == "oauth2" {
+	if foundPreset != nil && foundPreset.Spec.Auth != nil && foundPreset.Spec.Auth.Type == warp.AuthTypeOAuth2 {
 		modelsCount := 1
 		if len(foundPreset.Spec.Models) > 0 {
 			modelsCount = len(foundPreset.Spec.Models)
-		}
-		if apiKey != "" {
-			return &api.VerifyProviderResponse{
-				Valid:       true,
-				ModelsCount: modelsCount,
-			}, nil
 		}
 		if tok, _, err := gateway.LoadProviderToken(provName); err == nil && tok != nil {
 			return &api.VerifyProviderResponse{
@@ -1301,13 +1295,9 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 				ModelsCount: modelsCount,
 			}, nil
 		}
-		envFallback := ""
-		if foundPreset.Spec.Auth.Env != "" {
-			envFallback = fmt.Sprintf(" (or %s)", foundPreset.Spec.Auth.Env)
-		}
 		return &api.VerifyProviderResponse{
 			Valid:        false,
-			ErrorMessage: fmt.Sprintf("%s requires OAuth authentication%s", provName, envFallback),
+			ErrorMessage: fmt.Sprintf("%s requires OAuth authentication", provName),
 		}, nil
 	}
 

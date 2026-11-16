@@ -72,9 +72,9 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 	token, err := resolveCredential(cfg.Auth, env)
 	if err != nil {
 		if errors.Is(err, ErrMissingCredential) {
-			if cfg.Auth != nil && cfg.Auth.Env != "" {
-				inst.authErr = fmt.Errorf("%w: provider %q requires environment variable %q", ErrMissingCredential, cfg.Name, cfg.Auth.Env)
-				inst.warning = fmt.Sprintf("provider %q: missing required environment variable %q", cfg.Name, cfg.Auth.Env)
+			if cfg.Auth != nil && cfg.Auth.Token != nil && cfg.Auth.Token.Env != "" {
+				inst.authErr = fmt.Errorf("%w: provider %q requires environment variable %q", ErrMissingCredential, cfg.Name, cfg.Auth.Token.Env)
+				inst.warning = fmt.Sprintf("provider %q: missing required environment variable %q", cfg.Name, cfg.Auth.Token.Env)
 			} else {
 				inst.authErr = fmt.Errorf("provider %q auth error: %w", cfg.Name, err)
 				inst.warning = inst.authErr.Error()
@@ -201,7 +201,11 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 			}
 
 			if !HasProviderToken(cfg.Name) {
-				inst.authErr = fmt.Errorf("%w: provider %q requires OAuth login (or %s)", ErrMissingCredential, cfg.Name, cfg.Auth.Env)
+				if cfg.Auth != nil && cfg.Auth.Token != nil && cfg.Auth.Token.Env != "" {
+					inst.authErr = fmt.Errorf("%w: provider %q requires OAuth login (or %s)", ErrMissingCredential, cfg.Name, cfg.Auth.Token.Env)
+				} else {
+					inst.authErr = fmt.Errorf("%w: provider %q requires OAuth login", ErrMissingCredential, cfg.Name)
+				}
 				inst.warning = fmt.Sprintf("provider %q: authentication required (run /setup to log in)", cfg.Name)
 			}
 		}

@@ -825,7 +825,7 @@ func TestInvokeSubagentDoesNotLeakAgentPoliciesToParent(t *testing.T) {
 // setupTierTestEnv builds a workspace whose fake provider declares the
 // standard tier aliases (@fast, @balanced) plus a project subagent with a
 // narrow spec.models allowlist, alongside the built-in explore (@fast,
-// @inherit) and general (unrestricted) subagents.
+// @inherit) and general (@inherit, *) subagents.
 func setupTierTestEnv(t *testing.T) (*workspace.Workspace, *models.Catalog) {
 	t.Helper()
 
@@ -895,8 +895,8 @@ func TestResolveSubagentModelTiers(t *testing.T) {
 		{name: "provider-scoped alias canonicalizes", agent: "explore", requested: "fake/@fast", want: "fake/fake-fast-model"},
 		{name: "canonical id matches allowlist entry", agent: "explore", requested: "fake/fake-fast-model", want: "fake/fake-fast-model"},
 		{name: "tier outside allowlist is rejected", agent: "explore", requested: "@balanced", wantErr: true},
-		{name: "general has no allowlist", agent: "general", requested: "@balanced", want: "fake/fake-balanced-model"},
-		{name: "general defaults to agent model", agent: "general", want: ""},
+		{name: "general accepts explicit override via wildcard", agent: "general", requested: "@fast", want: "fake/fake-fast-model"},
+		{name: "general defaults to @inherit", agent: "general", want: "fake/fake-balanced-model"},
 		{name: "unknown agent defers", agent: "nope", requested: "@whatever", want: "@whatever"},
 	}
 	for _, tc := range tests {
@@ -915,6 +915,14 @@ func TestResolveSubagentModelTiers(t *testing.T) {
 				t.Fatalf("resolveSubagentModel(%q, %q) = %q, want %q", tc.agent, tc.requested, got, tc.want)
 			}
 		})
+	}
+
+	// Missing catalog getter must degrade cleanly without panicking.
+	bareParent := &Session{workspace: ws}
+	bareParent.Config.Model = "fake/fake-balanced-model"
+	got, err := bareParent.resolveSubagentModel("explore", "@fast")
+	if err != nil || got != "fake/fake-fast-model" {
+		t.Fatalf("bareParent resolveSubagentModel(@fast) = (%q, %v), want (%q, nil)", got, err, "fake/fake-fast-model")
 	}
 }
 
@@ -1224,6 +1232,144 @@ func TestResolveSubagentModelUnresolvableAliasRejected(t *testing.T) {
 	}
 	if strings.HasPrefix(got, "@") {
 		t.Fatalf("explore default model = %q, want resolvable reference or empty", got)
+	}
+}
+
+// TestResolveSubagentModelWildcardsAndFuzzyHints verifies:
+// - general defaults to @inherit (parent's active model) when model is omitted,
+// - general accepts non-tiered models via "*",
+// - provider-scoped globs ("ollama/*") permit matching models and reject others,
+// - unknown/typo model requests return ErrInvalidConfig with up to 3 "did you mean" hints.
+func TestResolveSubagentModelWildcardsAndFuzzyHints(t *testing.T) {
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-glob-test")
+	t.Cleanup(func() { xdg.ClearCache() })
+
+	wsDir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: globs\nspec:\n  defaultProvider: alpha\n  defaultModels:\n    completion: alpha/alpha-balanced\n---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	agentsDir := filepath.Join(wsDir, ".agents", "agents")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	alphaProv := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: alpha
+spec:
+  type: fake
+  models:
+    - id: alpha-fast
+      aliases: [fast]
+      capabilities: {completion: true}
+    - id: alpha-balanced
+      aliases: [balanced]
+      capabilities: {completion: true}
+`
+	ollamaProv := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: ollama
+spec:
+  type: ollama
+  models:
+    - id: qwen3.8
+      capabilities: {completion: true}
+    - id: mimo-v2.6
+      capabilities: {completion: true}
+    - id: nemotron-3.5
+      capabilities: {completion: true}
+`
+	if err := os.WriteFile(filepath.Join(provDir, "alpha.provider.yaml"), []byte(alphaProv), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(provDir, "ollama.provider.yaml"), []byte(ollamaProv), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	localAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: localcoder
+spec:
+  triggers: [agent]
+  models: ["ollama/*", "!ollama/nemotron-3.5"]
+---
+local coder
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "localcoder.agent.md"), []byte(localAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(context.Background(), wsDir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	cat, err := models.Build(ws.Catalog(), nil)
+	if err != nil {
+		t.Fatalf("models.Build: %v", err)
+	}
+
+	parent := &Session{workspace: ws, catalog: func() *models.Catalog { return cat }}
+	// Parent is on a non-default model; general must inherit it when model is omitted.
+	parent.Config.Model = "alpha/alpha-fast"
+
+	got, err := parent.resolveSubagentModel("general", "")
+	if err != nil {
+		t.Fatalf("general default: unexpected err: %v", err)
+	}
+	if got != "alpha/alpha-fast" {
+		t.Errorf("general default = %q, want parent model alpha/alpha-fast", got)
+	}
+
+	// general accepts arbitrary non-tiered models via "*".
+	got, err = parent.resolveSubagentModel("general", "ollama/mimo-v2.6")
+	if err != nil {
+		t.Fatalf("general non-tiered override: unexpected err: %v", err)
+	}
+	if got != "ollama/mimo-v2.6" {
+		t.Errorf("general override = %q, want ollama/mimo-v2.6", got)
+	}
+
+	// Provider-scoped glob "ollama/*" accepts matching models and rejects others/negated ones.
+	got, err = parent.resolveSubagentModel("localcoder", "ollama/qwen3.8")
+	if err != nil {
+		t.Fatalf("localcoder ollama/qwen3.8: unexpected err: %v", err)
+	}
+	if got != "ollama/qwen3.8" {
+		t.Errorf("localcoder = %q, want ollama/qwen3.8", got)
+	}
+	if _, err := parent.resolveSubagentModel("localcoder", "alpha/alpha-fast"); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("localcoder alpha/alpha-fast err = %v, want ErrInvalidConfig", err)
+	}
+	if _, err := parent.resolveSubagentModel("localcoder", "ollama/nemotron-3.5"); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("localcoder negated model err = %v, want ErrInvalidConfig", err)
+	}
+
+	// Unknown / typo requests return ErrInvalidConfig with "did you mean" hints (<= 3).
+	for _, tc := range []struct {
+		req      string
+		wantHint string
+	}{
+		{req: "@fas", wantHint: "alpha/alpha-fast"},
+		{req: "qwen3", wantHint: "ollama/qwen3.8"},
+		{req: "ollam/mimo-v2.6", wantHint: "ollama/mimo-v2.6"},
+	} {
+		_, err := parent.resolveSubagentModel("general", tc.req)
+		if !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("resolveSubagentModel(general, %q) err = %v, want ErrInvalidConfig", tc.req, err)
+		}
+		if !strings.Contains(err.Error(), "did you mean") || !strings.Contains(err.Error(), tc.wantHint) {
+			t.Errorf("resolveSubagentModel(general, %q) err = %q, want 'did you mean' with %q", tc.req, err.Error(), tc.wantHint)
+		}
 	}
 }
 

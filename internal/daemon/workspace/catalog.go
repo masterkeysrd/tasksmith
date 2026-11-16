@@ -7,7 +7,6 @@ import (
 	"maps"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -246,6 +245,13 @@ func (c *Catalog) Policies() *warp.Policies {
 		return nil
 	}
 	return ws.Def.Spec.Policies
+}
+
+// Resolver returns the effective WARP resolver for this catalog's cwd
+// (a project-scoped ScopedRegistry when cwd is inside a project, or the
+// root Registry otherwise).
+func (c *Catalog) Resolver() warp.Resolver {
+	return c.resolver()
 }
 
 func (c *Catalog) resolver() warp.Resolver {
@@ -517,125 +523,40 @@ func (c *Catalog) populate() {
 	// policies.tools, dangling resource references) as non-fatal diagnostic
 	// warnings so workspace.Open stays resilient to typos in WORKSPACE.md or
 	// .agents/ instead of crashing.
-	if err := validateRegistryAllowingInherit(c.registry); err != nil {
-		st.validationWarnings = append(st.validationWarnings, err.Error())
+	if err := c.registry.Validate(); err != nil {
+		if valErr, ok := errors.AsType[*warp.ValidationError](err); ok && len(valErr.Issues) > 0 {
+			for _, issue := range valErr.Issues {
+				if isToleratedSystemTierIssue(issue) {
+					continue
+				}
+				if msg := strings.TrimSpace(issue.Error()); msg != "" {
+					st.validationWarnings = append(st.validationWarnings, msg)
+				}
+			}
+		} else {
+			st.validationWarnings = append(st.validationWarnings, err.Error())
+		}
 	}
 
 	c.state.Store(st.clone())
 }
 
-// validateRegistryAllowingInherit runs WARP registry validation against a
-// scratch copy of the registry so the live registry is never mutated — the
-// catalog refreshes concurrently with readers, and swapping sanitized agents
-// into the live registry would expose half-validated specs.
-//
-// Two classes of alias entries are sanitized in the scratch copy only:
-//
-//   - The TaskSmith-reserved "@inherit": no provider declares it (the session
-//     layer resolves it against the delegating parent's model), so WARP would
-//     reject every agent that lists it.
-//   - Tier aliases ("@fast", "@balanced", "@smart", "@flagship") that no registered
-//     provider declares for built-in system agents. Workspaces driven by
-//     custom providers without tier aliases would otherwise report a false
-//     "unknown model alias" warning on every startup, and because Validate
-//     reports only its first error — with system resources checked before
-//     user and workspace ones — that warning would mask genuine cross-reference
-//     problems in user manifests.
-//
-// User-authored agents keep strict alias validation: an unresolvable alias in
-// a user manifest is a real typo and still surfaces as a warning.
-func validateRegistryAllowingInherit(reg *warp.Registry) error {
-	if reg == nil {
-		return nil
-	}
-
-	scratch := warp.NewRegistry(reg.WorkspaceSpec().DeepCopy())
-	for _, res := range reg.Resources() {
-		if ag, ok := res.(*warp.Agent); ok {
-			scratch.Set(ag.QualifiedName(), sanitizeAgentForValidation(reg, ag))
-			continue
-		}
-		scratch.Set(res.QualifiedName(), res)
-	}
-	for _, p := range reg.ListProjects() {
-		scratch.AddProject(p)
-	}
-	return scratch.Validate()
-}
-
-// sanitizeAgentForValidation returns a deep copy of ag with validation-only
-// alias entries removed from spec.models, or ag itself when nothing needs to
-// change.
-func sanitizeAgentForValidation(reg *warp.Registry, ag *warp.Agent) warp.Resource {
-	needsSanitize := false
-	for _, m := range ag.Spec.Models {
-		if isToleratedAlias(reg, ag, m) {
-			needsSanitize = true
-			break
-		}
-	}
-	if !needsSanitize {
-		return ag
-	}
-	hidden := ag.DeepCopy()
-	filtered := make([]string, 0, len(hidden.Spec.Models))
-	for _, m := range hidden.Spec.Models {
-		if isToleratedAlias(reg, ag, m) {
-			continue
-		}
-		filtered = append(filtered, m)
-	}
-	hidden.Spec.Models = filtered
-	return hidden
-}
-
-// isToleratedAlias reports whether an alias entry should be hidden from the
-// validation pass: the reserved "@inherit" on any agent, or a tier alias the
-// registry cannot resolve on a built-in system agent.
-func isToleratedAlias(reg *warp.Registry, ag *warp.Agent, ref string) bool {
-	if isInheritAlias(ref) {
-		return true
-	}
-	if ag.GetNamespace() != warp.NamespaceSystem {
+// isToleratedSystemTierIssue reports whether issue is a missing-alias diagnostic
+// for a standardized tier alias ("@fast", "@balanced", "@smart", "@flagship")
+// on a built-in system agent. Workspaces driven by custom providers without tier
+// aliases intentionally fall back to subsequent spec.models entries instead of
+// surfacing spurious startup warnings, while user-authored agents keep strict
+// validation.
+func isToleratedSystemTierIssue(issue warp.ValidationIssue) bool {
+	if issue.Namespace != warp.NamespaceSystem || issue.Kind != warp.KindAgent || issue.Field != "spec.models" {
 		return false
 	}
-	trimmed := strings.TrimSpace(ref)
-	if !workspaceTierAliases[trimmed] {
-		return false
-	}
-	return !tierAliasResolvable(reg, trimmed)
-}
-
-// tierAliasResolvable reports whether any registered provider or workspace
-// model alias backs the given tier alias (e.g. "@fast").
-func tierAliasResolvable(reg *warp.Registry, alias string) bool {
-	name := strings.TrimPrefix(alias, "@")
-	if ws := reg.WorkspaceSpec(); ws != nil && ws.Def != nil {
-		if _, ok := ws.Def.Spec.ModelAliases[name]; ok {
+	for _, tier := range TierAliases {
+		if strings.HasSuffix(issue.Message, fmt.Sprintf("unknown model alias %q", tier)) {
 			return true
-		}
-		if _, ok := ws.Def.Spec.ModelAliases[alias]; ok {
-			return true
-		}
-	}
-	for _, res := range reg.Resources() {
-		mp, ok := res.(*warp.ModelProvider)
-		if !ok {
-			continue
-		}
-		for i := range mp.Spec.Models {
-			if slices.ContainsFunc(mp.Spec.Models[i].Aliases, func(a string) bool {
-				return strings.EqualFold(strings.TrimSpace(a), name)
-			}) {
-				return true
-			}
 		}
 	}
 	return false
-}
-
-func isInheritAlias(ref string) bool {
-	return strings.EqualFold(strings.TrimSpace(ref), ModelAliasInherit)
 }
 
 // clone returns a defensive copy so a published state is never mutated afterwards.
@@ -655,8 +576,7 @@ func (s *catalogState) clone() *catalogState {
 }
 
 // explicitlyNamedAgentTools returns the tool names an agent lists outright in
-// spec.tools, normalized so an MCP tool written as "mcp__<server>__<tool>" also
-// matches the name it materializes under, "<server>__<tool>".
+// spec.tools.
 func (c *Catalog) explicitlyNamedAgentTools(resolved *warp.ResolvedAgent) map[string]bool {
 	names := make(map[string]bool)
 	if resolved == nil || resolved.Agent == nil {
@@ -668,16 +588,9 @@ func (c *Catalog) explicitlyNamedAgentTools(resolved *warp.ResolvedAgent) map[st
 			continue
 		}
 		names[entry] = true
-		if bare, ok := strings.CutPrefix(entry, mcpToolNamePrefix); ok {
-			names[bare] = true
-		}
 	}
 	return names
 }
-
-// mcpToolNamePrefix is the optional prefix users may write in spec.tools and the
-// deferred-tools directory before an MCP tool's "<server>__<tool>" name.
-const mcpToolNamePrefix = "mcp__"
 
 // SetDeniedMCPTools records the tools discovered on one MCP server that
 // spec.policies prohibits, replacing any previously recorded set for that server.
@@ -949,14 +862,10 @@ type DeferredToolSummary struct {
 // prompt discovery.
 type DeferredMCPSummary struct {
 	Name        string
-	Prefix      string // "mcp__<name>__*"
+	Prefix      string // "<name>__*"
 	Description string
 	Tools       []string
 	ExtraCount  int
-	// ToolsText is the pre-rendered "tools: `a`, `b`, +N more" segment. It is
-	// computed in Go because the template shorthand preprocessor mangles named
-	// range variables ($i, $t) that would otherwise join the list.
-	ToolsText string
 }
 
 // DeferredToolsCatalog groups deferred custom/built-in tools and MCP servers.
@@ -1012,19 +921,13 @@ func (c *Catalog) BuildDeferredToolsCatalog(resolved *warp.ResolvedAgent) *Defer
 	serverMap := make(map[string]*DeferredMCPSummary)
 
 	for _, name := range partition.Deferred {
-		// Strip the "mcp__" prefix so ParseMCPToolName yields the server name
-		// and the short tool name.
-		bare := name
-		if after, ok := strings.CutPrefix(bare, "mcp__"); ok {
-			bare = after
-		}
-		serverName, shortToolName, isMCP := warp.ParseMCPToolName(bare)
+		serverName, shortToolName, isMCP := warp.ParseMCPToolName(name)
 		if isMCP {
 			srv, ok := serverMap[serverName]
 			if !ok {
 				srv = &DeferredMCPSummary{
 					Name:        serverName,
-					Prefix:      "mcp__" + serverName + "__*",
+					Prefix:      serverName + "__*",
 					Description: c.mcpDescription(resolved, serverName),
 				}
 				serverMap[serverName] = srv
@@ -1046,38 +949,13 @@ func (c *Catalog) BuildDeferredToolsCatalog(resolved *warp.ResolvedAgent) *Defer
 	}
 
 	for _, name := range serverOrder {
-		srv := serverMap[name]
-		srv.ToolsText = renderMCPTools(srv.Tools, srv.ExtraCount)
-		cat.MCPServers = append(cat.MCPServers, *srv)
+		cat.MCPServers = append(cat.MCPServers, *serverMap[name])
 	}
 
 	if len(cat.Tools) == 0 && len(cat.MCPServers) == 0 {
 		return nil
 	}
 	return cat
-}
-
-// renderMCPTools formats a deferred MCP server's tool list for the system prompt
-// as "tools: `a`, `b`, +N more". It is computed in Go because the template
-// shorthand preprocessor mangles the named range variables ($i, $t) that would
-// otherwise join the list.
-func renderMCPTools(tools []string, extra int) string {
-	var b strings.Builder
-	b.WriteString("tools: ")
-	for i, tn := range tools {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString("`")
-		b.WriteString(tn)
-		b.WriteString("`")
-	}
-	if extra > 0 {
-		b.WriteString(", +")
-		b.WriteString(strconv.Itoa(extra))
-		b.WriteString(" more")
-	}
-	return b.String()
 }
 
 // AgentRenderGlobals returns the template globals for rendering an agent's system

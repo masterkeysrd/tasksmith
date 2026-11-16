@@ -2,7 +2,6 @@ package models
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/loom/profile"
@@ -596,45 +595,55 @@ func TestCatalogWorkspaceAliases(t *testing.T) {
 	}
 }
 
-// unresolvedAliasStub mimics warp's behavior for a provider-scoped alias that
-// matches no declared alias: the reference is qualified against the default
-// provider (Provider stays nil, ModelID keeps its "@alias" segment, and
-// QualifiedID gains a duplicated provider prefix).
-type unresolvedAliasStub struct {
-	providers []*warp.ModelProvider
+// warpRegistryCatalog wraps a real *warp.Registry as a WorkspaceCatalog so
+// tests exercise WARP's actual ResolveModels behavior.
+type warpRegistryCatalog struct {
+	reg *warp.Registry
 }
 
-func (s *unresolvedAliasStub) Providers() []*warp.ModelProvider { return s.providers }
-
-func (s *unresolvedAliasStub) WorkspaceSpec() *warp.Workspace { return nil }
-
-func (s *unresolvedAliasStub) ResolveModels(_ warp.ModelRole, explicit ...string) []warp.ResolvedModel {
-	if len(explicit) == 0 || explicit[0] == "" {
-		return nil
+func (w *warpRegistryCatalog) Providers() []*warp.ModelProvider {
+	var out []*warp.ModelProvider
+	for _, r := range w.reg.ListResources(warp.QueryOptions{Kinds: []warp.Kind{warp.KindModelProvider}, Effective: true}) {
+		if mp, ok := r.(*warp.ModelProvider); ok {
+			out = append(out, mp)
+		}
 	}
-	ref := explicit[0]
-	if strings.HasPrefix(ref, "fake/@") {
-		return []warp.ResolvedModel{{Provider: nil, ModelID: ref, QualifiedID: "fake/" + ref}}
-	}
-	return nil
+	return out
+}
+
+func (w *warpRegistryCatalog) WorkspaceSpec() *warp.Workspace {
+	return w.reg.WorkspaceSpec()
+}
+
+func (w *warpRegistryCatalog) ResolveModels(role warp.ModelRole, explicit ...string) []warp.ResolvedModel {
+	return w.reg.ResolveModels(role, explicit...)
 }
 
 // TestCatalogRejectsUnresolvedProviderScopedAlias verifies a provider-qualified
-// alias reference that WARP could not match ("fake/@missing") is treated as
-// unresolved instead of synthesizing the bogus model "fake/fake/@missing".
+// or bare alias reference that WARP cannot match ("fake/@missing", "@missing")
+// is rejected instead of synthesizing a bogus model.
 func TestCatalogRejectsUnresolvedProviderScopedAlias(t *testing.T) {
 	prov := &warp.ModelProvider{
 		BaseResource: warp.BaseResource{
 			APIVersion: warp.APIVersion,
 			Kind:       warp.KindModelProvider,
+			Namespace:  warp.NamespaceWorkspace,
 			Metadata:   warp.Metadata{Name: "fake"},
 		},
 		Spec: warp.ModelProviderSpec{
 			Type:   "fake",
-			Models: []warp.ProviderModel{{ID: "fake-model"}},
+			Models: []warp.ProviderModel{{ID: "fake-model", Aliases: []string{"known"}}},
 		},
 	}
-	c, err := Build(&unresolvedAliasStub{providers: []*warp.ModelProvider{prov}}, &fakeBase{})
+	reg := warp.NewRegistry(&warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{APIVersion: warp.APIVersion, Kind: warp.KindWorkspace},
+			Spec:         warp.WorkspaceDefSpec{DefaultProvider: "fake"},
+		},
+	})
+	reg.Set(prov.QualifiedName(), prov)
+
+	c, err := Build(&warpRegistryCatalog{reg: reg}, &fakeBase{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,5 +653,14 @@ func TestCatalogRejectsUnresolvedProviderScopedAlias(t *testing.T) {
 	}
 	if _, ok := c.Resolve(RoleCompletion, "fake/@missing"); ok {
 		t.Errorf("Resolve(fake/@missing) should not resolve")
+	}
+	if _, ok := c.Get(ID("@missing")); ok {
+		t.Errorf("Get(@missing) should not resolve")
+	}
+	if _, ok := c.Resolve(RoleCompletion, "@missing"); ok {
+		t.Errorf("Resolve(@missing) should not resolve")
+	}
+	if m, ok := c.Get(ID("fake/@known")); !ok || m.ID != ID("fake/fake-model") {
+		t.Errorf("Get(fake/@known) = %+v, ok=%v; want fake/fake-model", m, ok)
 	}
 }

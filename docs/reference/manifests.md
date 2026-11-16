@@ -206,7 +206,7 @@ Never attempt to modify code directly; report your findings with precise line re
 | :--- | :--- | :--- |
 | `extends` | string | Qualified or short name of a base agent to inherit prompts and capabilities from. |
 | `triggers` | array of strings | Allowed caller types (`human`, `agent`, `system`). Empty allows all callers. Agents without `human` cannot be selected by human users via `--agent` or `/agent`. |
-| `models` | array of strings | Ordered model preferences (`provider/model`, model alias such as `@fast`, or `@default`). When an agent runs as a subagent, this list also acts as the allowlist enforced on `invoke_agent`'s `model` parameter; the reserved `@inherit` (the delegating session's model) may also be listed. See [tier aliases](./providers.md#tier-aliases). |
+| `models` | array of strings | Ordered model preferences (`provider/model`, model alias such as `@fast` or `@default`, `@inherit`, or glob patterns such as `"*"`, `"ollama/*"`, and `"!pattern"` negations). When an agent runs as a subagent, this list also acts as the allowlist enforced on `invoke_agent`'s `model` parameter. See [tier aliases](./providers.md#tier-aliases). |
 | `temperature` | float | Sampling temperature override (`0.0` to `2.0`). Sent when supported; omitted with a session warning when unsupported. |
 | `thinking.type` | string | Reasoning strategy: `toggle`, `effort`, `budget`, or `adaptive`. |
 | `thinking.effort` | string | Effort level for the `effort` strategy (e.g. `low`, `medium`, `high`). |
@@ -289,7 +289,7 @@ spec:
 | `priority` | integer | `0` | Ordering when several rules resolve together; higher wins, ties break by `metadata.name`. |
 | `triggers.always` | boolean | `false` | Injects the full body into `<workspace_rules>` for every agent in scope. |
 | `triggers.globs` | array of strings | `nil` | Workspace-relative path patterns supporting `**` and `!` negation. A pathless pattern also matches on base name. |
-| `triggers.tools` | array of strings | `nil` | Tool names or glob patterns (`*`, `mcp__*`); matched case-insensitively, also against short names of qualified tools. |
+| `triggers.tools` | array of strings | `nil` | Tool names or glob patterns (`*`, `github__*`); matched case-insensitively, also against short names of qualified tools. |
 | `triggers.keywords` | array of strings | `nil` | Case-insensitive word-boundary keywords or phrases that produce a suggestion, never an automatic load. |
 | `triggers.useWhen` | string | `""` | Natural-language condition shown to the agent in `<available_rules>`. |
 | `triggers.decision` | string | `""` | **Unsupported.** Decision triggers are not evaluated for rules; setting this emits a startup warning that the reference is ignored. |
@@ -644,7 +644,7 @@ Whether a tool is visible to the model is decided per session from the agent's t
 | `denied` | Blocked by workspace, agent, or MCP server tool policy. |
 | `inactive` | Neither loaded, deferred, nor denied (for example, a conditional built-in that the current session does not activate). |
 
-Custom and MCP tools are deferred by default. MCP tools stay deferred even under `spec.tools: ["*"]`; to load one eagerly, name it outright as `<server>__<tool>` or `mcp__<server>__<tool>`. Inspect the resolved status of every tool in a session with the [`/tools` browser](cli.md#tools-browser-tools).
+Custom and MCP tools are deferred by default. MCP tools stay deferred even under `spec.tools: ["*"]`; to load one eagerly, name it outright as `<server>__<tool>`. Inspect the resolved status of every tool in a session with the [`/tools` browser](cli.md#tools-browser-tools).
 
 ---
 
@@ -703,7 +703,7 @@ spec:
 | `command` | array of strings | Command line and arguments for `stdio` process execution. |
 | `endpoint` | string | HTTP/SSE server URL for network-based MCP servers. |
 | `env` | map[string]string | Environment variables passed to the child process. |
-| `auth` | object | Authentication config (`type`, `env`, `header`, `file`) for HTTP/SSE endpoints. |
+| `auth` | object | Authentication config (`type`, `header`, `token`, `username`, `password`, `oauth`) for HTTP/SSE endpoints. |
 | `headers` | map[string]string | Custom HTTP headers sent with requests. |
 | `annotations` | object | Default safety annotations applied to all tools exported by this MCP. |
 | `policies.tools` | object | Inclusion/exclusion filter globs for exported tools (`include`, `exclude`). |

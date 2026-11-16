@@ -45,6 +45,11 @@ func TestPresets(t *testing.T) {
 
 	for _, p := range presets {
 		name := p.Metadata.Name
+		if p.Spec.Auth != nil {
+			if err := p.Spec.Auth.Validate(); err != nil {
+				t.Errorf("preset %s auth.Validate() error: %v", name, err)
+			}
+		}
 		if _, ok := expected[name]; ok {
 			expected[name] = true
 		}
@@ -1129,6 +1134,58 @@ Big agent instructions.
 			t.Errorf("expected a too-many-eager-tools warning, got %v", got)
 		}
 	})
+
+	// 7. Multiple broken manifests across different resource kinds all surface
+	// in Catalog().Warnings() in a single pass.
+	t.Run("MultipleBrokenManifests", func(t *testing.T) {
+		dir := t.TempDir()
+		manifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: multi-broken-ws
+spec:
+  defaultAgent: main
+---
+`
+		if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		agentsDir := filepath.Join(dir, ".agents")
+		for _, sub := range []string{"agents", "commands", "mcps"} {
+			if err := os.MkdirAll(filepath.Join(agentsDir, sub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		badAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: bad-agent\nspec:\n  skills: [missing-skill]\n---\nBody.\n"
+		if err := os.WriteFile(filepath.Join(agentsDir, "agents", "bad.agent.md"), []byte(badAgent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		badCmd := "---\napiVersion: warp/v1alpha1\nkind: Command\nmetadata:\n  name: bad-cmd\nspec:\n  agent: missing-cmd-agent\n---\nRun.\n"
+		if err := os.WriteFile(filepath.Join(agentsDir, "commands", "bad.cmd.md"), []byte(badCmd), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		badMCP := "apiVersion: warp/v1alpha1\nkind: MCP\nmetadata:\n  name: bad-mcp\nspec:\n  type: sse\n"
+		if err := os.WriteFile(filepath.Join(agentsDir, "mcps", "bad.mcp.yaml"), []byte(badMCP), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ws, err := Open(ctx, dir, WithBuiltinFS(builtinToolManifests(builtinToolNames)))
+		if err != nil {
+			t.Fatalf("Open error: %v", err)
+		}
+		warnings := ws.Catalog().Warnings()
+		if !warnContains(warnings, "missing-skill") {
+			t.Errorf("expected bad-agent missing-skill warning, got %v", warnings)
+		}
+		if !warnContains(warnings, "missing-cmd-agent") {
+			t.Errorf("expected bad-cmd missing-cmd-agent warning, got %v", warnings)
+		}
+		if !warnContains(warnings, "endpoint is required") {
+			t.Errorf("expected bad-mcp endpoint warning, got %v", warnings)
+		}
+	})
 }
 
 // TestModelAliasesResolution verifies that workspace.spec.modelAliases and
@@ -2039,7 +2096,7 @@ Linter tool.
 apiVersion: warp/v1alpha1
 kind: Tool
 metadata:
-  name: mcp__github__create_issue
+  name: github__create_issue
   description: Create a GitHub issue
 spec:
   command: ["sh", "-c"]
@@ -2053,7 +2110,7 @@ Create issue.
 apiVersion: warp/v1alpha1
 kind: Tool
 metadata:
-  name: mcp__github__list_prs
+  name: github__list_prs
   description: List GitHub pull requests
 spec:
   command: ["sh", "-c"]
@@ -2082,8 +2139,8 @@ spec:
       include:
         - eager-tool
         - linter
-        - mcp__github__create_issue
-        - mcp__github__list_prs
+        - github__create_issue
+        - github__list_prs
 ---
 Deferred agent.
 `
@@ -2138,7 +2195,7 @@ All-eager agent.
 		t.Fatalf("expected 1 MCP server summary, got %d: %+v", len(dec.MCPServers), dec.MCPServers)
 	}
 	gh := dec.MCPServers[0]
-	if gh.Name != "github" || gh.Prefix != "mcp__github__*" {
+	if gh.Name != "github" || gh.Prefix != "github__*" {
 		t.Errorf("unexpected MCP server summary: %+v", gh)
 	}
 	foundCreate, foundList := false, false
@@ -2236,7 +2293,7 @@ spec:
   endpoint: https://api.acme.example
   auth:
     type: api-key
-    env: ACME_LLM_ACCESS
+    token: "${env:ACME_LLM_ACCESS}"
   models:
     - id: acme-1
       name: acme-1
@@ -2272,7 +2329,7 @@ spec:
   type: anthropic
   auth:
     type: api-key
-    env: PROJECT_LLM_KEY
+    token: "${env:PROJECT_LLM_KEY}"
   models:
     - id: corp-1
       name: corp-1
@@ -2517,5 +2574,58 @@ func TestUnresolvableTierAliasesToleratedForBuiltinAgents(t *testing.T) {
 	}
 	if !slices.Contains(resolved.Agent.Spec.Models, ModelAliasInherit) {
 		t.Errorf("@inherit stripped from live registry spec.models: %v", resolved.Agent.Spec.Models)
+	}
+}
+
+// TestUndeclaredSubprojectAutoDiscovery verifies warp.LoadWithOptions
+// automatically discovers an undeclared subproject beneath a root WORKSPACE.md
+// while keeping root .agents/ in NamespaceWorkspace and subproject .agents/ in
+// NamespaceLocal.
+func TestUndeclaredSubprojectAutoDiscovery(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	rootDir := t.TempDir()
+	wsManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: root-ws\nspec:\n  projects: [\".\"]\n---\n"
+	if err := os.WriteFile(filepath.Join(rootDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rootAgentsDir := filepath.Join(rootDir, ".agents", "agents")
+	if err := os.MkdirAll(rootAgentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wsAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: shared\n  description: Workspace shared agent\n---\nws shared\n"
+	if err := os.WriteFile(filepath.Join(rootAgentsDir, "shared.agent.md"), []byte(wsAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	subDir := filepath.Join(rootDir, "apps", "web")
+	subAgentsDir := filepath.Join(subDir, ".agents", "agents")
+	if err := os.MkdirAll(subAgentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	localAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: local-only\n  description: Local subproject agent\n---\nlocal\n"
+	if err := os.WriteFile(filepath.Join(subAgentsDir, "local-only.agent.md"), []byte(localAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := Open(ctx, subDir)
+	if err != nil {
+		t.Fatalf("Open undeclared subproject: %v", err)
+	}
+	wantRoot, err := filepath.EvalSymlinks(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.RootDir() != wantRoot {
+		t.Errorf("RootDir() = %q, want %q", ws.RootDir(), wantRoot)
+	}
+	shared, ok := ws.Catalog().GetAgent("shared")
+	if !ok || shared.Def.Namespace != NamespaceWorkspace {
+		t.Errorf("expected workspace shared agent in NamespaceWorkspace, got %+v (ok=%v)", shared, ok)
+	}
+	localOnly, ok := ws.Catalog().GetAgent("local-only")
+	if !ok || ws.Catalog().ScopeNamespace(localOnly.Def.BaseResource) != NamespaceLocal {
+		t.Errorf("expected undeclared subproject agent in NamespaceLocal, got %+v (ok=%v)", localOnly, ok)
 	}
 }

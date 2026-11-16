@@ -14,21 +14,21 @@ Agent skill, command, subagent, and rule selectors can use short names, qualifie
 
 In a project scope, the search order is current project, workspace, user, system, then plugin namespaces. At workspace-root scope, project-specific resources are excluded. `local/Kind/name` is a virtual project alias with workspace fallback; concrete project-qualified names use the project slug. Other qualified names are looked up directly. WARP also supports a relative-path fallback: if direct lookup fails, a path such as `skills/go.md` can match a resource name derived from its path or basename. It is not a filesystem read at reference time.
 
-An effective query chooses a winner for a short name by namespace priority. Filter by kind when looking for a particular resource type: WARP's effective query deduplicates by name within the selected results, so a mixed-kind query can shadow different kinds with the same name. Equal-priority ties use the lexicographically first qualified name; prefer qualified names when selecting among plugins.
+An effective query chooses a winner for a short name by namespace priority, deduplicating by `(Kind, Name)` so resources of different kinds with the same short name do not shadow each other. Equal-priority ties use the lexicographically first qualified name; prefer qualified names when selecting among plugins.
 
 ## Validation versus runtime resolution
 
-WARP exposes an explicit registry `Validate()` operation; TaskSmith's normal workspace loading does not invoke it. Successful discovery therefore does not prove every manifest or cross-reference is valid. Agent resolution can skip missing selectors even though an explicit validation pass would reject missing non-glob references. Do not assume invalid references will always fail the session at startup.
+WARP exposes an explicit registry `Validate()` operation returning a multi-issue `*ValidationError` that collects every structural and cross-reference failure across the workspace. TaskSmith's catalog invokes `Validate()` during workspace load and refresh, unpacking every collected issue—alongside cross-provider duplicate bare alias diagnostics—into non-fatal startup warnings (`Catalog.Warnings()`). Because invalid references surface as warnings rather than fatal startup errors, workspace loading stays resilient and agent resolution can still skip missing selectors at runtime.
 
 | Validation area | Checks performed by WARP's registry validation |
 | --- | --- |
 | Base metadata | `apiVersion`, a recognized `kind`, and `metadata.name` must be present. |
-| Agents | Parent references and non-glob skill, command, subagent, and rule references must resolve to the expected kind; inheritance cycles fail. A declared model found in provider metadata must support completion. |
-| Workspace and providers | Checks default agent, default provider when providers exist, rule references, and declared model role capabilities. Project paths are checked during mapping. |
+| Agents | Parent references and non-glob skill, command, subagent, and rule references must resolve to the expected kind; inheritance cycles fail. `spec.models` validates `@inherit` (rejecting provider-prefixed `<prov>/@inherit`), globs (`"*"`, `"<provider>/*"`, `"!pattern"`), alias references, and completion capabilities; built-in system agents tolerate unconfigured tier aliases (`@fast`, `@balanced`, `@smart`, `@flagship`). |
+| Workspace and providers | Checks default agent, default provider when providers exist, rule references, `ProviderAuth` expression syntax (`${env:...}`, `${file:...}`, etc.) and scheme constraints, and declared model role capabilities. Project paths are checked during mapping. |
 | Decisions | Question names are nonempty and unique; types and probability bounds are valid; choices and scores have at least two named options or levels. A declared model found in provider metadata must support decisions. |
 | Rules | Decision and non-glob tool trigger references must resolve. |
 | Skills and commands | Non-glob tool references and command agent references must resolve; command context must be `inline`, `fork`, or `clean`. |
-| MCP | MCP transport must be recognized and have its required command or endpoint. |
+| MCP | MCP transport must be recognized and have its required command or endpoint, and `ProviderAuth` expression syntax is checked. |
 | Plugins and tools | Structural export patterns are rejected, and standalone tools are checked against workspace tool policy. |
 
-Glob selectors are generally skipped by reference validation rather than required to match. Model capability checks do not prove that an undeclared model exists or is available. Validation reports the first error and does not replace runtime permissions, sandboxing, or provider connectivity checks.
+Glob selectors are generally skipped by reference validation rather than required to match. Model capability checks do not prove that an undeclared model exists or is available. Validation collects all issues across resources rather than stopping at the first error, and does not replace runtime permissions, sandboxing, or provider connectivity checks.

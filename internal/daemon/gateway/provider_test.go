@@ -65,51 +65,51 @@ func TestProviderAuthHeadersEndToEnd(t *testing.T) {
 		deny         []string
 	}{
 		{
-			name:         "openai env sends bearer",
+			name:         "openai bearer sends bearer",
 			providerType: "openai",
-			auth:         &AuthConfig{Type: AuthTypeEnv, Env: "E2E_KEY"},
+			auth:         &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "Authorization=Bearer sk-e2e;",
 		},
 		{
 			name:         "openai basic replaces the bearer default",
 			providerType: "openai",
-			auth:         &AuthConfig{Type: AuthTypeBasic, Env: "E2E_KEY"},
+			auth:         &AuthConfig{Type: AuthTypeBasic, Token: &CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "Authorization=Basic " + base64.StdEncoding.EncodeToString([]byte("sk-e2e")) + ";",
 		},
 		{
 			name:         "openai api-key sends the raw token",
 			providerType: "openai",
-			auth:         &AuthConfig{Type: AuthTypeAPIKey, Env: "E2E_KEY"},
+			auth:         &AuthConfig{Type: AuthTypeAPIKey, Token: &CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "Authorization=sk-e2e;",
 		},
 		{
 			name:         "openai custom header drops the SDK bearer",
 			providerType: "openai",
-			auth:         &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Auth", Env: "E2E_KEY"},
+			auth:         &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Auth", Token: &CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "X-Auth=sk-e2e;",
 		},
 		{
-			name:         "anthropic env keeps the vendor key header",
+			name:         "anthropic api-key X-Api-Key sends only vendor key header",
 			providerType: "anthropic",
-			auth:         &AuthConfig{Type: AuthTypeEnv, Env: "E2E_KEY"},
+			auth:         &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Api-Key", Token: &CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
-			want:         "Authorization=Bearer sk-e2e;X-Api-Key=sk-e2e;",
+			want:         "X-Api-Key=sk-e2e;",
 		},
 		{
 			name:         "anthropic bearer drops the vendor key header",
 			providerType: "anthropic",
-			auth:         &AuthConfig{Type: AuthTypeBearer, Env: "E2E_KEY"},
+			auth:         &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "Authorization=Bearer sk-e2e;",
 		},
 		{
 			name:         "anthropic custom header drops the vendor key",
 			providerType: "anthropic",
-			auth:         &AuthConfig{Type: AuthTypeBasic, Header: "X-Auth", Env: "E2E_KEY"},
+			auth:         &AuthConfig{Type: AuthTypeBasic, Header: "X-Auth", Token: &CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "X-Auth=Basic " + base64.StdEncoding.EncodeToString([]byte("sk-e2e")) + ";",
 		},
@@ -247,7 +247,7 @@ func TestProviderMissingCredentialWarningNamesFile(t *testing.T) {
 		Providers: []ProviderConfig{{
 			Name: "internal",
 			Type: "openai",
-			Auth: &AuthConfig{Type: AuthTypeBearer, File: "~/absent/token"},
+			Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{File: "~/absent/token"}},
 		}},
 	}
 
@@ -322,7 +322,7 @@ func TestAntigravityProviderConfigEndToEnd(t *testing.T) {
 			Name:     "antigravity",
 			Type:     "antigravity",
 			Endpoint: srv.URL,
-			Auth:     &AuthConfig{Type: AuthTypeOAuth2, Env: "AG_TEST_TOKEN"},
+			Auth:     &AuthConfig{Type: AuthTypeOAuth2, Token: &CredentialSource{Env: "AG_TEST_TOKEN"}},
 			Headers:  map[string]string{"User-Agent": "antigravity/cli/9.9.9 (test)"},
 			Config: map[string]any{
 				"companionProject": "companion-proj-123",
@@ -435,7 +435,7 @@ func TestAntigravitySessionAffinityMiddleware(t *testing.T) {
 			Name:     "antigravity",
 			Type:     "antigravity",
 			Endpoint: srv.URL,
-			Auth:     &AuthConfig{Type: AuthTypeOAuth2, Env: "AG_TEST_TOKEN"},
+			Auth:     &AuthConfig{Type: AuthTypeOAuth2, Token: &CredentialSource{Env: "AG_TEST_TOKEN"}},
 			Config:   map[string]any{"companionProject": "companion-proj-123"},
 		}},
 	})

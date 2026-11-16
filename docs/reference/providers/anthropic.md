@@ -38,8 +38,9 @@ spec:
   defaultModels:
     completion: claude-sonnet-5-5
   auth:
-    type: env
-    env: ANTHROPIC_API_KEY
+    type: api-key
+    header: X-Api-Key
+    token: "${env:ANTHROPIC_API_KEY}"
   models:
     - id: claude-sonnet-5-5
       name: claude-sonnet-5-5
@@ -121,7 +122,7 @@ spec:
     X-Corporate-ID: engineering-ai
   auth:
     type: bearer
-    env: CORP_ANTHROPIC_TOKEN
+    token: "${env:CORP_ANTHROPIC_TOKEN}"
 ```
 
 ---

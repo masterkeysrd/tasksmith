@@ -34,10 +34,10 @@ func (c *Config) Fingerprint() string {
 		return "nil"
 	}
 
-	// 1. Collect only the env keys referenced by any provider's Auth.Env, and a
-	// content digest for each provider reading its credential from a file or
-	// OAuth token store, so rotating credentials or signing in rebuilds the
-	// gateway instead of reusing a stale one.
+	// 1. Collect only the env keys referenced by any provider's credential
+	// sources, and a content digest for each file or OAuth token store, so
+	// rotating credentials or signing in rebuilds the gateway instead of reusing
+	// a stale one.
 	relevantEnv := make(map[string]string)
 	relevantFiles := make(map[string]string)
 	relevantOAuth := make(map[string]string)
@@ -45,16 +45,8 @@ func (c *Config) Fingerprint() string {
 		if p.Auth == nil {
 			continue
 		}
-		if p.Auth.Env != "" {
-			if val := strings.TrimSpace(c.Env[p.Auth.Env]); val != "" {
-				relevantEnv[p.Auth.Env] = c.Env[p.Auth.Env]
-			} else {
-				relevantEnv[p.Auth.Env] = os.Getenv(p.Auth.Env)
-			}
-		}
-		if p.Auth.File != "" {
-			relevantFiles[p.Name] = credentialDigest(p.Auth.File)
-		}
+		collectSourceFingerprint(p.Name, p.Auth.Token, c.Env, relevantEnv, relevantFiles)
+		collectSourceFingerprint(p.Name+":password", p.Auth.Password, c.Env, relevantEnv, relevantFiles)
 		if p.Auth.scheme() == AuthTypeOAuth2 {
 			relevantOAuth[p.Name] = oauthCredentialDigest(p.Name)
 		}
@@ -117,13 +109,29 @@ func (c *Config) Validate() error {
 
 		if p.Auth != nil {
 			switch p.Auth.scheme() {
-			case AuthTypeEnv, AuthTypeBearer, AuthTypeAPIKey, AuthTypeBasic, AuthTypeNone, AuthTypeOAuth2:
+			case AuthTypeBearer, AuthTypeAPIKey, AuthTypeBasic, AuthTypeNone, AuthTypeOAuth2:
 			default:
-				return fmt.Errorf("%w: provider %q has unknown auth type %q (expected env, bearer, api-key, basic, none, or oauth2)",
+				return fmt.Errorf("%w: provider %q has unknown auth type %q (expected bearer, api-key, basic, none, or oauth2)",
 					ErrInvalidConfig, name, p.Auth.Type)
 			}
 		}
 	}
 
 	return nil
+}
+
+func collectSourceFingerprint(fileKey string, src *CredentialSource, cfgEnv, relevantEnv, relevantFiles map[string]string) {
+	if src == nil {
+		return
+	}
+	if key := strings.TrimSpace(src.Env); key != "" {
+		if val := strings.TrimSpace(cfgEnv[key]); val != "" {
+			relevantEnv[key] = cfgEnv[key]
+		} else {
+			relevantEnv[key] = os.Getenv(key)
+		}
+	}
+	if file := strings.TrimSpace(src.File); file != "" {
+		relevantFiles[fileKey] = credentialDigest(file)
+	}
 }

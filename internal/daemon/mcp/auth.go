@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/warp"
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -133,14 +134,45 @@ func expandEnvMap(m map[string]string, env map[string]string) map[string]string 
 	return out
 }
 
-// resolveCredential reads a credential from the workspace env map, then the host
-// environment for the named variable, then an explicit file, mirroring how model
-// provider credentials resolve.
+// resolveCredential reads a credential from a warp.ProviderAuth expression
+// (${env:...} or ${file:...}) on spec.auth.token, or from username/password for
+// basic authentication.
 func resolveCredential(a *warp.ProviderAuth, env map[string]string) (string, error) {
 	if a == nil {
 		return "", nil
 	}
-	if name := strings.TrimSpace(a.Env); name != "" {
+	if tokenExpr := strings.TrimSpace(a.Token); tokenExpr != "" {
+		return resolveSecretExpression("spec.auth.token", tokenExpr, env)
+	}
+	scheme := strings.ToLower(strings.TrimSpace(a.Type))
+	if scheme == authTypeBasic && (strings.TrimSpace(a.Username) != "" || strings.TrimSpace(a.Password) != "") {
+		user, err := resolveOptionalExpressionValue("spec.auth.username", a.Username, env)
+		if err != nil {
+			return "", err
+		}
+		pass, err := resolveOptionalExpressionValue("spec.auth.password", a.Password, env)
+		if err != nil {
+			return "", err
+		}
+		if user != "" || pass != "" {
+			return user + ":" + pass, nil
+		}
+	}
+	return "", nil
+}
+
+func resolveSecretExpression(field, raw string, env map[string]string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	expr, ok := warp.ParseExpression(raw)
+	if !ok {
+		return "", requireAuth(fmt.Errorf("%s must be a ${<scheme>:<ref>} expression", field))
+	}
+	switch expr.Scheme {
+	case "env":
+		name := strings.TrimSpace(expr.Target)
 		val := env[name]
 		if strings.TrimSpace(val) == "" {
 			val = os.Getenv(name)
@@ -149,9 +181,10 @@ func resolveCredential(a *warp.ProviderAuth, env map[string]string) (string, err
 			return "", requireAuth(fmt.Errorf("missing credential environment variable %q", name))
 		}
 		return strings.TrimSpace(val), nil
-	}
-	if file := strings.TrimSpace(a.File); file != "" {
-		data, err := os.ReadFile(expandPlaceholders(file, env))
+	case "file":
+		file := strings.TrimSpace(expr.Target)
+		resolved := fsutils.ResolveConfigPath(expandPlaceholders(file, env), "")
+		data, err := os.ReadFile(resolved)
 		if err != nil {
 			return "", requireAuth(fmt.Errorf("read credential file %q: %w", file, err))
 		}
@@ -160,8 +193,20 @@ func resolveCredential(a *warp.ProviderAuth, env map[string]string) (string, err
 			return "", requireAuth(fmt.Errorf("credential file %q is empty", file))
 		}
 		return token, nil
+	default:
+		return "", requireAuth(fmt.Errorf("unsupported credential expression scheme %q in %s", expr.Scheme, field))
 	}
-	return "", nil
+}
+
+func resolveOptionalExpressionValue(field, raw string, env map[string]string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if warp.IsExpression(raw) {
+		return resolveSecretExpression(field, raw, env)
+	}
+	return strings.TrimSpace(expandPlaceholders(raw, env)), nil
 }
 
 // requireAuth marks err as an authentication failure so a failed connection
@@ -242,13 +287,39 @@ func credentialSource(a *warp.ProviderAuth) string {
 	if a == nil {
 		return ""
 	}
-	if name := strings.TrimSpace(a.Env); name != "" {
-		return "environment variable " + name
+	if src := formatExpressionSource(a.Token); src != "" {
+		return src
 	}
-	if file := strings.TrimSpace(a.File); file != "" {
-		return "credential file " + file
+	if src := formatExpressionSource(a.Password); src != "" {
+		return src
+	}
+	if a.OAuth != nil {
+		if src := formatExpressionSource(a.OAuth.ClientID); src != "" {
+			return src
+		}
+		if src := formatExpressionSource(a.OAuth.ClientSecret); src != "" {
+			return src
+		}
 	}
 	return ""
+}
+
+func formatExpressionSource(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if expr, ok := warp.ParseExpression(raw); ok {
+		switch expr.Scheme {
+		case "env":
+			return "environment variable " + strings.TrimSpace(expr.Target)
+		case "file":
+			return "credential file " + strings.TrimSpace(expr.Target)
+		default:
+			return expr.Raw
+		}
+	}
+	return raw
 }
 
 // staticAuthInstruction explains how to give a non-interactive MCP server the
@@ -283,9 +354,9 @@ func staticAuthInstruction(def *warp.MCP, env ...map[string]string) (string, boo
 	}
 	if source == "" {
 		if scheme == authTypeClientCredential {
-			return fmt.Sprintf("MCP server %q authenticates with client credentials, but its manifest sets neither spec.auth.env (client ID) nor spec.auth.file (client secret); configure them and run /mcp restart %s", name, name), true
+			return fmt.Sprintf("MCP server %q authenticates with client credentials, but its manifest sets neither spec.auth.oauth.clientId nor spec.auth.oauth.clientSecret; configure them and run /mcp restart %s", name, name), true
 		}
-		return fmt.Sprintf("MCP server %q authenticates via %s, but its manifest sets neither spec.auth.env nor spec.auth.file; configure a credential and run /mcp restart %s", name, scheme, name), true
+		return fmt.Sprintf("MCP server %q authenticates via %s, but its manifest sets no credential expression (such as spec.auth.token: ${env:...}); configure a credential and run /mcp restart %s", name, scheme, name), true
 	}
 	if scheme == authTypeClientCredential {
 		return fmt.Sprintf("MCP server %q authenticates with client credentials from the %s; provide it and run /mcp restart %s", name, source, name), true
@@ -388,6 +459,8 @@ func staticAuthHeaders(def *warp.MCP, env map[string]string) (map[string]string,
 		headers[name] = token
 	case authTypeBasic:
 		headers[name] = "Basic " + base64.StdEncoding.EncodeToString([]byte(token))
+	case warp.AuthTypeNone:
+		return headers, nil
 	default:
 		return nil, fmt.Errorf("MCP server %q: unsupported auth type %q", def.Metadata.Name, a.Type)
 	}
@@ -569,11 +642,10 @@ type oauthProvider struct {
 }
 
 // GetHandler builds the OAuth handler the MCP transport uses. Pre-registered
-// client credentials, when configured, resolve from spec.auth the same way static
-// credentials do: spec.auth.env names the variable holding the client ID and
-// spec.auth.file names a file holding the client secret. Otherwise credentials
-// previously obtained through dynamic registration are reused, and a fresh
-// registration happens when none exist.
+// client credentials, when configured, resolve from spec.auth.oauth (clientId
+// and clientSecret expressions or literals). Otherwise credentials previously
+// obtained through dynamic registration are reused, and a fresh registration
+// happens when none exist.
 func (p *oauthProvider) GetHandler(ctx context.Context) (auth.OAuthHandler, error) {
 	if p.store != nil {
 		if entry, ok := p.store.Get(p.key); ok {
@@ -622,7 +694,7 @@ func (p *oauthProvider) clientCredentialsHandler() (auth.OAuthHandler, error) {
 		return nil, err
 	}
 	if clientID == "" || clientSecret == "" {
-		return nil, requireAuth(errors.New("MCP client-credentials authorization needs a client ID and secret (spec.auth.env and spec.auth.file)"))
+		return nil, requireAuth(errors.New("MCP client-credentials authorization needs a client ID and secret (spec.auth.oauth.clientId and spec.auth.oauth.clientSecret)"))
 	}
 	return extauth.NewClientCredentialsHandler(&extauth.ClientCredentialsHandlerConfig{
 		Credentials: &oauthex.ClientCredentials{
@@ -633,26 +705,18 @@ func (p *oauthProvider) clientCredentialsHandler() (auth.OAuthHandler, error) {
 }
 
 // preregisteredCredentials resolves pre-registered client credentials from
-// spec.auth, returning empty strings when unconfigured.
+// spec.auth.oauth, returning empty strings when unconfigured.
 func (p *oauthProvider) preregisteredCredentials() (clientID, clientSecret string, err error) {
-	if p.auth == nil {
+	if p.auth == nil || p.auth.OAuth == nil {
 		return "", "", nil
 	}
-	if name := strings.TrimSpace(p.auth.Env); name != "" {
-		clientID = strings.TrimSpace(p.env[name])
-		if clientID == "" {
-			clientID = strings.TrimSpace(os.Getenv(name))
-		}
-		if clientID == "" {
-			return "", "", requireAuth(fmt.Errorf("missing MCP client ID environment variable %q", name))
-		}
+	clientID, err = resolveOptionalExpressionValue("spec.auth.oauth.clientId", p.auth.OAuth.ClientID, p.env)
+	if err != nil {
+		return "", "", err
 	}
-	if file := strings.TrimSpace(p.auth.File); file != "" {
-		data, readErr := os.ReadFile(expandPlaceholders(file, p.env))
-		if readErr != nil {
-			return "", "", requireAuth(fmt.Errorf("read MCP client secret file %q: %w", file, readErr))
-		}
-		clientSecret = strings.TrimSpace(string(data))
+	clientSecret, err = resolveSecretExpression("spec.auth.oauth.clientSecret", p.auth.OAuth.ClientSecret, p.env)
+	if err != nil {
+		return "", "", err
 	}
 	return clientID, clientSecret, nil
 }
@@ -1020,7 +1084,7 @@ func (t *trackingHandler) Authorize(ctx context.Context, req *http.Request, resp
 		t.onDone()
 	}
 	if err != nil && strings.Contains(err.Error(), "no configured client registration methods are supported") {
-		return requireAuth(errors.New("server does not support OAuth dynamic client registration; set spec.auth.env to a pre-registered OAuth client ID or use spec.auth.type: bearer"))
+		return requireAuth(errors.New("server does not support OAuth dynamic client registration; set spec.auth.oauth.clientId to a pre-registered OAuth client ID or use spec.auth.type: bearer"))
 	}
 	return err
 }

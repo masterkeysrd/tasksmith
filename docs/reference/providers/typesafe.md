@@ -39,7 +39,7 @@ spec:
     decision: jev-latest
   auth:
     type: bearer
-    env: TYPESAFE_API_KEY
+    token: "${env:TYPESAFE_API_KEY}"
   models:
     - id: jev-latest
       name: jev-latest

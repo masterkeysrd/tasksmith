@@ -532,7 +532,7 @@ func TestStaticAuthHeaders(t *testing.T) {
 	t.Setenv("TASKSMCP_TEST_TOKEN", "tok-123")
 
 	def := remoteDef("svc", "https://example.invalid/mcp", func(d *warp.MCP) {
-		d.Spec.Auth = &warp.ProviderAuth{Type: "bearer", Env: "TASKSMCP_TEST_TOKEN"}
+		d.Spec.Auth = &warp.ProviderAuth{Type: "bearer", Token: "${env:TASKSMCP_TEST_TOKEN}"}
 		d.Spec.Headers = map[string]string{"X-Workspace": "${TASKSMCP_TEST_TOKEN}"}
 	})
 	headers, err := staticAuthHeaders(def, map[string]string{})
@@ -546,7 +546,7 @@ func TestStaticAuthHeaders(t *testing.T) {
 		t.Errorf("custom header = %q, want the expanded credential", headers["X-Workspace"])
 	}
 
-	def.Spec.Auth = &warp.ProviderAuth{Type: "api-key", Header: "X-Api-Key", Env: "TASKSMCP_TEST_TOKEN"}
+	def.Spec.Auth = &warp.ProviderAuth{Type: "api-key", Header: "X-Api-Key", Token: "${env:TASKSMCP_TEST_TOKEN}"}
 	headers, err = staticAuthHeaders(def, map[string]string{})
 	if err != nil {
 		t.Fatalf("staticAuthHeaders (api-key): %v", err)
@@ -992,7 +992,7 @@ func TestStaticCredentialFailureReportsAuthRequired(t *testing.T) {
 
 	ts := newTestServer(t)
 	def := remoteDef("github", ts.endpoint, func(d *warp.MCP) {
-		d.Spec.Auth = &warp.ProviderAuth{Type: "bearer", Env: envName}
+		d.Spec.Auth = &warp.ProviderAuth{Type: "bearer", Token: "${env:" + envName + "}"}
 	})
 	mgr, _, _ := newManager(t, def)
 	mgr.Sync(context.Background())
@@ -1011,7 +1011,7 @@ func TestAPIKeyCredentialFailureReportsAuthRequired(t *testing.T) {
 
 	ts := newTestServer(t)
 	def := remoteDef("search", ts.endpoint, func(d *warp.MCP) {
-		d.Spec.Auth = &warp.ProviderAuth{Type: "api-key", Header: "X-Api-Key", Env: envName}
+		d.Spec.Auth = &warp.ProviderAuth{Type: "api-key", Header: "X-Api-Key", Token: "${env:" + envName + "}"}
 	})
 	mgr, _, _ := newManager(t, def)
 
@@ -1099,7 +1099,7 @@ func TestPlainConnectionFailureStaysError(t *testing.T) {
 // restart to run, instead of only saying no browser flow exists.
 func TestAuthenticateMCPExplainsStaticCredentials(t *testing.T) {
 	def := remoteDef("github", "https://mcp.example.invalid/mcp", func(d *warp.MCP) {
-		d.Spec.Auth = &warp.ProviderAuth{Type: "bearer", Env: "GITHUB_TOKEN"}
+		d.Spec.Auth = &warp.ProviderAuth{Type: "bearer", Token: "${env:GITHUB_TOKEN}"}
 	})
 	mgr, _, _ := newManager(t, def)
 
@@ -1146,23 +1146,23 @@ func TestStaticAuthInstructionCoversCredentialShapes(t *testing.T) {
 	}{
 		{
 			name: "bearer env",
-			auth: &warp.ProviderAuth{Type: "bearer", Env: "GITHUB_TOKEN"},
+			auth: &warp.ProviderAuth{Type: "bearer", Token: "${env:GITHUB_TOKEN}"},
 			want: []string{"GITHUB_TOKEN", "bearer", "/mcp restart github"},
 		},
 		{
 			name: "basic file",
-			auth: &warp.ProviderAuth{Type: "basic", File: "~/.config/creds"},
+			auth: &warp.ProviderAuth{Type: "basic", Token: "${file:~/.config/creds}"},
 			want: []string{"credential file", "/mcp restart github"},
 		},
 		{
 			name: "client credentials",
-			auth: &warp.ProviderAuth{Type: "client-credentials", Env: "CLIENT_ID"},
+			auth: &warp.ProviderAuth{Type: "client-credentials", OAuth: &warp.ProviderAuthOAuth{ClientID: "${env:CLIENT_ID}", ClientSecret: "${file:~/.config/secret}"}},
 			want: []string{"client credentials", "CLIENT_ID"},
 		},
 		{
 			name: "no source configured",
 			auth: &warp.ProviderAuth{Type: "bearer"},
-			want: []string{"spec.auth.env", "spec.auth.file"},
+			want: []string{"spec.auth.token"},
 		},
 		{
 			name: "enterprise",
@@ -1189,5 +1189,22 @@ func TestStaticAuthInstructionCoversCredentialShapes(t *testing.T) {
 
 	if _, ok := staticAuthInstruction(remoteDef("github", "https://x.invalid", nil)); ok {
 		t.Error("a server with no spec.auth has no credential to name")
+	}
+}
+
+func TestRawToolNameCanonical(t *testing.T) {
+	cases := []struct {
+		server     string
+		discovered string
+		want       string
+	}{
+		{server: "notes", discovered: "echo", want: "echo"},
+		{server: "notes", discovered: "notes__echo", want: "echo"},
+		{server: "notes", discovered: "mcp__notes__echo", want: "mcp__notes__echo"},
+	}
+	for _, tc := range cases {
+		if got := rawToolName(tc.server, tc.discovered); got != tc.want {
+			t.Errorf("rawToolName(%q, %q) = %q, want %q", tc.server, tc.discovered, got, tc.want)
+		}
 	}
 }

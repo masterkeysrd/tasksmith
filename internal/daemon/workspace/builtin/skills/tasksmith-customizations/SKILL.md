@@ -36,7 +36,7 @@ Workspace built-ins are mirrored under `$XDG_DATA_HOME/tasksmith/builtin/` (norm
 
 Tier order decides which definition wins; it does not decide where a new resource belongs. Project scope is committed and shared with everyone who clones the repository, user scope is private to one machine and applies to every project, and workspace scope sits between them for a multi-project workspace. When the requesting user has not named a scope, ask before writing: sharing an internal endpoint, credential reference, or personal workflow with a repository is a product decision, not a default.
 
-Never move a credential out of another tool's store, such as a CLI keyring, into a manifest, `.env`, or any other plaintext file without explicit approval. Reference it through `auth.env` or `auth.file` and let the user supply the value.
+Never move a credential out of another tool's store, such as a CLI keyring, into a manifest, `.env`, or any other plaintext file without explicit approval. Reference it through a `spec.auth` expression (`${env:<VAR>}` or `${file:<PATH>}`) and let the user supply the value.
 
 ## Resource references
 

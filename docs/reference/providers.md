@@ -46,15 +46,14 @@ spec:
 
   # Authentication configuration
   auth:
-    # Scheme: env (default) | bearer | api-key | basic | oauth2 | none
-    type: env
-    # Environment variable holding the secret (resolved from .env or os.Getenv)
-    env: OPENAI_API_KEY
+    # Scheme: bearer | api-key | basic | oauth2 | none
+    type: bearer
+    # Secret expression: ${env:<VAR>} or ${file:<PATH>} ("~/…" and paths relative to this manifest are expanded)
+    token: "${env:OPENAI_API_KEY}"
     # Custom header name (defaults to "Authorization")
     header: Authorization
-    # Or read secret from an explicit file path on disk
-    # ("~/…" and paths relative to this manifest are expanded)
-    # file: ./tokens/openai
+    # Or read secret from an explicit file path on disk:
+    # token: "${file:./tokens/openai}"
 
   # Static HTTP headers attached to all requests from this provider
   headers:
@@ -112,16 +111,15 @@ Requests requiring tools, tool history, media, or a response schema fail when th
 
 | `type` | Request header | Notes |
 | :--- | :--- | :--- |
-| `env` (default) | `Authorization: Bearer <credential>` | Default when `type` is omitted. |
-| `bearer` | `Authorization: Bearer <credential>` | Same header as `env`. |
-| `api-key` | `Authorization: <credential>` | Sends the credential un-prefixed. |
-| `basic` | `Authorization: Basic base64(<credential>)` | Credential is usually `user:pass`. |
-| `oauth2` | Dynamic / `Authorization: Bearer <token>` | Uses managed OAuth 2.0 PKCE tokens with automatic background refresh (e.g. Antigravity/Google Cloud Code), falling back to `auth.env` if set. |
+| `bearer` | `Authorization: Bearer <credential>` | Standard token authentication (`token: "${env:...}"` or `"${file:...}"`). |
+| `api-key` | `Authorization: <credential>` | Sends the credential un-prefixed (`token: "${env:...}"` or `"${file:...}"`). |
+| `basic` | `Authorization: Basic base64(<credential>)` | Uses `token` (`user:pass` expression) or `username` + `password` (`${env:...}` / `${file:...}`). |
+| `oauth2` | Dynamic / `Authorization: Bearer <token>` | Uses managed OAuth 2.0 PKCE tokens with automatic background refresh (e.g. Antigravity/Google Cloud Code). |
 | `none` | — | No credential is read or sent; use for unauthenticated or proxy-fronted upstreams. |
 
 `auth.header` replaces `Authorization` for any scheme except `none`. When it does, the gateway removes the vendor credential header a provider SDK would otherwise add (`X-Api-Key`, `x-goog-api-key`, or its own `Authorization`), so exactly the configured header is sent.
 
-Credential lookup order is `auth.env` then `auth.file`; declaring both uses `env`. `auth.file` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value, new file contents, or signing in or switching accounts on an `oauth2` provider — changes the gateway fingerprint and rebuilds provider connections.
+Secret fields (`auth.token`, `auth.password`) use declarative WARP expressions (`${env:<VAR>}` or `${file:<PATH>}`). `${file:...}` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value, new file contents, or signing in or switching accounts on an `oauth2` provider — changes the gateway fingerprint and rebuilds provider connections.
 
 ### Thinking Capability Fields
 

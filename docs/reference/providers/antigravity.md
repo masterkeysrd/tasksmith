@@ -35,15 +35,18 @@ Select **Antigravity** as your provider and choose **Log in with Google (Browser
 4. Token expiration is handled automatically via background refresh.
 5. Your authenticated Google account email is detected and surfaced in the setup wizard and daemon status. You can switch accounts or re-authenticate at any time.
 
-### Option B: Static Environment Variable
+### Option B: Static Bearer Token (Headless / CI)
 
-Alternatively, define `ANTIGRAVITY_TOKEN` in your environment or workspace `.env` file:
+For headless or CI pipelines without browser OAuth, configure `type: bearer` with a secret expression in `.agents/providers/antigravity.yaml`:
 
-```bash
-ANTIGRAVITY_TOKEN=ya29.a0AfH6...
+```yaml
+spec:
+  auth:
+    type: bearer
+    token: "${env:ANTIGRAVITY_TOKEN}"
 ```
 
-When set, `ANTIGRAVITY_TOKEN` overrides any on-disk OAuth token for headless environments or automated CI pipelines.
+When `auth.type` is `bearer` (or `api-key`), TaskSmith uses the resolved token directly instead of the OAuth token store and scrubs the referenced environment variable from agent subprocesses.
 
 ---
 
@@ -63,7 +66,6 @@ spec:
     completion: gemini-4-hydrogen
   auth:
     type: oauth2
-    env: ANTIGRAVITY_TOKEN
   models:
     - id: gemini-4-hydrogen
       name: gemini-4-hydrogen

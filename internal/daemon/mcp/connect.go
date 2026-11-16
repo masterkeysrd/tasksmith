@@ -454,9 +454,6 @@ func rawToolName(serverName, discoveredName string) string {
 	if after, ok := strings.CutPrefix(name, serverName+"__"); ok {
 		return after
 	}
-	if after, ok := strings.CutPrefix(name, "mcp__"+serverName+"__"); ok {
-		return after
-	}
 	return name
 }
 

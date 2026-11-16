@@ -49,7 +49,7 @@ func TestResolveCredentialNoneSkipsSources(t *testing.T) {
 		t.Fatalf("write token file: %v", err)
 	}
 
-	auth := &AuthConfig{Type: AuthTypeNone, Env: "GATEWAY_NONE_KEY", File: file}
+	auth := &AuthConfig{Type: AuthTypeNone, Token: &CredentialSource{Env: "GATEWAY_NONE_KEY", File: file}}
 	token, err := resolveCredential(auth, nil)
 	if err != nil {
 		t.Fatalf("resolveCredential: %v", err)
@@ -70,7 +70,7 @@ func TestResolveCredentialExpandsHomePath(t *testing.T) {
 		t.Fatalf("write token: %v", err)
 	}
 
-	token, err := resolveCredential(&AuthConfig{Type: AuthTypeBearer, File: "~/.config/tasksmith/token"}, nil)
+	token, err := resolveCredential(&AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{File: "~/.config/tasksmith/token"}}, nil)
 	if err != nil {
 		t.Fatalf("resolveCredential: %v", err)
 	}
@@ -80,12 +80,44 @@ func TestResolveCredentialExpandsHomePath(t *testing.T) {
 }
 
 func TestResolveCredentialMissingFile(t *testing.T) {
-	_, err := resolveCredential(&AuthConfig{Type: AuthTypeBearer, File: "~/definitely-not-here/token"}, nil)
+	_, err := resolveCredential(&AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{File: "~/definitely-not-here/token"}}, nil)
 	if err == nil {
 		t.Fatal("expected error for missing credential file")
 	}
 	if !strings.Contains(err.Error(), "definitely-not-here") {
 		t.Fatalf("error should name the configured path, got: %v", err)
+	}
+}
+
+func TestResolveCredentialBasicPasswordSource(t *testing.T) {
+	dir := t.TempDir()
+	pwFile := filepath.Join(dir, "pw")
+	if err := os.WriteFile(pwFile, []byte("secret-from-file\n"), 0o600); err != nil {
+		t.Fatalf("write pw: %v", err)
+	}
+
+	gotFile, err := resolveCredential(&AuthConfig{
+		Type:     AuthTypeBasic,
+		Username: "alice",
+		Password: &CredentialSource{File: pwFile},
+	}, nil)
+	if err != nil {
+		t.Fatalf("resolveCredential(basic file): %v", err)
+	}
+	if gotFile != "alice:secret-from-file" {
+		t.Fatalf("got %q, want %q", gotFile, "alice:secret-from-file")
+	}
+
+	gotEnv, err := resolveCredential(&AuthConfig{
+		Type:     AuthTypeBasic,
+		Username: "alice",
+		Password: &CredentialSource{Env: "BASIC_PASS"},
+	}, map[string]string{"BASIC_PASS": "env-pass"})
+	if err != nil {
+		t.Fatalf("resolveCredential(basic env): %v", err)
+	}
+	if gotEnv != "alice:env-pass" {
+		t.Fatalf("got %q, want %q", gotEnv, "alice:env-pass")
 	}
 }
 
@@ -98,13 +130,6 @@ func TestTransportAuthSchemes(t *testing.T) {
 		wantValue  string
 	}{
 		{
-			name:       "env defaults to bearer authorization",
-			auth:       &AuthConfig{Type: AuthTypeEnv},
-			token:      "tok",
-			wantHeader: "Authorization",
-			wantValue:  "Bearer tok",
-		},
-		{
 			name:       "omitted type defaults to bearer authorization",
 			auth:       &AuthConfig{},
 			token:      "tok",
@@ -112,17 +137,17 @@ func TestTransportAuthSchemes(t *testing.T) {
 			wantValue:  "Bearer tok",
 		},
 		{
-			name:       "env with custom header",
-			auth:       &AuthConfig{Type: AuthTypeEnv, Header: "Proxy-Authorization"},
-			token:      "tok",
-			wantHeader: "Proxy-Authorization",
-			wantValue:  "Bearer tok",
-		},
-		{
 			name:       "bearer",
 			auth:       &AuthConfig{Type: AuthTypeBearer},
 			token:      "tok",
 			wantHeader: "Authorization",
+			wantValue:  "Bearer tok",
+		},
+		{
+			name:       "bearer with custom header",
+			auth:       &AuthConfig{Type: AuthTypeBearer, Header: "Proxy-Authorization"},
+			token:      "tok",
+			wantHeader: "Proxy-Authorization",
 			wantValue:  "Bearer tok",
 		},
 		{
@@ -217,12 +242,12 @@ func TestTransportDropsRedundantSDKHeaders(t *testing.T) {
 		wantDropped  []string
 	}{
 		{
-			name:         "vendor default keeps the SDK header",
-			auth:         &AuthConfig{Type: AuthTypeEnv},
+			name:         "api-key keeps configured vendor header and drops conflicting SDK header",
+			auth:         &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Api-Key"},
 			providerType: "anthropic",
 			sdkHeaders:   map[string]string{"X-Api-Key": "tok", "Authorization": "Bearer stale"},
 			wantKept:     []string{"X-Api-Key"},
-			wantDropped:  nil,
+			wantDropped:  []string{"Authorization"},
 		},
 		{
 			name:         "custom header removes vendor credential header",
@@ -302,7 +327,7 @@ func TestFingerprintTracksCredentialFileRotation(t *testing.T) {
 	}
 
 	providers := []ProviderConfig{
-		{Name: "internal", Type: "openai", Endpoint: "https://llm.internal/v1", Auth: &AuthConfig{Type: AuthTypeBearer, File: file}},
+		{Name: "internal", Type: "openai", Endpoint: "https://llm.internal/v1", Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{File: file}}},
 	}
 	cfg := Config{Providers: providers}
 
@@ -326,7 +351,7 @@ func TestFingerprintTracksCredentialFileRotation(t *testing.T) {
 func TestFingerprintChangesWhenCredentialFileAppears(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "token")
 	cfg := Config{Providers: []ProviderConfig{
-		{Name: "internal", Type: "openai", Auth: &AuthConfig{Type: AuthTypeBearer, File: file}},
+		{Name: "internal", Type: "openai", Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{File: file}}},
 	}}
 
 	before := cfg.Fingerprint()
@@ -344,7 +369,7 @@ func TestFingerprintStableForSameCredential(t *testing.T) {
 		t.Fatalf("write token: %v", err)
 	}
 
-	auth := &AuthConfig{Type: AuthTypeBearer, File: file}
+	auth := &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{File: file}}
 	cfgA := Config{Providers: []ProviderConfig{{Name: "a", Type: "openai", Auth: auth}}}
 	cfgB := Config{Providers: []ProviderConfig{{Name: "a", Type: "openai", Auth: auth}}}
 
@@ -424,7 +449,7 @@ func TestInitProviderGenAIUsesCustomEndpoint(t *testing.T) {
 				Name:     "proxy",
 				Type:     "google-genai",
 				Endpoint: srv.URL + "/v1beta",
-				Auth:     &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Auth", Env: "GW_PROXY_KEY"},
+				Auth:     &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Auth", Token: &CredentialSource{Env: "GW_PROXY_KEY"}},
 			},
 		},
 		Env: map[string]string{"GW_PROXY_KEY": "proxy-key"},

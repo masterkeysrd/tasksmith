@@ -6242,7 +6242,7 @@ Linter tool.
 apiVersion: warp/v1alpha1
 kind: Tool
 metadata:
-  name: mcp__github__create_issue
+  name: github__create_issue
   description: Create a GitHub issue
 spec:
   command: ["sh", "-c"]
@@ -6256,7 +6256,7 @@ Create issue.
 apiVersion: warp/v1alpha1
 kind: Tool
 metadata:
-  name: mcp__github__list_prs
+  name: github__list_prs
   description: List GitHub pull requests
 spec:
   command: ["sh", "-c"]
@@ -6287,8 +6287,8 @@ spec:
       include:
         - eager-tool
         - linter
-        - mcp__github__create_issue
-        - mcp__github__list_prs
+        - github__create_issue
+        - github__list_prs
 ---
 Deferred agent.
 `
@@ -6354,11 +6354,11 @@ All-eager agent.
 	if !strings.Contains(prompt, "linter") {
 		t.Errorf("expected deferred tool 'linter' in prompt, got:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "github") || !strings.Contains(prompt, "mcp__github__*") {
-		t.Errorf("expected github MCP server summary (mcp__github__*) in prompt, got:\n%s", prompt)
+	if !strings.Contains(prompt, "github") || !strings.Contains(prompt, "github__*") {
+		t.Errorf("expected github MCP server summary (github__*) in prompt, got:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "create_issue") || !strings.Contains(prompt, "list_prs") {
-		t.Errorf("expected github short tool names in prompt, got:\n%s", prompt)
+	if !strings.Contains(prompt, "(tools: `create_issue`, `list_prs`)") {
+		t.Errorf("expected formatted github tools list in prompt, got:\n%s", prompt)
 	}
 
 	// 2. The all-eager agent has no deferred tools, so the tool_search section
@@ -6785,7 +6785,7 @@ spec:
   type: anthropic
   auth:
     type: api-key
-    env: ANTHROPIC_API_KEY
+    token: "${env:ANTHROPIC_API_KEY}"
   models:
     - id: claude-test
       name: claude-test
@@ -6843,7 +6843,7 @@ spec:
   endpoint: https://llm.corp.example
   auth:
     type: api-key
-    env: ROTATED_CORP_LLM_KEY
+    token: "${env:ROTATED_CORP_LLM_KEY}"
   models:
     - id: corp-chat
       name: corp-chat

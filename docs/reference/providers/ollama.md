@@ -138,7 +138,7 @@ spec:
   endpoint: https://ollama.internal.corp:11434
   auth:
     type: bearer
-    env: OLLAMA_AUTH_TOKEN
+    token: "${env:OLLAMA_AUTH_TOKEN}"
 ```
 
 For general manifest properties and `.env` secret resolution, see the [Providers Overview](../providers.md).

@@ -54,8 +54,8 @@ spec:
     # TaskSmith defaults to Zero Data Retention (store: false) on the Responses API
     store: false
   auth:
-    type: env
-    env: OPENAI_API_KEY
+    type: bearer
+    token: "${env:OPENAI_API_KEY}"
   models:
     - id: gpt-6.1-sol
       name: gpt-6.1-sol
@@ -287,7 +287,7 @@ spec:
     X-Title: TaskSmith
   auth:
     type: bearer
-    env: OPENROUTER_API_KEY
+    token: "${env:OPENROUTER_API_KEY}"
   models:
     - id: anthropic/claude-3.7-sonnet
       name: anthropic/claude-3.7-sonnet
@@ -325,7 +325,7 @@ spec:
     apiMode: chat_completions
   auth:
     type: bearer
-    env: VLLM_API_KEY # Or omit auth if the cluster is internal/unauthenticated
+    token: "${env:VLLM_API_KEY}" # Or omit auth if the cluster is internal/unauthenticated
   models:
     - id: qwen-2.5-coder-32b
       name: qwen-2.5-coder-32b

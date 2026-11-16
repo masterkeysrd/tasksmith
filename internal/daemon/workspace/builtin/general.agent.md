@@ -7,6 +7,9 @@ metadata:
   description: Autonomous general-purpose task execution subagent.
 spec:
   extends: system/Agent/main
+  models:
+    - "@inherit"
+    - "*"
   triggers:
     - agent
   subagents: []

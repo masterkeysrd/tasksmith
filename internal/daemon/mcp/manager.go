@@ -1056,10 +1056,7 @@ func sameDefinition(a, b *warp.MCP) bool {
 
 // sameAuth compares authentication configuration.
 func sameAuth(a, b *warp.ProviderAuth) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
+	return sameJSON(a, b)
 }
 
 // sameJSON compares two manifest sub-documents by their encoded form.

@@ -40,8 +40,9 @@ spec:
     completion: gemini-4-hydrogen
     embedding: text-embedding-004
   auth:
-    type: env
-    env: GOOGLE_API_KEY
+    type: api-key
+    header: x-goog-api-key
+    token: "${env:GOOGLE_API_KEY}"
   models:
     - id: gemini-4-hydrogen
       name: gemini-4-hydrogen

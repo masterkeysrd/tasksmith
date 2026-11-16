@@ -203,8 +203,8 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 			envVarName := "API_KEY"
 			if opts.AuthEnv != "" {
 				envVarName = opts.AuthEnv
-			} else if baseProvider != nil && baseProvider.Spec.Auth != nil && baseProvider.Spec.Auth.Env != "" {
-				envVarName = baseProvider.Spec.Auth.Env
+			} else if envName := ProviderAuthPrimaryEnv(baseProviderAuth(baseProvider)); envName != "" {
+				envVarName = envName
 			}
 			cfgDir, err := xdg.SubConfigDir()
 			if err != nil {
@@ -227,10 +227,9 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 			targetFile := filepath.Join(userProvidersDir, provName+".provider.yaml")
 			if _, err := os.Stat(targetFile); os.IsNotExist(err) {
 				var providerSpec warp.ModelProviderSpec
+				providerSpec.Type = provName
 				if baseProvider != nil {
 					providerSpec = *baseProvider.Spec.DeepCopy()
-				} else {
-					providerSpec.Type = provName
 				}
 				if opts.Endpoint != "" {
 					providerSpec.Endpoint = opts.Endpoint
@@ -260,8 +259,8 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 		envVarName := "API_KEY"
 		if opts.AuthEnv != "" {
 			envVarName = opts.AuthEnv
-		} else if baseProvider != nil && baseProvider.Spec.Auth != nil && baseProvider.Spec.Auth.Env != "" {
-			envVarName = baseProvider.Spec.Auth.Env
+		} else if envName := ProviderAuthPrimaryEnv(baseProviderAuth(baseProvider)); envName != "" {
+			envVarName = envName
 		}
 
 		envPath := filepath.Join(absDir, ".env")
@@ -365,23 +364,23 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 			authConf := &warp.ProviderAuth{
 				Type: opts.AuthType,
 			}
-			if opts.AuthType == "api-key" && opts.AuthHeader != "" {
+			if opts.AuthType == warp.AuthTypeAPIKey && opts.AuthHeader != "" {
 				authConf.Header = opts.AuthHeader
 			}
 			if opts.AuthFile != "" {
-				authConf.File = opts.AuthFile
+				authConf.Token = fmt.Sprintf("${file:%s}", opts.AuthFile)
 			} else if opts.AuthEnv != "" {
-				authConf.Env = opts.AuthEnv
-			} else if baseProvider != nil && baseProvider.Spec.Auth != nil && baseProvider.Spec.Auth.Env != "" {
-				authConf.Env = baseProvider.Spec.Auth.Env
-			} else {
-				authConf.Env = "API_KEY"
+				authConf.Token = fmt.Sprintf("${env:%s}", opts.AuthEnv)
+			} else if envName := ProviderAuthPrimaryEnv(baseProviderAuth(baseProvider)); envName != "" {
+				authConf.Token = fmt.Sprintf("${env:%s}", envName)
+			} else if opts.AuthType != warp.AuthTypeNone && opts.AuthType != warp.AuthTypeOAuth2 && opts.AuthType != warp.AuthTypeClientCredentials && opts.AuthType != warp.AuthTypeEnterprise {
+				authConf.Token = "${env:API_KEY}"
 			}
 			providerSpec.Auth = authConf
 		} else if baseProvider != nil && baseProvider.Spec.Auth != nil {
 			authConf := baseProvider.Spec.Auth.DeepCopy()
-			if opts.APIKey != "" && authConf.Env == "" {
-				authConf.Env = "API_KEY"
+			if opts.APIKey != "" && authConf.Token == "" && authConf.Type != warp.AuthTypeOAuth2 && authConf.Type != warp.AuthTypeNone {
+				authConf.Token = "${env:API_KEY}"
 			}
 			providerSpec.Auth = authConf
 		} else if opts.APIKey != "" || opts.AuthEnv != "" {
@@ -390,8 +389,8 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 				envKey = "API_KEY"
 			}
 			providerSpec.Auth = &warp.ProviderAuth{
-				Type: "bearer",
-				Env:  envKey,
+				Type:  warp.AuthTypeBearer,
+				Token: fmt.Sprintf("${env:%s}", envKey),
 			}
 		}
 
@@ -472,6 +471,13 @@ func copyFile(src, dst string, perm os.FileMode) error {
 		return err
 	}
 	return os.WriteFile(dst, data, perm)
+}
+
+func baseProviderAuth(p *warp.ModelProvider) *warp.ProviderAuth {
+	if p == nil {
+		return nil
+	}
+	return p.Spec.Auth
 }
 
 func copyDirRecursive(srcDir, dstDir string) error {

@@ -8,8 +8,9 @@ spec:
   defaultModels:
     completion: gemini-4-hydrogen
   auth:
-    type: env
-    env: GOOGLE_API_KEY
+    type: api-key
+    header: x-goog-api-key
+    token: "${env:GOOGLE_API_KEY}"
   models:
     - id: gemini-4-hydrogen
       name: gemini-4-hydrogen

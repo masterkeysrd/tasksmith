@@ -231,13 +231,6 @@ func (c *Catalog) resolveAliasID(id ID) (ID, bool) {
 			if candidate.QualifiedID == "" {
 				continue
 			}
-			// WARP qualifies an unresolvable alias reference against the
-			// default provider (e.g. "fake/@missing" -> "fake/fake/@missing")
-			// while leaving Provider nil. That pass-through is not a resolved
-			// model; accepting it would synthesize a bogus provider/model.
-			if candidate.Provider == nil && containsAliasRef(candidate.ModelID) {
-				continue
-			}
 			if !isAlias && candidate.Model == nil {
 				continue
 			}
@@ -254,13 +247,6 @@ func (c *Catalog) resolveAliasID(id ID) (ID, bool) {
 		}
 	}
 	return ID(""), false
-}
-
-// containsAliasRef reports whether a model identifier still carries an
-// unresolved "@alias" segment (a bare "@fast" or a provider-qualified
-// "provider/@fast" that WARP could not match to any declared alias).
-func containsAliasRef(modelID string) bool {
-	return strings.HasPrefix(modelID, "@") || strings.Contains(modelID, "/@")
 }
 
 // hasUnresolvedAliasSegment reports whether any path segment of the identifier

@@ -166,9 +166,8 @@ spec:
   type: sse
   endpoint: https://mcp.sentry.internal.acme.com/sse
   auth:
-    type: header
-    header: Authorization
-    env: SENTRY_AUTH_TOKEN
+    type: bearer
+    token: "${env:SENTRY_AUTH_TOKEN}"
   annotations:
     isReadOnly: true
   policies:

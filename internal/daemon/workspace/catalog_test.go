@@ -823,8 +823,8 @@ func newMCPCatalog(t *testing.T, policies *warp.MCPPolicies, agentTools ...[]str
 	}
 
 	resources := []warp.Resource{server, bashTool}
-	// One agent per spec.tools list, named main, explicit, and prefixed in order.
-	names := []string{"main", "explicit", "prefixed"}
+	// One agent per spec.tools list, named main, explicit, and wildcardExplicit in order.
+	names := []string{"main", "explicit", "wildcardExplicit"}
 	for i, tools := range agentTools {
 		resources = append(resources, &warp.Agent{
 			BaseResource: warp.BaseResource{
@@ -867,11 +867,7 @@ func newMCPCatalog(t *testing.T, policies *warp.MCPPolicies, agentTools ...[]str
 	if err := reg.SetMCPTools(server.QualifiedName(), []*warp.Tool{echo, destructive}); err != nil {
 		t.Fatalf("register discovered MCP tools: %v", err)
 	}
-	// Validation failures stay non-fatal here, exactly as Catalog.populate treats
-	// them: an agent naming a tool as "mcp__<server>__<tool>" is reported as a
-	// dangling reference by warp because only the materialized name is registered,
-	// yet the workspace must still open and the alias must still select the tool.
-	if err := reg.Validate(); err != nil && !strings.Contains(err.Error(), "mcp__notes__echo") {
+	if err := reg.Validate(); err != nil {
 		t.Fatalf("registry validation failed: %v", err)
 	}
 
@@ -913,14 +909,17 @@ func TestCatalogMCPSnapshotScope(t *testing.T) {
 
 // TestPartitionAgentToolsMCPDeferral verifies MCP tools stay deferred under a
 // wildcard spec.tools so they do not crowd out the initial prompt, and become
-// eager only when the agent names one outright, written either as
-// "<server>__<tool>" or with the optional "mcp__" prefix.
+// eager only when the agent names one outright as "<server>__<tool>".
 func TestPartitionAgentToolsMCPDeferral(t *testing.T) {
 	f := newMCPCatalog(t, nil,
 		[]string{"*"},
 		[]string{"bash", "notes__echo"},
-		[]string{"*", "mcp__notes__echo"},
+		[]string{"*", "notes__echo"},
 	)
+
+	if warnings := f.catalog.Warnings(); len(warnings) != 0 {
+		t.Errorf("expected zero Validate() warnings for canonical <server>__<tool> spec.tools, got %v", warnings)
+	}
 
 	// 1. Wildcard: bash is eager, MCP tools are deferred but still reachable.
 	wildcard, err := f.catalog.ResolveAgent("main")
@@ -938,7 +937,7 @@ func TestPartitionAgentToolsMCPDeferral(t *testing.T) {
 		t.Errorf("regular tool should stay eager under a wildcard: Eager = %v", part.Eager)
 	}
 
-	// 2. Naming the materialized name promotes it to eager.
+	// 2. Naming the materialized name without "*" promotes it to eager with zero warnings.
 	named, err := f.catalog.ResolveAgent("explicit")
 	if err != nil {
 		t.Fatalf("ResolveAgent(explicit): %v", err)
@@ -954,14 +953,14 @@ func TestPartitionAgentToolsMCPDeferral(t *testing.T) {
 		t.Errorf("an unnamed sibling MCP tool must stay deferred: Eager = %v", partNamed.Eager)
 	}
 
-	// 3. The "mcp__" prefix form users write in the directory also promotes it.
-	prefixed, err := f.catalog.ResolveAgent("prefixed")
+	// 3. Naming "<server>__<tool>" alongside "*" also promotes it to eager.
+	wildcardExplicit, err := f.catalog.ResolveAgent("wildcardExplicit")
 	if err != nil {
-		t.Fatalf("ResolveAgent(prefixed): %v", err)
+		t.Fatalf("ResolveAgent(wildcardExplicit): %v", err)
 	}
-	partPrefixed := f.catalog.PartitionAgentTools(prefixed)
-	if !slices.Contains(partPrefixed.Eager, "notes__echo") {
-		t.Errorf("mcp__-prefixed tool name must match the materialized name: Eager = %v", partPrefixed.Eager)
+	partWildcardExplicit := f.catalog.PartitionAgentTools(wildcardExplicit)
+	if !slices.Contains(partWildcardExplicit.Eager, "notes__echo") {
+		t.Errorf("explicitly named MCP tool alongside * must be eager: Eager = %v", partWildcardExplicit.Eager)
 	}
 }
 

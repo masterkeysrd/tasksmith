@@ -11,6 +11,7 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
@@ -192,22 +193,18 @@ func (s *Session) configSnapshot() api.SessionConfig {
 }
 
 // resolveSubagentModel resolves the effective model reference a parent session
-// passes to a delegated subagent, enforcing the target agent's spec.models
-// allowlist and returning a canonical provider/model ID whenever the reference
-// resolves through the workspace catalog.
+// passes to a delegated subagent, delegating spec.models allowlist matching
+// (literal IDs, @aliases, @inherit, globs like "*" and "<provider>/*", and "!"
+// negations) to WARP while preserving parent-provider preference and canonical
+// normalization through the models catalog.
 //
-// The reserved "@inherit" alias resolves to the parent's own active model,
-// both when the caller requests it explicitly and when it is the first
-// resolvable entry in the subagent's spec.models. An explicit request outside
-// the allowlist, or one that cannot resolve to a known model while the agent
-// restricts spec.models, is rejected synchronously. A subagent that declares no
-// spec.models accepts any model reference (unresolvable ones pass through for
-// providers that accept ad-hoc model IDs). When nothing is requested and no
-// entry resolves, an empty string lets the child session fall back to the
-// workspace defaults.
+// When a requested model or alias fails to resolve to a registered provider or
+// known model, up to 3 closest matches from the catalog are included as
+// "did you mean ...?" hints.
 func (s *Session) resolveSubagentModel(agentName, requested string) (string, error) {
 	requested = strings.TrimSpace(requested)
 	parentModel := strings.TrimSpace(s.configSnapshot().Model)
+	parentProvider := models.ID(parentModel).Provider()
 
 	cat := s.workspace.Catalog()
 	resolved, err := cat.ResolveAgent(agentName)
@@ -216,78 +213,172 @@ func (s *Session) resolveSubagentModel(agentName, requested string) (string, err
 		// session is constructed; do not invent a model verdict here.
 		return requested, nil
 	}
-	allow := resolved.Agent.Spec.Models
 
-	if isRequestedInherit(requested) {
-		if len(allow) > 0 && !allowlistAllowsInherit(allow) {
-			return "", fmt.Errorf("%w: model %q is not allowed for subagent %q (allowed: %v)",
-				ErrInvalidConfig, requested, agentName, allow)
+	modelsCat := s.modelCatalog()
+	normalize := func(id string) string {
+		if modelsCat == nil || id == "" {
+			return id
 		}
-		return parentModel, nil
+		if m, ok := modelsCat.Get(models.ID(id)); ok && m.ID.Valid() {
+			return string(m.ID)
+		}
+		return id
 	}
 
-	if len(allow) == 0 {
-		if requested == "" {
-			return "", nil
+	if requested == "" {
+		candidates, err := resolved.ResolveModelsWithParent(cat.Resolver(), parentModel)
+		if err != nil {
+			return "", fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 		}
-		if id, ok := s.resolveModelRef(requested, parentModel); ok {
-			return id, nil
+		if id, ok := preferredModelCandidate(candidates, parentProvider); ok {
+			return normalize(id), nil
 		}
-		if isAliasRequest(requested) {
-			return "", fmt.Errorf("%w: model %q does not resolve to a model available in this workspace",
-				ErrInvalidConfig, requested)
+		if len(resolved.Agent.Spec.Models) > 0 && isRequestedInherit(resolved.Agent.Spec.Models[0]) && parentModel != "" {
+			return normalize(parentModel), nil
 		}
-		return requested, nil
+		return "", nil
 	}
 
-	if requested != "" {
-		if !subagentModelAllowed(s.catalog(), cat, allow, requested, parentModel) {
-			return "", fmt.Errorf("%w: model %q is not allowed for subagent %q (allowed: %v)",
-				ErrInvalidConfig, requested, agentName, allow)
-		}
-		if id, ok := s.resolveModelRef(requested, parentModel); ok {
-			return id, nil
-		}
-		// An alias-shaped request must resolve: passing a literal "@fast" to
-		// the child would fail asynchronously on the first turn instead of
-		// reporting a usable error here. Non-alias references may still be
-		// ad-hoc model IDs a provider accepts, so they pass through.
-		if isAliasRequest(requested) {
-			return "", fmt.Errorf("%w: model %q does not resolve to a model available in this workspace",
-				ErrInvalidConfig, requested)
-		}
-		return requested, nil
+	var listed []models.Model
+	if modelsCat != nil {
+		listed = modelsCat.List()
 	}
 
-	parentProvider := models.ID(parentModel).Provider()
-	for _, entry := range allow {
-		if isRequestedInherit(entry) {
-			return parentModel, nil
+	lookupRef := canonicalizeListedRequest(listed, requested)
+	effectiveParent := ""
+	if isRequestedInherit(lookupRef) || (parentModel != "" && strings.EqualFold(lookupRef, parentModel)) {
+		effectiveParent = parentModel
+	}
+	candidates, err := resolved.ResolveModelsWithParent(cat.Resolver(), effectiveParent, lookupRef)
+	if err != nil {
+		if hint := unresolvedModelHint(cat, listed, requested, lookupRef); hint != "" {
+			return "", fmt.Errorf("%w: %w%s", ErrInvalidConfig, err, hint)
 		}
-		if id, ok := preferredModelCandidate(cat.ResolveModels(warp.ModelRoleCompletion, entry), parentProvider); ok {
-			return id, nil
+		return "", fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+
+	id, ok := preferredModelCandidate(candidates, parentProvider)
+	if !ok {
+		if isRequestedInherit(requested) && parentModel != "" {
+			return normalize(parentModel), nil
+		}
+		return "", fmt.Errorf("%w: model %q does not resolve to a registered model provider%s",
+			ErrInvalidConfig, requested, suggestClosestModels(listed, requested))
+	}
+
+	// Bare non-alias references (no "provider/" prefix) must match a declared
+	// model rather than silently attaching defaultProvider to a typo.
+	if !strings.Contains(lookupRef, "/") && !isAliasRequest(lookupRef) && !isRequestedInherit(lookupRef) {
+		if !hasDeclaredModelCandidate(candidates) {
+			return "", fmt.Errorf("%w: unknown model %q%s",
+				ErrInvalidConfig, requested, suggestClosestModels(listed, requested))
 		}
 	}
-	return "", nil
+
+	return normalize(id), nil
 }
 
-// resolveModelRef resolves a model reference to its canonical provider/model
-// ID when the workspace catalog recognizes it, preferring a candidate owned by
-// the parent session's active provider so a delegated subagent stays on the
-// same provider as its parent.
-func (s *Session) resolveModelRef(ref, parentModel string) (string, bool) {
-	ref = strings.TrimSpace(ref)
-	cat := s.workspace.Catalog()
-	parentProvider := models.ID(parentModel).Provider()
-	if id, ok := preferredModelCandidate(cat.ResolveModels(warp.ModelRoleCompletion, ref), parentProvider); ok {
-		return id, true
+func (s *Session) modelCatalog() *models.Catalog {
+	if s.catalog == nil {
+		return nil
 	}
-	if modelsCat := s.catalog(); modelsCat != nil {
-		if m, ok := modelsCat.Get(models.ID(ref)); ok && m.ID.Valid() {
-			return string(m.ID), true
+	return s.catalog()
+}
+
+func canonicalizeListedRequest(listed []models.Model, requested string) string {
+	if requested == "" || isRequestedInherit(requested) || isAliasRequest(requested) {
+		return requested
+	}
+	for _, m := range listed {
+		if strings.EqualFold(string(m.ID), requested) {
+			return string(m.ID)
 		}
 	}
-	return "", false
+	return requested
+}
+
+func hasDeclaredModelCandidate(candidates []warp.ResolvedModel) bool {
+	for _, c := range candidates {
+		if c.Provider != nil && c.Model != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// unresolvedModelHint returns a "did you mean" suffix only when lookupRef fails
+// to resolve to a known model in the workspace (so explicit policy rejections
+// of valid models do not suggest unrelated alternatives).
+func unresolvedModelHint(cat *workspace.Catalog, listed []models.Model, requested, lookupRef string) string {
+	if isRequestedInherit(lookupRef) {
+		return ""
+	}
+	if id, ok := preferredModelCandidate(cat.ResolveModels(warp.ModelRoleCompletion, lookupRef), ""); ok && id != "" {
+		return ""
+	}
+	return suggestClosestModels(listed, requested)
+}
+
+// suggestClosestModels returns up to 3 closest model IDs from listed for typo
+// recovery, or an empty string if no reasonable matches exist.
+func suggestClosestModels(listed []models.Model, requested string) string {
+	if len(listed) == 0 {
+		return ""
+	}
+	query := strings.ToLower(strings.TrimSpace(requested))
+	if query == "" {
+		return ""
+	}
+	queryNoAt := strings.TrimPrefix(query, "@")
+	queryProv := strings.ToLower(models.ID(requested).Provider())
+	queryName := strings.TrimPrefix(strings.ToLower(models.ID(requested).Name()), "@")
+	if queryName == "" {
+		queryName = queryNoAt
+	}
+
+	var matches []strutils.ClosestMatch
+	for _, m := range listed {
+		id := string(m.ID)
+		lowerID := strings.ToLower(id)
+		lowerName := strings.ToLower(m.ID.Name())
+		lowerProv := strings.ToLower(m.ID.Provider())
+
+		bestTier, bestScore := 99, 1<<20
+		consider := func(tier, score int) {
+			if tier < bestTier || (tier == bestTier && score < bestScore) {
+				bestTier, bestScore = tier, score
+			}
+		}
+
+		for _, alias := range m.Aliases {
+			if tier, score, ok := strutils.RankMatch(queryNoAt, alias, max(2, len(alias)/2)); ok {
+				consider(tier, score)
+			}
+			if strings.EqualFold(strings.TrimSpace(alias), queryName) {
+				consider(0, 0)
+			}
+		}
+
+		switch {
+		case lowerID == query || lowerName == queryName:
+			consider(0, 0)
+		case strings.Contains(lowerID, queryNoAt) || (queryName != "" && strings.Contains(lowerName, queryName)):
+			consider(1, strutils.Levenshtein(query, lowerID))
+		default:
+			dID := strutils.Levenshtein(query, lowerID)
+			dName := strutils.Levenshtein(queryName, lowerName)
+			thresholdID := max(3, max(len(query), len(lowerID))/2+1)
+			thresholdName := max(2, max(len(queryName), len(lowerName))/2+1)
+			if dID <= thresholdID || dName <= thresholdName || (queryProv != "" && lowerProv == queryProv) {
+				consider(2, min(dID, dName))
+			}
+		}
+
+		if bestTier <= 2 {
+			matches = append(matches, strutils.ClosestMatch{ID: id, Tier: bestTier, Score: bestScore})
+		}
+	}
+	return strutils.FormatDidYouMean(strutils.TopClosestIDs(matches, 3))
 }
 
 // isAliasRequest reports whether a reference is alias-shaped ("@fast",
@@ -295,76 +386,6 @@ func (s *Session) resolveModelRef(ref, parentModel string) (string, bool) {
 // never be an ad-hoc provider model identifier.
 func isAliasRequest(ref string) bool {
 	return strings.HasPrefix(ref, "@") || strings.Contains(ref, "/@")
-}
-
-// subagentModelAllowed reports whether a caller-requested model reference is
-// permitted by a subagent's spec.models allowlist. A request is allowed when it
-// matches an entry textually (case-insensitively), when it resolves through any
-// registered provider to the same canonical model as an allowlist entry (so
-// multi-provider tier aliases like "anthropic/@fast" match "@fast"), or when it
-// names the parent's active model and the allowlist grants "@inherit".
-func subagentModelAllowed(modelsCat *models.Catalog, cat *workspace.Catalog, allow []string, requested, parentModel string) bool {
-	requested = strings.TrimSpace(requested)
-	if requested == "" {
-		return true
-	}
-	if isRequestedInherit(requested) {
-		return allowlistAllowsInherit(allow)
-	}
-	for _, entry := range allow {
-		if isRequestedInherit(entry) {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(entry), requested) {
-			return true
-		}
-	}
-
-	parentProvider := models.ID(parentModel).Provider()
-	if parentProvider != "" && allowlistAllowsInherit(allow) {
-		if strings.EqualFold(requested, parentModel) {
-			return true
-		}
-	}
-
-	requestedIDs := modelCandidateIDs(modelsCat, cat, requested)
-	for _, entry := range allow {
-		if isRequestedInherit(entry) {
-			continue
-		}
-		for _, entryID := range modelCandidateIDs(modelsCat, cat, entry) {
-			if slices.Contains(requestedIDs, entryID) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// modelCandidateIDs returns every canonical provider/model ID a reference
-// resolves to across registered providers (a bare tier alias can resolve once
-// per provider that declares it).
-func modelCandidateIDs(modelsCat *models.Catalog, cat *workspace.Catalog, ref string) []string {
-	ref = strings.TrimSpace(ref)
-	var ids []string
-	for _, c := range cat.ResolveModels(warp.ModelRoleCompletion, ref) {
-		if id := models.ID(c.QualifiedID); id.Valid() && c.Provider != nil {
-			ids = appendUniqueID(ids, c.QualifiedID)
-		}
-	}
-	if modelsCat != nil {
-		if m, ok := modelsCat.Get(models.ID(ref)); ok && m.ID.Valid() {
-			ids = appendUniqueID(ids, string(m.ID))
-		}
-	}
-	return ids
-}
-
-func appendUniqueID(ids []string, id string) []string {
-	if !slices.Contains(ids, id) {
-		ids = append(ids, id)
-	}
-	return ids
 }
 
 // preferredModelCandidate selects the canonical ID of the first resolvable
@@ -392,10 +413,6 @@ func preferredModelCandidate(candidates []warp.ResolvedModel, parentProvider str
 
 func isRequestedInherit(ref string) bool {
 	return strings.EqualFold(strings.TrimSpace(ref), workspace.ModelAliasInherit)
-}
-
-func allowlistAllowsInherit(allow []string) bool {
-	return slices.ContainsFunc(allow, isRequestedInherit)
 }
 
 // dispatchCommandSubagent executes a slash command in a forked child session.

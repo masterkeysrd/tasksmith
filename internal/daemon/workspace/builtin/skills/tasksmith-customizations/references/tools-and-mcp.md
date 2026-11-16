@@ -104,18 +104,18 @@ The `sse`, `http`, and `streamable-http` types all use the same HTTP client tran
 
 ### Remote authentication
 
-For an HTTP-based transport, `auth` selects one scheme. A static scheme renders one header on every request; an interactive scheme delegates to the OAuth handler and renders no header. Custom `spec.headers` are applied first, so authentication never overwrites a header you configured explicitly. Header values and `auth.file` paths expand `$VAR` and `${VAR}` from the workspace environment.
+For an HTTP-based transport, `auth` selects one scheme. A static scheme renders one header on every request; an interactive scheme delegates to the OAuth handler and renders no header. Custom `spec.headers` are applied first, so authentication never overwrites a header you configured explicitly. Header values and `${file:...}` paths expand `$VAR` and `${VAR}` from the workspace environment.
 
 | `auth.type` | Header rendered | Credential source |
 | --- | --- | --- |
-| `bearer` or empty | `Authorization: Bearer <token>` | `env` or `file` |
-| `api-key` | `<header>: <token>`, no scheme prefix | `env` or `file` |
-| `basic` | `Authorization: Basic base64(<token>)`, where the token is `user:password` | `env` or `file` |
-| `oauth2` | none; authorization code with PKCE | optional pre-registered client: `env` holds the client ID, `file` the client secret; otherwise the client is registered dynamically |
-| `client-credentials` | none; client credentials grant | `env` holds the client ID, `file` the client secret |
+| `bearer` or empty | `Authorization: Bearer <token>` | `token` (`${env:<VAR>}` or `${file:<PATH>}`) |
+| `api-key` | `<header>: <token>`, no scheme prefix | `token` (`${env:<VAR>}` or `${file:<PATH>}`) |
+| `basic` | `Authorization: Basic base64(<token>)`, where the token is `user:password` | `token` (`${env:...}` / `${file:...}`), or `username` + `password` expression |
+| `oauth2` | none; authorization code with PKCE | optional pre-registered client in `oauth.clientId` and `oauth.clientSecret`; otherwise registered dynamically |
+| `client-credentials` | none; client credentials grant | `oauth.clientId` and `oauth.clientSecret` (`${env:...}` or `${file:...}`) |
 | `enterprise` | none; organization-specific interactive flow | as for `oauth2` |
 
-`auth.header` renames the header a static scheme writes and defaults to `Authorization`. When both `env` and `file` are set, `env` wins with no fallback to the file; a missing or empty variable, or an unreadable or empty file, is a connection error naming the source. An `auth` block with a static type but no source sends no credential header.
+`auth.header` renames the header a static scheme writes and defaults to `Authorization`. A missing or empty variable, or an unreadable or empty file, is a connection error naming the source. An `auth` block with a static type but no source sends no credential header.
 
 Bearer token from an environment variable:
 
@@ -125,7 +125,7 @@ spec:
   endpoint: https://mcp.example.com/mcp
   auth:
     type: bearer
-    env: EXAMPLE_MCP_TOKEN
+    token: "${env:EXAMPLE_MCP_TOKEN}"
 ```
 
 API key in a named header:
@@ -137,7 +137,7 @@ spec:
   auth:
     type: api-key
     header: X-Api-Key
-    file: ~/.config/tasksmith/example-mcp.key
+    token: "${file:~/.config/tasksmith/example-mcp.key}"
 ```
 
 Interactive authorization, with no credential in the manifest:

@@ -44,10 +44,8 @@ const (
 
 // ModelAliasInherit is the TaskSmith-reserved model alias "@inherit". It never
 // resolves through a provider manifest: the session layer resolves it to the
-// delegating parent session's active model when a subagent is invoked. Because
-// WARP validates spec.models alias entries against declared provider aliases,
-// the catalog hides this alias while running registry validation.
-const ModelAliasInherit = "@inherit"
+// delegating parent session's active model when a subagent is invoked.
+const ModelAliasInherit = warp.ModelAliasInherit
 
 // TierAliases lists the standardized completion-model tier aliases TaskSmith
 // recommends providers declare (fast, balanced, smart, flagship). Built-in
@@ -55,15 +53,6 @@ const ModelAliasInherit = "@inherit"
 // custom providers may leave a tier unresolvable, which the catalog tolerates
 // for built-in agents.
 var TierAliases = []string{"@fast", "@balanced", "@smart", "@flagship"}
-
-// workspaceTierAliases indexes TierAliases for membership checks.
-var workspaceTierAliases = func() map[string]bool {
-	m := make(map[string]bool, len(TierAliases))
-	for _, a := range TierAliases {
-		m[a] = true
-	}
-	return m
-}()
 
 // Option configures how a Workspace is opened.
 type Option func(*openOptions)
@@ -243,7 +232,18 @@ func (w *Workspace) Reload(ctx context.Context) error {
 		sysProviders = append(sysProviders, warp.NewFSResourceProvider(fsys, ""))
 	}
 
-	reg, err := warp.Load(w.cwd, sysProviders...)
+	var userProviders []warp.ResourceProvider
+	if userAgentsDir, err := xdg.SubConfigDir("agents"); err == nil {
+		if info, statErr := os.Stat(userAgentsDir); statErr == nil && info.IsDir() {
+			userProviders = append(userProviders, warp.NewFSResourceProvider(os.DirFS(userAgentsDir), userAgentsDir))
+		}
+	}
+
+	reg, err := warp.LoadWithOptions(ctx, w.cwd, warp.LoadOptions{
+		SystemProviders:             sysProviders,
+		UserProviders:               userProviders,
+		AutoDiscoverStartSubproject: true,
+	})
 	if err != nil {
 		return fmt.Errorf("workspace: load %q: %w", w.cwd, err)
 	}
@@ -251,33 +251,6 @@ func (w *Workspace) Reload(ctx context.Context) error {
 	rootDir := w.cwd
 	if wsSpec := reg.WorkspaceSpec(); wsSpec != nil && wsSpec.RootPath != "" {
 		rootDir = filepath.Clean(wsSpec.RootPath)
-		if wsSpec.Def != nil && wsSpec.Def.Directory == "" {
-			wsSpec.Def.Directory = rootDir
-		}
-	}
-
-	if w.cwd != rootDir {
-		if err := ensureSubprojectLoaded(ctx, reg, rootDir, w.cwd); err != nil {
-			return err
-		}
-	}
-
-	if userAgentsDir, err := xdg.SubConfigDir("agents"); err == nil {
-		if info, statErr := os.Stat(userAgentsDir); statErr == nil && info.IsDir() {
-			userProv := warp.NewNamespacedFSProvider(
-				os.DirFS(userAgentsDir),
-				userAgentsDir,
-				warp.NamespaceUser,
-				warp.NamespacePriority(warp.NamespaceUser),
-			)
-			userResources, loadErr := userProv.GetResources(ctx)
-			if loadErr != nil {
-				return fmt.Errorf("workspace: load user agents dir %q: %w", userAgentsDir, loadErr)
-			}
-			for _, r := range userResources {
-				reg.Set(r.QualifiedName(), r)
-			}
-		}
 	}
 
 	if w.opts.restricted {
@@ -306,61 +279,6 @@ func (w *Workspace) Reload(ctx context.Context) error {
 	// against the runtime this workspace already has attached. The caller holds the
 	// workspace write lock, so w.mcp is read directly rather than through MCP().
 	w.setMCPResourceProbe(w.catalog, w.mcp)
-	return nil
-}
-
-func ensureSubprojectLoaded(ctx context.Context, reg *warp.Registry, rootDir, cwd string) error {
-	proj, ok := reg.ProjectFromPath(cwd)
-	if ok && filepath.Clean(proj.AbsPath()) == filepath.Clean(cwd) {
-		return nil
-	}
-
-	cwdAgentsDir := filepath.Join(cwd, warp.DefaultAgentsDir)
-	info, err := os.Stat(cwdAgentsDir)
-	if err != nil || !info.IsDir() {
-		return nil
-	}
-
-	rootAgentsDir := filepath.Join(rootDir, warp.DefaultAgentsDir)
-	if rootInfo, statErr := os.Stat(rootAgentsDir); statErr == nil && rootInfo.IsDir() {
-		wsProv := warp.NewNamespacedFSProvider(
-			os.DirFS(rootAgentsDir),
-			rootAgentsDir,
-			warp.NamespaceWorkspace,
-			warp.NamespacePriority(warp.NamespaceWorkspace),
-		)
-		if wsResources, loadErr := wsProv.GetResources(ctx); loadErr == nil {
-			for _, r := range wsResources {
-				reg.Set(r.QualifiedName(), r)
-			}
-		}
-	}
-
-	rel, err := filepath.Rel(rootDir, cwd)
-	if err != nil || rel == "." {
-		return nil
-	}
-	slug := strings.ToLower(strings.ReplaceAll(filepath.ToSlash(rel), "/", "-"))
-
-	reg.AddProject(&warp.Project{
-		Name:     slug,
-		Path:     rel,
-		RootPath: rootDir,
-	})
-
-	localProv := warp.NewNamespacedFSProvider(
-		os.DirFS(cwdAgentsDir),
-		cwdAgentsDir,
-		slug,
-		warp.NamespacePriority(warp.NamespaceLocal),
-	)
-	localResources, err := localProv.GetResources(ctx)
-	if err != nil {
-		return fmt.Errorf("workspace: load local project agents dir %q: %w", cwdAgentsDir, err)
-	}
-	for _, r := range localResources {
-		reg.Set(r.QualifiedName(), r)
-	}
 	return nil
 }
 
@@ -518,7 +436,7 @@ func (w *Workspace) Env() map[string]string {
 // (bash commands and custom tools). It preserves the host shell environment and,
 // in trusted workspaces, project .env layers, while excluding TaskSmith's
 // private user .env (~/.config/tasksmith/.env), configured ModelProvider
-// auth.env credentials, and the TASKSMITH_* internal namespace.
+// auth env-expression credentials, and the TASKSMITH_* internal namespace.
 func (w *Workspace) SubprocessEnv() map[string]string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -543,9 +461,9 @@ func (w *Workspace) SubprocessEnv() map[string]string {
 	return out
 }
 
-// providerAuthEnvLocked collects environment variable names declared as
-// spec.auth.env on configured ModelProvider resources. The caller must hold at
-// least the read lock.
+// providerAuthEnvLocked collects environment variable names referenced via
+// ${env:...} expressions on configured ModelProvider spec.auth fields. The
+// caller must hold at least the read lock.
 func (w *Workspace) providerAuthEnvLocked() map[string]struct{} {
 	if w.catalog == nil {
 		return nil
@@ -555,7 +473,7 @@ func (w *Workspace) providerAuthEnvLocked() map[string]struct{} {
 		if p == nil || p.Spec.Auth == nil {
 			continue
 		}
-		if name := strings.TrimSpace(p.Spec.Auth.Env); name != "" {
+		for _, name := range ProviderAuthEnvNames(p.Spec.Auth) {
 			if out == nil {
 				out = make(map[string]struct{})
 			}
@@ -563,6 +481,64 @@ func (w *Workspace) providerAuthEnvLocked() map[string]struct{} {
 		}
 	}
 	return out
+}
+
+// ProviderAuthEnvNames extracts all environment variable names referenced by
+// ${env:<VAR>} expressions across auth's fields (including nested OAuth fields).
+func ProviderAuthEnvNames(auth *warp.ProviderAuth) []string {
+	if auth == nil {
+		return nil
+	}
+	fields := []string{auth.Token, auth.Header, auth.Username, auth.Password}
+	if auth.OAuth != nil {
+		fields = append(fields,
+			auth.OAuth.IDPIssuer,
+			auth.OAuth.IDPClientID,
+			auth.OAuth.IDPClientSecret,
+			auth.OAuth.AudienceIssuer,
+			auth.OAuth.ResourceURI,
+			auth.OAuth.ClientID,
+			auth.OAuth.ClientSecret,
+		)
+	}
+	var names []string
+	seen := make(map[string]struct{})
+	for _, field := range fields {
+		exprs, err := warp.ExtractExpressions(field)
+		if err != nil {
+			continue
+		}
+		for _, expr := range exprs {
+			if expr.Scheme != "env" {
+				continue
+			}
+			name := strings.TrimSpace(expr.Target)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// ProviderAuthPrimaryEnv returns the primary environment variable name
+// referenced by auth (checking Token first, then any other ${env:...} expression).
+func ProviderAuthPrimaryEnv(auth *warp.ProviderAuth) string {
+	if auth == nil {
+		return ""
+	}
+	if expr, ok := warp.ParseExpression(strings.TrimSpace(auth.Token)); ok && expr.Scheme == "env" {
+		return strings.TrimSpace(expr.Target)
+	}
+	if names := ProviderAuthEnvNames(auth); len(names) > 0 {
+		return names[0]
+	}
+	return ""
 }
 
 // PortablePath converts targetPath into a portable representation relative to the

@@ -8,8 +8,9 @@ spec:
   defaultModels:
     completion: claude-sonnet-5-5
   auth:
-    type: env
-    env: ANTHROPIC_API_KEY
+    type: api-key
+    header: X-Api-Key
+    token: "${env:ANTHROPIC_API_KEY}"
   models:
     - id: claude-haiku-5-5
       name: claude-haiku-5-5

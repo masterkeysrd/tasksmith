@@ -274,18 +274,18 @@ func TestToGatewayProviderExpandsCredentialFilePath(t *testing.T) {
 	provider := &warp.ModelProvider{
 		Spec: warp.ModelProviderSpec{
 			Type: "openai",
-			Auth: &warp.ProviderAuth{Type: "bearer", File: "~/secrets/token"},
+			Auth: &warp.ProviderAuth{Type: "bearer", Token: "${file:~/secrets/token}"},
 		},
 	}
 	provider.Directory = providerDir
 
 	got := toGatewayProvider(provider)
-	if got.Auth == nil {
-		t.Fatal("expected auth config to be carried over")
+	if got.Auth == nil || got.Auth.Token == nil {
+		t.Fatal("expected auth token config to be carried over")
 	}
 	want := filepath.Join(home, "secrets", "token")
-	if got.Auth.File != want {
-		t.Fatalf("auth file = %q, want %q", got.Auth.File, want)
+	if got.Auth.Token.File != want {
+		t.Fatalf("auth file = %q, want %q", got.Auth.Token.File, want)
 	}
 }
 
@@ -295,15 +295,15 @@ func TestToGatewayProviderResolvesRelativeCredentialFileNextToManifest(t *testin
 	provider := &warp.ModelProvider{
 		Spec: warp.ModelProviderSpec{
 			Type: "openai",
-			Auth: &warp.ProviderAuth{Type: "bearer", File: "./tokens/upstream"},
+			Auth: &warp.ProviderAuth{Type: "bearer", Token: "${file:./tokens/upstream}"},
 		},
 	}
 	provider.Directory = providerDir
 
 	got := toGatewayProvider(provider)
 	want := filepath.Join(providerDir, "tokens", "upstream")
-	if got.Auth.File != want {
-		t.Fatalf("auth file = %q, want %q", got.Auth.File, want)
+	if got.Auth == nil || got.Auth.Token == nil || got.Auth.Token.File != want {
+		t.Fatalf("auth token = %+v, want file %q", got.Auth, want)
 	}
 }
 
@@ -313,17 +313,41 @@ func TestToGatewayProviderKeepsAbsolutePathAndEmptyFile(t *testing.T) {
 	provider := &warp.ModelProvider{
 		Spec: warp.ModelProviderSpec{
 			Type: "openai",
-			Auth: &warp.ProviderAuth{Type: "bearer", File: absolute},
+			Auth: &warp.ProviderAuth{Type: "bearer", Token: "${file:" + absolute + "}"},
 		},
 	}
 	provider.Directory = "/workspace/app/.agents/providers"
 
-	if got := toGatewayProvider(provider); got.Auth.File != absolute {
-		t.Fatalf("absolute auth file was rewritten: %q", got.Auth.File)
+	if got := toGatewayProvider(provider); got.Auth == nil || got.Auth.Token == nil || got.Auth.Token.File != absolute {
+		t.Fatalf("absolute auth file was rewritten: %+v", got.Auth)
 	}
 
-	provider.Spec.Auth.File = "   "
-	if got := toGatewayProvider(provider); got.Auth.File != "" {
-		t.Fatalf("blank auth file = %q, want empty", got.Auth.File)
+	provider.Spec.Auth.Token = "   "
+	if got := toGatewayProvider(provider); got.Auth.Token != nil {
+		t.Fatalf("blank auth token = %+v, want nil", got.Auth.Token)
+	}
+}
+
+func TestToGatewayProviderOAuth2DoesNotInjectAntigravityToken(t *testing.T) {
+	oauthProv := &warp.ModelProvider{
+		Spec: warp.ModelProviderSpec{
+			Type: "antigravity",
+			Auth: &warp.ProviderAuth{Type: warp.AuthTypeOAuth2},
+		},
+	}
+	gotOAuth := toGatewayProvider(oauthProv)
+	if gotOAuth.Auth == nil || gotOAuth.Auth.Type != gateway.AuthTypeOAuth2 || gotOAuth.Auth.Token != nil {
+		t.Fatalf("expected oauth2 auth with nil Token, got %+v", gotOAuth.Auth)
+	}
+
+	bearerProv := &warp.ModelProvider{
+		Spec: warp.ModelProviderSpec{
+			Type: "antigravity",
+			Auth: &warp.ProviderAuth{Type: warp.AuthTypeBearer, Token: "${env:ANTIGRAVITY_TOKEN}"},
+		},
+	}
+	gotBearer := toGatewayProvider(bearerProv)
+	if gotBearer.Auth == nil || gotBearer.Auth.Type != gateway.AuthTypeBearer || gotBearer.Auth.Token == nil || gotBearer.Auth.Token.Env != "ANTIGRAVITY_TOKEN" {
+		t.Fatalf("expected bearer auth with Token.Env=ANTIGRAVITY_TOKEN, got %+v", gotBearer.Auth)
 	}
 }

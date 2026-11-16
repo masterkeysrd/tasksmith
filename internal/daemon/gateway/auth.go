@@ -12,6 +12,35 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 )
 
+// resolve reads the credential from env (falling back to os.Getenv) or from File.
+func (c *CredentialSource) resolve(env map[string]string) (string, error) {
+	if c == nil {
+		return "", nil
+	}
+	if key := strings.TrimSpace(c.Env); key != "" {
+		val, ok := env[key]
+		if !ok || strings.TrimSpace(val) == "" {
+			val = os.Getenv(key)
+		}
+		if strings.TrimSpace(val) == "" {
+			return "", fmt.Errorf("%w: missing required environment key %q", ErrMissingCredential, key)
+		}
+		return strings.TrimSpace(val), nil
+	}
+	if path := strings.TrimSpace(c.File); path != "" {
+		data, err := os.ReadFile(fsutils.ResolveConfigPath(path, ""))
+		if err != nil {
+			return "", fmt.Errorf("%w: failed to read credential file %q: %w", ErrMissingCredential, path, err)
+		}
+		secret := strings.TrimSpace(string(data))
+		if secret == "" {
+			return "", fmt.Errorf("%w: credential file %q is empty", ErrMissingCredential, path)
+		}
+		return secret, nil
+	}
+	return "", nil
+}
+
 // resolveCredential extracts credentials from the injected in-memory env map,
 // falling back to os.Getenv, or reading from an explicit file path. Providers
 // declaring the "none" scheme never carry a credential.
@@ -20,52 +49,36 @@ func resolveCredential(auth *AuthConfig, env map[string]string) (string, error) 
 		return "", nil
 	}
 
-	if auth.Type.normalized() == AuthTypeNone {
+	scheme := auth.Type.normalized()
+	if scheme == AuthTypeNone {
 		return "", nil
 	}
 
-	if auth.Type.normalized() == AuthTypeOAuth2 {
-		if auth.Env != "" {
-			val, ok := env[auth.Env]
-			if !ok || strings.TrimSpace(val) == "" {
-				val = os.Getenv(auth.Env)
-			}
-			if strings.TrimSpace(val) != "" {
-				return strings.TrimSpace(val), nil
+	if scheme == AuthTypeOAuth2 {
+		if auth.Token != nil && !auth.Token.IsZero() {
+			token, err := auth.Token.resolve(env)
+			if err == nil {
+				return token, nil
 			}
 		}
 		return "", nil
 	}
 
-	if auth.Env != "" {
-		val, ok := env[auth.Env]
-		if !ok || strings.TrimSpace(val) == "" {
-			val = os.Getenv(auth.Env)
+	if scheme == AuthTypeBasic && auth.Token.IsZero() && (auth.Username != "" || !auth.Password.IsZero()) {
+		if auth.Password.IsZero() {
+			return "", fmt.Errorf("%w: auth type %q requires a password or token source", ErrMissingCredential, scheme)
 		}
-		if strings.TrimSpace(val) == "" {
-			return "", fmt.Errorf("%w: missing required environment key %q", ErrMissingCredential, auth.Env)
-		}
-		return strings.TrimSpace(val), nil
-	}
-
-	if auth.File != "" {
-		file := fsutils.ResolveConfigPath(auth.File, "")
-		data, err := os.ReadFile(file)
+		pass, err := auth.Password.resolve(env)
 		if err != nil {
-			return "", fmt.Errorf("%w: failed to read credential file %q: %w", ErrMissingCredential, auth.File, err)
+			return "", err
 		}
-		token := strings.TrimSpace(string(data))
-		if token == "" {
-			return "", fmt.Errorf("%w: credential file %q is empty", ErrMissingCredential, auth.File)
-		}
-		return token, nil
+		return auth.Username + ":" + pass, nil
 	}
 
-	if auth.Type.normalized() == AuthTypeEnv {
-		return "", fmt.Errorf("%w: auth type %q requires an environment variable (auth.env) or credential file (auth.file)", ErrMissingCredential, auth.Type)
+	if auth.Token.IsZero() {
+		return "", fmt.Errorf("%w: auth type %q requires an environment variable or credential file", ErrMissingCredential, scheme)
 	}
-
-	return "", nil
+	return auth.Token.resolve(env)
 }
 
 // credentialDigest returns a short hex digest of a credential file's contents so
@@ -92,11 +105,11 @@ func authHeaderName(auth *AuthConfig) string {
 	return "Authorization"
 }
 
-// scheme returns the configured auth scheme, defaulting to "env" for a provider
-// with no auth block or no explicit type.
+// scheme returns the configured auth scheme, defaulting to "bearer" when
+// auth is nil or auth.type is omitted.
 func (a *AuthConfig) scheme() AuthType {
 	if a == nil {
-		return AuthTypeEnv
+		return AuthTypeBearer
 	}
 	return a.Type.normalized()
 }
@@ -122,13 +135,10 @@ func sdkAuthHeaders(providerType string) []string {
 }
 
 // redundantSDKAuthHeaders reports which SDK-native auth headers to strip from
-// every request. Each SDK attaches its credential in the vendor's own scheme, so
-// a provider that asks for a different scheme or header name would otherwise send
-// the secret twice and let the vendor header win upstream.
-//
-// The vendor default (scheme "env" with no custom header) keeps them: providers
-// such as Anthropic accept the credential in their own header, and their SDK
-// refuses to send a request that carries no credential of its own.
+// every request. Because configured auth and custom headers are placed into the
+// transport header map, any SDK header not present in configured is dropped so
+// conflicting headers do not both reach upstream. Managed OAuth2 providers with
+// no custom header rely on the SDK's own token source and keep all SDK headers.
 func redundantSDKAuthHeaders(auth *AuthConfig, providerType string, configured map[string]string) []string {
 	if auth == nil {
 		return nil
@@ -136,7 +146,7 @@ func redundantSDKAuthHeaders(auth *AuthConfig, providerType string, configured m
 
 	norm := auth.Type.normalized()
 	customHeader := strings.TrimSpace(auth.Header) != ""
-	if (norm == AuthTypeEnv || norm == AuthTypeOAuth2) && !customHeader {
+	if norm == AuthTypeOAuth2 && !customHeader {
 		return nil
 	}
 
@@ -168,7 +178,7 @@ func buildHTTPTransport(base http.RoundTripper, auth *AuthConfig, token string, 
 	if token != "" && auth != nil {
 		headerName := http.CanonicalHeaderKey(authHeaderName(auth))
 		switch auth.Type.normalized() {
-		case AuthTypeEnv, AuthTypeBearer, AuthTypeOAuth2:
+		case AuthTypeBearer, AuthTypeOAuth2:
 			headers[headerName] = "Bearer " + token
 		case AuthTypeAPIKey:
 			headers[headerName] = token

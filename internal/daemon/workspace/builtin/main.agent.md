@@ -346,7 +346,7 @@ Additional tools are available via deferred loading. Before concluding that a to
 {{if .DeferredTools.Tools}}- **Deferred tools**:
 {{range .DeferredTools.Tools}}  - `{{.Name}}`{{if .Description}}: {{.Description}}{{end}}
 {{end}}{{end}}{{if .DeferredTools.MCPServers}}- **MCP servers**:
-{{range .DeferredTools.MCPServers}}  - `{{.Name}}` (`{{.Prefix}}`){{if .Description}}: {{.Description}}{{end}}{{if .ToolsText}} ({{.ToolsText}}){{end}}
+{{range .DeferredTools.MCPServers}}  - `{{.Name}}` (`{{.Prefix}}`){{if .Description}}: {{.Description}}{{end}}{{if .Tools}} (tools: {{range $i, $t := .Tools}}{{if $i}}, {{end}}`{{$t}}`{{end}}{{if .ExtraCount}}, +{{.ExtraCount}} more{{end}}){{end}}
 {{end}}{{end}}</deferred_tools>
 {{end}}
 {{end}}

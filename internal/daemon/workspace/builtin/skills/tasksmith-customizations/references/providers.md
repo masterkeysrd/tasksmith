@@ -26,14 +26,15 @@ A model identifier commonly has the form `provider/model`. Workspace resolution 
 
 | `spec.auth` field | Type | Meaning |
 | --- | --- | --- |
-| `type` | string | HTTP scheme: `env` (default), `bearer`, `api-key`, `basic`, or `none`; matching is case-insensitive. |
+| `type` | string | HTTP scheme: `bearer`, `api-key`, `basic`, `oauth2`, or `none`; matching is case-insensitive. |
 | `header` | string | Optional authentication header name; defaults to `Authorization` in that transport. |
-| `env` | string | Environment variable containing the credential. |
-| `file` | string | Path to a file containing the credential; `~/…` and paths relative to the manifest are expanded. |
+| `token` | string | Secret expression (`${env:<VAR>}` or `${file:<PATH>}`) for `bearer`, `api-key`, or pre-encoded `basic`; `~/…` and paths relative to the manifest are expanded for `file`. |
+| `username` | string | Username for `basic` auth (literal or `${<scheme>:<ref>}` expression). |
+| `password` | string | Secret expression (`${env:<VAR>}` or `${file:<PATH>}`) for `basic` auth password. |
 
-`env` sends `Authorization: Bearer <credential>`, `api-key` sends the credential un-prefixed, `basic` sends `Basic base64(<credential>)`, and `none` reads and sends no credential. When `header` replaces `Authorization`, the gateway also removes the credential header a provider SDK would add on its own, so only the configured header is sent.
+`bearer` sends `Authorization: Bearer <credential>`, `api-key` sends the credential un-prefixed, `basic` sends `Basic base64(<credential>)`, `oauth2` uses managed OAuth tokens, and `none` reads and sends no credential. When `header` replaces `Authorization`, the gateway also removes the credential header a provider SDK would add on its own, so only the configured header is sent.
 
-When `env` is set, the gateway reads the workspace environment and falls back to the host environment; a missing or empty value produces a credential error. If both `env` and `file` are set, `env` is used and a missing value does not fall back to the file. File credentials must be readable and nonempty. Rotating a credential value or file changes the gateway fingerprint and rebuilds provider connections. Shipped presets use `type: env` with an environment variable.
+When `${env:<VAR>}` is used, the gateway reads the workspace environment and falls back to the host environment; a missing or empty value produces a credential error. File credentials (`${file:<PATH>}`) must be readable and nonempty. Rotating a credential value or file changes the gateway fingerprint and rebuilds provider connections. Shipped token presets use `type: bearer` (e.g. `openai`, `typesafe`) or `type: api-key` with a vendor header (`X-Api-Key` for `anthropic`, `x-goog-api-key` for `google-genai`) and `token: "${env:<VAR>}"`, while `antigravity` uses `type: oauth2`.
 
 TaskSmith builds its workspace environment from the process environment and `.env` files: user configuration first, applicable ancestor files from outer to inner, workspace root, then current directory. Later layers override earlier values. Reference secrets through environment variables or files instead of embedding them in manifests or headers.
 
@@ -86,8 +87,8 @@ spec:
   defaultModels:
     completion: example-model
   auth:
-    type: env
-    env: OPENAI_API_KEY
+    type: bearer
+    token: "${env:OPENAI_API_KEY}"
   config:
     apiMode: responses
     store: false

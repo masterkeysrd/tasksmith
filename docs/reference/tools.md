@@ -778,7 +778,7 @@ Searches the workspace's deferred (not eagerly loaded) tools by name, descriptio
 
 **Activation**: `tool_search` is a built-in system tool that is automatically activated (`DeferLoading: false`) whenever the session resolves at least one deferred tool — that is, a policy-allowed built-in, custom (`*.tool.md`), or MCP tool that is not listed in the agent's `spec.tools`. When the session has zero deferred tools, `tool_search` is not registered.
 
-**Discovery**: When at least one tool is deferred, the agent's system prompt renders a `### tool_search tool` section containing a compact `<deferred_tools>` directory. The directory lists each deferred custom/built-in tool by name and description, and groups deferred MCP tools under their server (e.g. `github` with prefix `mcp__github__*`) showing up to 15 tool names per server plus a `+N more` overflow count. This advises the agent to call `tool_search` with matching keywords before concluding a capability is unavailable.
+**Discovery**: When at least one tool is deferred, the agent's system prompt renders a `### tool_search tool` section containing a compact `<deferred_tools>` directory. The directory lists each deferred custom/built-in tool by name and description, and groups deferred MCP tools under their server (e.g. `github` with prefix `github__*`) showing up to 15 tool names per server plus a `+N more` overflow count. This advises the agent to call `tool_search` with matching keywords before concluding a capability is unavailable.
 
 #### Safety Profile
 - **`isReadOnly`**: `true`
@@ -869,13 +869,13 @@ Custom (`*.tool.md`) and MCP tools are **deferred by default**, because they are
 
 Tools discovered from a connected [MCP server](manifests.md#10-mcp-server-manifest-mcpyaml) are named `<server>__<tool>` and are attributed to that server in listings, whose scope reads `MCP (<server>)`.
 
-They stay deferred even when an agent lists `spec.tools: ["*"]`, because a server can expose dozens of tools and their schemas are large. To load one on the first request, name it outright, either as `<server>__<tool>` or with the `mcp__` prefix used in the deferred-tools directory (`mcp__<server>__<tool>`):
+They stay deferred even when an agent lists `spec.tools: ["*"]`, because a server can expose dozens of tools and their schemas are large. To load one on the first request, name it outright using its canonical `<server>__<tool>` name:
 
 ```yaml
 spec:
   tools:
     - "*"
-    - mcp__github__get_issue
+    - github__get_issue
 ```
 
 A tool the server's own `spec.policies.tools` prohibits is never registered and reports status `denied`, so it stays visible in [`/tools`](cli.md#tools-browser-tools) with an explanation rather than disappearing. See [Scoping MCP resources](../guides/tools-and-mcp.md#scoping-mcp-resources).

@@ -626,12 +626,7 @@ func buildGatewayConfig(ws *workspace.Workspace, rec metrics.Recorder) gateway.C
 func toGatewayProvider(p *warp.ModelProvider) gateway.ProviderConfig {
 	var auth *gateway.AuthConfig
 	if p.Spec.Auth != nil {
-		auth = &gateway.AuthConfig{
-			Type:   gateway.AuthType(p.Spec.Auth.Type),
-			Header: p.Spec.Auth.Header,
-			Env:    p.Spec.Auth.Env,
-			File:   resolveCredentialFilePath(p.Spec.Auth.File, p.GetDir()),
-		}
+		auth = toGatewayAuth(p.Spec.Auth, p.GetDir())
 	}
 
 	return gateway.ProviderConfig{
@@ -642,6 +637,37 @@ func toGatewayProvider(p *warp.ModelProvider) gateway.ProviderConfig {
 		Headers:  p.Spec.Headers,
 		Config:   p.Spec.Config,
 	}
+}
+
+func toGatewayAuth(pa *warp.ProviderAuth, providerDir string) *gateway.AuthConfig {
+	auth := &gateway.AuthConfig{
+		Type:   gateway.AuthType(pa.Type),
+		Header: pa.Header,
+		Token:  parseCredentialSource(pa.Token, providerDir),
+	}
+	if strings.EqualFold(strings.TrimSpace(pa.Type), warp.AuthTypeBasic) && pa.Token == "" {
+		auth.Username = strings.TrimSpace(pa.Username)
+		auth.Password = parseCredentialSource(pa.Password, providerDir)
+	}
+	return auth
+}
+
+func parseCredentialSource(rawExpr, providerDir string) *gateway.CredentialSource {
+	expr, ok := warp.ParseExpression(strings.TrimSpace(rawExpr))
+	if !ok {
+		return nil
+	}
+	switch expr.Scheme {
+	case "env":
+		if envName := strings.TrimSpace(expr.Target); envName != "" {
+			return &gateway.CredentialSource{Env: envName}
+		}
+	case "file":
+		if filePath := resolveCredentialFilePath(expr.Target, providerDir); filePath != "" {
+			return &gateway.CredentialSource{File: filePath}
+		}
+	}
+	return nil
 }
 
 // resolveCredentialFilePath turns a manifest auth.file value into an absolute

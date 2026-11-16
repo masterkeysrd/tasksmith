@@ -135,7 +135,7 @@ func TestOAuthConfigFingerprintTracksAccountIdentity(t *testing.T) {
 		Providers: []ProviderConfig{{
 			Name: "antigravity",
 			Type: "antigravity",
-			Auth: &AuthConfig{Type: AuthTypeOAuth2, Env: "ANTIGRAVITY_TEST_TOKEN"},
+			Auth: &AuthConfig{Type: AuthTypeOAuth2, Token: &CredentialSource{Env: "ANTIGRAVITY_TEST_TOKEN"}},
 		}},
 	}
 

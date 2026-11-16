@@ -12,8 +12,8 @@ spec:
     # store: false disables server-side conversation state retention (ZDR mode)
     store: false
   auth:
-    type: env
-    env: OPENAI_API_KEY
+    type: bearer
+    token: "${env:OPENAI_API_KEY}"
   models:
     - id: gpt-6-astra
       name: gpt-6-astra

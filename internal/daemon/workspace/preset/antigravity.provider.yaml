@@ -9,7 +9,6 @@ spec:
     completion: gemini-4-hydrogen
   auth:
     type: oauth2
-    env: ANTIGRAVITY_TOKEN
   models:
     - id: gemini-4-hydrogen
       name: gemini-4-hydrogen

@@ -27,10 +27,8 @@ var (
 type AuthType string
 
 const (
-	// AuthTypeEnv reads the credential and sends it as "Authorization: Bearer <token>".
-	// It is the default scheme when auth.type is omitted.
-	AuthTypeEnv AuthType = "env"
 	// AuthTypeBearer sends "Authorization: Bearer <token>".
+	// It is the default scheme when auth.type is omitted.
 	AuthTypeBearer AuthType = "bearer"
 	// AuthTypeAPIKey sends the raw token, un-prefixed.
 	AuthTypeAPIKey AuthType = "api-key"
@@ -43,22 +41,35 @@ const (
 )
 
 // normalized returns the canonical, lower-cased scheme. An empty scheme maps to
-// the default "env" scheme; any other unknown value is returned as-is so
-// callers can ignore it rather than guess an intent.
+// the default "bearer" scheme; any other unknown value is returned as-is so
+// callers reject it rather than guessing an intent.
 func (t AuthType) normalized() AuthType {
 	scheme := AuthType(strings.ToLower(strings.TrimSpace(string(t))))
 	if scheme == "" {
-		return AuthTypeEnv
+		return AuthTypeBearer
 	}
 	return scheme
 }
 
+// CredentialSource locates a static secret value in an environment variable
+// or in a file on disk.
+type CredentialSource struct {
+	Env  string `json:"env,omitempty"`  // Key name in the injected environment map
+	File string `json:"file,omitempty"` // Explicit path to credential file
+}
+
+// IsZero reports whether the source declares neither an env key nor a file path.
+func (c *CredentialSource) IsZero() bool {
+	return c == nil || (strings.TrimSpace(c.Env) == "" && strings.TrimSpace(c.File) == "")
+}
+
 // AuthConfig defines authentication parameters for a provider.
 type AuthConfig struct {
-	Type   AuthType `json:"type,omitempty"`
-	Header string   `json:"header,omitempty"` // Custom HTTP header (defaults to Authorization for bearer)
-	Env    string   `json:"env,omitempty"`    // Key name in the injected environment map
-	File   string   `json:"file,omitempty"`   // Explicit path to credential file
+	Type     AuthType          `json:"type,omitempty"`
+	Header   string            `json:"header,omitempty"` // Custom HTTP header (defaults to Authorization)
+	Token    *CredentialSource `json:"token,omitempty"`
+	Username string            `json:"username,omitempty"`
+	Password *CredentialSource `json:"password,omitempty"`
 }
 
 // ProviderConfig configures a single upstream backend provider.
