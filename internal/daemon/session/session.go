@@ -881,6 +881,10 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 	}
 	cat := s.catalog()
 	if model := models.ID(strings.TrimSpace(req.Config.Model)); model != "" {
+		if isRequestedInherit(string(model)) {
+			s.Unlock()
+			return fmt.Errorf("%w: model %q is only valid for subagent delegation", ErrInvalidConfig, model)
+		}
 		_, resolved := resolveAgentModel(s.workspace, cat, newConfig.Agent, model)
 		if err := validateCompletionModel(cat, resolved); err != nil {
 			s.Unlock()

@@ -7,7 +7,7 @@ metadata:
   description: Author, configure, and maintain TaskSmith workspace resources including Rules, Skills, Agents, Commands, Decisions, Tools, MCP servers, Model Providers, Plugins, and WORKSPACE.md / AGENTS.md files, plus daemon-side sandbox and permission configuration (sandbox.json isolation posture and permissions.json rules).
 spec:
   useWhen: "Creating, editing, or configuring TaskSmith rules (*.rule.md), skills (SKILL.md), agents (*.agent.md), commands (*.command.md), decisions (*.decision.md), custom tools (*.tool.md), MCP servers, model providers (*.provider.yaml), plugins (PLUGIN.md or PLUGIN.yaml), WORKSPACE.md, or AGENTS.md; or configuring sandboxing, host path access (allowWrite/denyWrite/denyRead/allowRead), network domain filtering (open/allowlist/disabled), excludedCommands, or permission allow/deny rules."
-  keywords: [rule, rules, skill, agent, subagent, command, decision, tool, mcp, provider, plugin, workspace.md, agents.md, sandbox, sandbox.json, permissions, permissions.json, allowwrite, denywrite, denyread, allowread, allowlist, excludedcommands, network, isolation]
+  keywords: [rule, rules, skill, agent, subagent, command, decision, tool, mcp, provider, plugin, workspace.md, agents.md, sandbox, sandbox.json, permissions, permissions.json, allowwrite, denywrite, denyread, allowread, allowlist, excludedcommands, network, isolation, model tiers, "@fast", "@balanced", "@smart", "@flagship", "@inherit", modelaliases]
 ---
 
 # TaskSmith Customizations

@@ -50,6 +50,8 @@ TaskSmith builds its workspace environment from the process environment and `.en
 
 `name` is commonly repeated from `id`; because that adds no display information, it does not change the displayed name — use `label` for that. Workspace `spec.modelAliases` targets and model `aliases` are equivalent `@`-reference names, stored without the `@`.
 
+TaskSmith standardizes four completion-model tiers that the built-in provider presets declare on their models: `fast` (cheapest, responsive), `balanced` (everyday workhorse, usually also the preset's default completion model), `smart` (strong reasoning step above balanced), and `flagship` (most capable). Reference them as `@fast`, `@balanced`, `@smart`, and `@flagship` from agent `spec.models`, session models, or `WORKSPACE.md` `spec.modelAliases` (which can retarget a tier to another model without editing provider files). Agent `spec.models` may also use `@default` (the workspace/provider role-default hierarchy) or the TaskSmith-reserved `@inherit` (the delegating parent session's model during subagent delegation; never a provider target). A provider that declares no tier alias simply leaves that alias unresolvable; add your own `aliases` or `spec.modelAliases` entries to enable it.
+
 `limits.context` is the context token limit, `limits.output` the output token limit, and `limits.dimensions` the default or maximum embedding vector size. Supply values matching the actual provider; a manifest does not make an unsupported model available.
 
 ### Capabilities

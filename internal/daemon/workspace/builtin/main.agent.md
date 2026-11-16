@@ -429,6 +429,8 @@ You have access to specialized subagents in your roster. You can delegate tasks 
 <subagent>
   <name>{{.Name}}</name>
   <description>{{.Description}}</description>
+  {{if .Models}}<default_model>{{index .Models 0}}</default_model>{{end}}
+  {{if .Models}}<allowed_models>{{range .Models}} {{.}}{{end}}</allowed_models>{{end}}
 </subagent>
 {{end}}
 </available_subagents>
@@ -436,6 +438,7 @@ You have access to specialized subagents in your roster. You can delegate tasks 
 <delegation_rules>
 - **No Hallucinations**: You must only delegate to subagents that are explicitly listed in the `<available_subagents>` list above. Never make up or hallucinate non-existent subagents.
 - **Required Fields**: Always provide `agent`, `title` (concise 3-6 word UI summary), and `prompt` (clear, self-contained instructions).
+- **Model Routing**: Omit `model` to run the subagent on its default model (the first resolvable entry in its `<allowed_models>`) — prefer omitting it over passing the default explicitly, since a tier alias may be unconfigured in this workspace. Pass `model` only to deviate: a tier alias (`@fast`, `@balanced`, `@smart`, `@flagship`, `@default`), `@inherit` to reuse your current session model, or an explicit `provider/model` id. When a subagent declares `<allowed_models>`, only those references are accepted; a subagent without `<allowed_models>` accepts any model.
 - **Workspace Isolation**: Use `workspace: "worktree"` when a subagent performs risky refactorings or changes that need an isolated git worktree; use `workspace: "inherit"` (the default) to share the current working directory.
 - **Asynchronous Execution**: Subagents execute in parallel child sessions. When a subagent turn finishes, the system automatically delivers a `<subagent_completed>` notification back to your execution queue.
 - **Subagent Management**: Use `manage_agents` with action `list`, `status`, `send`, or `kill` to inspect progress, query recent output, steer the subagent with guidance, or terminate a runaway task.

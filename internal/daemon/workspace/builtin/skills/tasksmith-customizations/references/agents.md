@@ -12,7 +12,7 @@ All `spec` fields are optional:
 | --- | --- | --- |
 | `extends` | string | Parent Agent short name or qualified reference such as `system/Agent/main`. |
 | `triggers` | string[] | Allowed caller types: `human`, `agent`, or `system`. An empty list means unrestricted in WARP. All agents appear in `/agent` with a trigger badge, but human invocation (`--agent`, `/agent`, and human-initiated session creation or update) is restricted to agents that allow `human`. These are not natural-language trigger phrases. |
-| `models` | string[] | Prioritized model identifiers; an unspecified or empty list leaves model selection to defaults. |
+| `models` | string[] | Prioritized model identifiers or `@` aliases (for example `["@fast", "@inherit"]`); the first resolvable entry is the agent's default model, and when nonempty it also restricts caller-requested model overrides during subagent delegation. An unspecified or empty list leaves model selection to defaults and accepts any model. |
 | `temperature` | float | Sampling temperature, conventionally `0.0`–`2.0`; when omitted it is unset rather than an explicit `0.0`. |
 | `thinking` | object | Extended-reasoning configuration. `type` accepts `toggle`, `effort`, `budget`, or `adaptive`; all four strategies are supported end-to-end. For example `type: effort` with `effort: high`. |
 | `tools` | string[] | Eager tools loaded on the first request (`*`, `!pattern`, or explicit tool names). When omitted, defaults to `[]`. Policy-allowed tools not listed here (and MCP tools by default) load as deferred tools discoverable via `tool_search`. Declaring more than 20 eager tools emits a warning. |
@@ -27,6 +27,20 @@ When a session has no explicit model, TaskSmith passes the agent's model list to
 For skills, commands, subagents, and rules, an omitted list or `["*"]` selects all effective resources in WARP; an explicit `[]` selects none. Resolution also skips references that cannot be found. These are resolved-resource semantics, not a guarantee that every runtime path enforces every selector. In particular, slash-command lookup uses the workspace's command and skill lookup, rather than the resolved agent command list.
 
 WARP filters resolved subagents to those whose `triggers` are empty or include `agent`. This is a resolution filter, not general enforcement of every invocation source by TaskSmith. When an agent's resolved `subagents` list is non-empty, TaskSmith registers the built-in `invoke_agent` and `manage_agents` tools for the session. Built-in agents include `system/Agent/main` (default coding persona), `system/Agent/explore` (fast read-only codebase explorer), `system/Agent/general` (general-purpose subagent with `subagents: []`), and `system/Agent/title-generator`.
+
+## Model tiers and subagent delegation
+
+TaskSmith standardizes four cost/quality tiers that provider model entries declare through their `aliases` (see `providers.md`): `@fast` (cheap, responsive), `@balanced` (everyday workhorse; usually the provider's default completion model), `@smart` (stronger reasoning step above balanced for review, planning, and harder debugging), and `@flagship` (most capable). `@default` resolves through the workspace/provider role-default hierarchy. The built-in provider presets ship all four tiers for their completion models; workspaces can retarget any alias through `spec.modelAliases` in `WORKSPACE.md`.
+
+The reserved alias `@inherit` is not a provider model: when it appears in a subagent's `spec.models` or is requested explicitly, TaskSmith resolves it to the delegating parent session's active model.
+
+Delegation model selection follows these rules when a parent invokes a subagent through `invoke_agent`:
+
+- Omitting `model` runs the subagent on the first resolvable entry of its `spec.models`; with an empty list, the workspace defaults apply.
+- A subagent with a nonempty `spec.models` acts as an allowlist: a requested `model` must match an entry (as written, or after resolving both sides to the same `provider/model` id), or be `@inherit` when `@inherit` is one of the entries. Anything else is rejected.
+- A subagent with an empty `spec.models` accepts any requested model.
+
+The main agent's system prompt surfaces each subagent's `<default_model>` (first `spec.models` entry) and `<allowed_models>` so the orchestrator can route tiers deliberately. For example, `system/Agent/explore` declares `models: ["@fast", "@inherit"]`, so it defaults to the workspace's fast tier but can be pinned to the parent's model with `model: "@inherit"` when the task needs the same reasoning strength as the orchestrator. `system/Agent/title-generator` declares `models: ["@fast", "@default"]` so title generation stays off expensive session models.
 
 ## Inheritance
 

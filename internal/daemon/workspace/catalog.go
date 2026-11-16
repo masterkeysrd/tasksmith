@@ -517,11 +517,125 @@ func (c *Catalog) populate() {
 	// policies.tools, dangling resource references) as non-fatal diagnostic
 	// warnings so workspace.Open stays resilient to typos in WORKSPACE.md or
 	// .agents/ instead of crashing.
-	if err := c.registry.Validate(); err != nil {
+	if err := validateRegistryAllowingInherit(c.registry); err != nil {
 		st.validationWarnings = append(st.validationWarnings, err.Error())
 	}
 
 	c.state.Store(st.clone())
+}
+
+// validateRegistryAllowingInherit runs WARP registry validation against a
+// scratch copy of the registry so the live registry is never mutated — the
+// catalog refreshes concurrently with readers, and swapping sanitized agents
+// into the live registry would expose half-validated specs.
+//
+// Two classes of alias entries are sanitized in the scratch copy only:
+//
+//   - The TaskSmith-reserved "@inherit": no provider declares it (the session
+//     layer resolves it against the delegating parent's model), so WARP would
+//     reject every agent that lists it.
+//   - Tier aliases ("@fast", "@balanced", "@smart", "@flagship") that no registered
+//     provider declares for built-in system agents. Workspaces driven by
+//     custom providers without tier aliases would otherwise report a false
+//     "unknown model alias" warning on every startup, and because Validate
+//     reports only its first error — with system resources checked before
+//     user and workspace ones — that warning would mask genuine cross-reference
+//     problems in user manifests.
+//
+// User-authored agents keep strict alias validation: an unresolvable alias in
+// a user manifest is a real typo and still surfaces as a warning.
+func validateRegistryAllowingInherit(reg *warp.Registry) error {
+	if reg == nil {
+		return nil
+	}
+
+	scratch := warp.NewRegistry(reg.WorkspaceSpec().DeepCopy())
+	for _, res := range reg.Resources() {
+		if ag, ok := res.(*warp.Agent); ok {
+			scratch.Set(ag.QualifiedName(), sanitizeAgentForValidation(reg, ag))
+			continue
+		}
+		scratch.Set(res.QualifiedName(), res)
+	}
+	for _, p := range reg.ListProjects() {
+		scratch.AddProject(p)
+	}
+	return scratch.Validate()
+}
+
+// sanitizeAgentForValidation returns a deep copy of ag with validation-only
+// alias entries removed from spec.models, or ag itself when nothing needs to
+// change.
+func sanitizeAgentForValidation(reg *warp.Registry, ag *warp.Agent) warp.Resource {
+	needsSanitize := false
+	for _, m := range ag.Spec.Models {
+		if isToleratedAlias(reg, ag, m) {
+			needsSanitize = true
+			break
+		}
+	}
+	if !needsSanitize {
+		return ag
+	}
+	hidden := ag.DeepCopy()
+	filtered := make([]string, 0, len(hidden.Spec.Models))
+	for _, m := range hidden.Spec.Models {
+		if isToleratedAlias(reg, ag, m) {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	hidden.Spec.Models = filtered
+	return hidden
+}
+
+// isToleratedAlias reports whether an alias entry should be hidden from the
+// validation pass: the reserved "@inherit" on any agent, or a tier alias the
+// registry cannot resolve on a built-in system agent.
+func isToleratedAlias(reg *warp.Registry, ag *warp.Agent, ref string) bool {
+	if isInheritAlias(ref) {
+		return true
+	}
+	if ag.GetNamespace() != warp.NamespaceSystem {
+		return false
+	}
+	trimmed := strings.TrimSpace(ref)
+	if !workspaceTierAliases[trimmed] {
+		return false
+	}
+	return !tierAliasResolvable(reg, trimmed)
+}
+
+// tierAliasResolvable reports whether any registered provider or workspace
+// model alias backs the given tier alias (e.g. "@fast").
+func tierAliasResolvable(reg *warp.Registry, alias string) bool {
+	name := strings.TrimPrefix(alias, "@")
+	if ws := reg.WorkspaceSpec(); ws != nil && ws.Def != nil {
+		if _, ok := ws.Def.Spec.ModelAliases[name]; ok {
+			return true
+		}
+		if _, ok := ws.Def.Spec.ModelAliases[alias]; ok {
+			return true
+		}
+	}
+	for _, res := range reg.Resources() {
+		mp, ok := res.(*warp.ModelProvider)
+		if !ok {
+			continue
+		}
+		for i := range mp.Spec.Models {
+			if slices.ContainsFunc(mp.Spec.Models[i].Aliases, func(a string) bool {
+				return strings.EqualFold(strings.TrimSpace(a), name)
+			}) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isInheritAlias(ref string) bool {
+	return strings.EqualFold(strings.TrimSpace(ref), ModelAliasInherit)
 }
 
 // clone returns a defensive copy so a published state is never mutated afterwards.

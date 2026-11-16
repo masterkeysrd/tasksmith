@@ -227,7 +227,7 @@ func TestInvokeAgentPrepareAndExecute(t *testing.T) {
 	callRes, err := container.Execute(ctx, &message.ToolCall{
 		ID:   "call-ok",
 		Name: builtin.ToolInvokeAgent,
-		Args: map[string]any{"agent": "EXPLORE", "title": "Find auth", "prompt": "Search tokens", "workspace": "worktree"},
+		Args: map[string]any{"agent": "EXPLORE", "title": "Find auth", "prompt": "Search tokens", "workspace": "worktree", "model": " @fast "},
 	})
 	if err != nil || callRes.IsError {
 		t.Fatalf("Execute failed: %v, content=%s", err, callRes.Content.Text())
@@ -244,6 +244,9 @@ func TestInvokeAgentPrepareAndExecute(t *testing.T) {
 	}
 	if calledWith.Workspace != "worktree" {
 		t.Errorf("calledWith.Workspace = %q, want %q", calledWith.Workspace, "worktree")
+	}
+	if calledWith.Model != "@fast" {
+		t.Errorf("calledWith.Model = %q, want %q", calledWith.Model, "@fast")
 	}
 }
 

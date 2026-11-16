@@ -14,24 +14,28 @@ spec:
     - id: claude-haiku-5-5
       name: claude-haiku-5-5
       label: Claude 5.5 Haiku
+      aliases: [fast, haiku, claude-haiku]
       limits:
         context: 200000
         output: 64000
     - id: claude-sonnet-5-5
       name: claude-sonnet-5-5
       label: Claude 5.5 Sonnet
+      aliases: [balanced, sonnet, claude-sonnet]
       limits:
         context: 1000000
         output: 128000
     - id: claude-opus-5-5
       name: claude-opus-5-5
       label: Claude 5.5 Opus
+      aliases: [smart, opus, claude-opus]
       limits:
         context: 1000000
         output: 128000
     - id: claude-fable-5-2
       name: claude-fable-5-2
       label: Claude 5.2 Fable
+      aliases: [flagship, fable, claude-fable]
       limits:
         context: 1000000
         output: 128000

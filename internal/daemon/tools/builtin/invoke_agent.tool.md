@@ -27,6 +27,9 @@ spec:
       workspace:
         type: string
         description: "Workspace mode for the subagent: 'inherit' (default, shares current working directory) or 'worktree' (creates an isolated git worktree)."
+      model:
+        type: string
+        description: "Optional model override for the subagent: a tier alias ('@fast', '@balanced', '@smart', '@flagship', '@default'), '@inherit' to reuse this session's model, or a provider/model identifier. Must be permitted by the subagent's spec.models allowlist when it declares one."
     required:
       - agent
       - title

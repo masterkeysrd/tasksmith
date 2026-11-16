@@ -721,6 +721,14 @@ func resolveConfig(ws *workspace.Workspace, catalog *models.Catalog, config api.
 		return api.SessionConfig{}, fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, config.Mode)
 	}
 
+	// "@inherit" is only meaningful during subagent delegation, where the
+	// session layer substitutes the parent's active model before the child is
+	// created. A session config that still carries it means the caller tried to
+	// bind a session directly to a parent that does not exist.
+	if isRequestedInherit(config.Model) {
+		return api.SessionConfig{}, fmt.Errorf("%w: model %q is only valid for subagent delegation", ErrInvalidConfig, config.Model)
+	}
+
 	agent, modelID := resolveAgentModel(ws, catalog, config.Agent, models.ID(config.Model))
 	if err := validateCompletionModel(catalog, modelID); err != nil {
 		return api.SessionConfig{}, err

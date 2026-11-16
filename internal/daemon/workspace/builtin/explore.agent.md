@@ -9,6 +9,7 @@ spec:
   triggers:
     - agent
   subagents: []
+  models: ["@fast", "@inherit"]
   rules: ["*"]
   tools:
     - view

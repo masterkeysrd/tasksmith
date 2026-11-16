@@ -151,6 +151,7 @@ type InvokeAgentInput struct {
 	Agent     string `json:"agent" jsonschema:"Name of the subagent to invoke (must be listed in <available_subagents>)."`
 	Title     string `json:"title" jsonschema:"Concise 3-6 word summary of the delegated task for UI display."`
 	Prompt    string `json:"prompt" jsonschema:"Detailed task instructions for the subagent."`
+	Model     string `json:"model,omitempty" jsonschema:"Optional model override for the subagent: a tier alias ('@fast', '@balanced', '@smart', '@flagship', '@default'), '@inherit' to reuse this session's model, or a provider/model identifier. Must be permitted by the subagent's spec.models allowlist when it declares one."`
 	Workspace string `json:"workspace,omitempty" jsonschema:"Workspace mode for the subagent: 'inherit' (default, shares current working directory) or 'worktree' (creates an isolated git worktree)."`
 }
 

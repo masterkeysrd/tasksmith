@@ -706,6 +706,7 @@ Spawns a specialized subagent asynchronously in an isolated child session.
 | `title` | string | **Yes** | Concise 3-6 word summary of the delegated task for UI display. |
 | `prompt` | string | **Yes** | Detailed task instructions for the subagent. |
 | `workspace` | string | No | Workspace mode for the subagent: `'inherit'` (default, shares current working directory) or `'worktree'` (creates an isolated git worktree). |
+| `model` | string | No | Optional model override for the subagent: a tier alias (`@fast`, `@balanced`, `@smart`, `@flagship`, `@default`), `@inherit` to reuse this session's model, or a `provider/model` identifier. Must be permitted by the subagent's `spec.models` allowlist when it declares one. |
 
 #### Output Fields
 
@@ -723,7 +724,8 @@ Spawns a specialized subagent asynchronously in an isolated child session.
   "agent": "explore",
   "title": "Search auth implementation",
   "prompt": "Find all files defining auth middleware and verify token validation.",
-  "workspace": "inherit"
+  "workspace": "inherit",
+  "model": "@fast"
 }
 ```
 

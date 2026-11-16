@@ -182,12 +182,16 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if len(sess.Diagnostics) != 1 || sess.Harness == nil {
 		t.Fatalf("refresh state: %+v, harness=%v", sess.Diagnostics, sess.Harness)
 	}
+	// The built-in title generator declares spec.models ["@fast", "@default"],
+	// so it runs on the workspace tier resolution (here @fast is undeclared and
+	// @default resolves to local/supported) instead of the delegating session's
+	// model, which keeps title generation off expensive session models.
 	for _, tc := range []struct {
 		model           string
 		wantTemperature bool
 	}{
 		{"local/supported", true},
-		{"local/unsupported", false},
+		{"local/unsupported", true},
 	} {
 		titleSession, _, err := mgr.Create(ctx, api.CreateSessionRequest{Config: api.SessionConfig{Agent: "cold", Model: tc.model}})
 		if err != nil {

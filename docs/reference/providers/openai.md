@@ -8,7 +8,7 @@ The **OpenAI** provider connects TaskSmith to OpenAI's frontier reasoning and co
 
 TaskSmith's OpenAI provider integrates with both the traditional **Chat Completions API** (`/v1/chat/completions`) and the stateful **Responses API** (`/v1/responses`). It covers all three cognitive workload roles:
 
-- **Completion (`completion` — System 2)**: Multi-turn conversational reasoning, code generation, and function/tool execution using models such as `gpt-6.1-sol`, `gpt-6.1-terra`, and `gpt-6-luna`.
+- **Completion (`completion` — System 2)**: Multi-turn conversational reasoning, code generation, and function/tool execution using models such as `gpt-6-astra`, `gpt-6-luna`, `gpt-6.1-sol`, and `gpt-6.1-terra`.
 - **Decision (`decision` — System 1)**: Calibrated probabilistic classification and routing, either via native decision models or via the gateway's automatic structured-output completion fallback adapter.
 - **Embedding (`embedding` — System 3)**: High-throughput dense vector embedding generation using `text-embedding-3-small` and `text-embedding-3-large`.
 
@@ -60,6 +60,7 @@ spec:
     - id: gpt-6.1-sol
       name: gpt-6.1-sol
       label: GPT-6.1 Sol
+      aliases: [balanced]
       limits:
         context: 1050000
         output: 128000
@@ -75,6 +76,7 @@ spec:
     - id: gpt-6.1-terra
       name: gpt-6.1-terra
       label: GPT-6.1 Terra
+      aliases: [fast]
       limits:
         context: 1050000
         output: 128000
@@ -84,6 +86,7 @@ spec:
     - id: gpt-6-astra
       name: gpt-6-astra
       label: GPT-6 Astra
+      aliases: [flagship]
       limits:
         context: 1050000
         output: 128000
@@ -93,6 +96,7 @@ spec:
     - id: gpt-6-luna
       name: gpt-6-luna
       label: GPT-6 Luna
+      aliases: [smart]
       limits:
         context: 1050000
         output: 128000

@@ -46,6 +46,7 @@ spec:
     - id: gemini-4-hydrogen
       name: gemini-4-hydrogen
       label: Gemini 4 Hydrogen
+      aliases: [balanced, fast]
       limits:
         context: 1048576
         output: 65536
@@ -64,6 +65,7 @@ spec:
     - id: gemini-4-carbon
       name: gemini-4-carbon
       label: Gemini 4 Carbon
+      aliases: [flagship]
       limits:
         context: 1048576
         output: 65536
@@ -82,6 +84,7 @@ spec:
     - id: gemini-4-argon
       name: gemini-4-argon
       label: Gemini 4 Argon
+      aliases: [smart]
       limits:
         context: 1048576
         output: 65536

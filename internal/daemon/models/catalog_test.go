@@ -2,6 +2,7 @@ package models
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/loom/profile"
@@ -592,5 +593,56 @@ func TestCatalogWorkspaceAliases(t *testing.T) {
 	}
 	if want := []string{"fast", "named", "quick"}; !slices.Equal(m.Aliases, want) {
 		t.Errorf("merged aliases = %v, want %v", m.Aliases, want)
+	}
+}
+
+// unresolvedAliasStub mimics warp's behavior for a provider-scoped alias that
+// matches no declared alias: the reference is qualified against the default
+// provider (Provider stays nil, ModelID keeps its "@alias" segment, and
+// QualifiedID gains a duplicated provider prefix).
+type unresolvedAliasStub struct {
+	providers []*warp.ModelProvider
+}
+
+func (s *unresolvedAliasStub) Providers() []*warp.ModelProvider { return s.providers }
+
+func (s *unresolvedAliasStub) WorkspaceSpec() *warp.Workspace { return nil }
+
+func (s *unresolvedAliasStub) ResolveModels(_ warp.ModelRole, explicit ...string) []warp.ResolvedModel {
+	if len(explicit) == 0 || explicit[0] == "" {
+		return nil
+	}
+	ref := explicit[0]
+	if strings.HasPrefix(ref, "fake/@") {
+		return []warp.ResolvedModel{{Provider: nil, ModelID: ref, QualifiedID: "fake/" + ref}}
+	}
+	return nil
+}
+
+// TestCatalogRejectsUnresolvedProviderScopedAlias verifies a provider-qualified
+// alias reference that WARP could not match ("fake/@missing") is treated as
+// unresolved instead of synthesizing the bogus model "fake/fake/@missing".
+func TestCatalogRejectsUnresolvedProviderScopedAlias(t *testing.T) {
+	prov := &warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "fake"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type:   "fake",
+			Models: []warp.ProviderModel{{ID: "fake-model"}},
+		},
+	}
+	c, err := Build(&unresolvedAliasStub{providers: []*warp.ModelProvider{prov}}, &fakeBase{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := c.Get(ID("fake/@missing")); ok {
+		t.Errorf("Get(fake/@missing) should not resolve")
+	}
+	if _, ok := c.Resolve(RoleCompletion, "fake/@missing"); ok {
+		t.Errorf("Resolve(fake/@missing) should not resolve")
 	}
 }

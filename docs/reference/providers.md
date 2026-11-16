@@ -176,6 +176,26 @@ References to a model declared in a provider manifest match case-insensitively, 
 
 A model's `name` is its WARP resource name used for referencing, and `label` is the human-readable display value. Provider manifests commonly repeat the `id` as `name`; because that carries no display information, it does not override the display name from the built-in provider profile. Set `label` (or a `name` distinct from `id`) to change what the CLI and `/model` picker show.
 
+### Tier Aliases
+
+TaskSmith standardizes four completion-model tiers that the built-in provider presets declare on their models through `aliases`:
+
+| Tier | Reference | Meaning |
+| :--- | :--- | :--- |
+| Fast | `@fast` | Cheapest, most responsive model of the provider. |
+| Balanced | `@balanced` | Everyday workhorse; usually also the preset's default completion model. |
+| Smart | `@smart` | Strong reasoning model above balanced for review, planning, and deeper debugging. |
+| Flagship | `@flagship` | Most capable model of the provider. |
+
+Tier aliases resolve like any other model alias, so they work in session models, agent `spec.models`, command `spec.models`, and `WORKSPACE.md` `spec.modelAliases` (which can retarget a tier to another model without editing provider files). A provider that declares no tier alias simply leaves that alias unresolvable; add your own `aliases` or `spec.modelAliases` entries to enable it.
+
+Two additional references are valid in agent `spec.models`:
+
+- **`@default`** — resolves through the workspace/provider role-default hierarchy.
+- **`@inherit`** — reserved by TaskSmith for subagent delegation: it resolves to the delegating parent session's model and is never a provider target on its own. Listing `@inherit` in an agent's `spec.models` also permits `invoke_agent`'s `model: "@inherit"`.
+
+When an agent declares `spec.models`, the list doubles as the allowlist enforced on the `model` parameter of [invoke_agent](tools.md#invoke_agent); agents without `spec.models` accept any resolvable model.
+
 ---
 
 ## Related Documentation

@@ -97,6 +97,7 @@ func (t *invokeAgentTool) Execute(ctx context.Context, in api.InvokeAgentInput) 
 	in.Title = title
 	in.Prompt = prompt
 	in.Workspace = wsMode
+	in.Model = strings.TrimSpace(in.Model)
 
 	return t.agents.InvokeSubagent(ctx, in)
 }

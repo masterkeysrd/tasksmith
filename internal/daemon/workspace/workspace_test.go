@@ -2372,3 +2372,150 @@ spec:
 		t.Errorf("restricted SubprocessEnv dropped host GH_TOKEN: %q", restrictedSub["GH_TOKEN"])
 	}
 }
+
+// TestPresetTierAliases verifies the completion providers ship the standard
+// @fast/@balanced/@smart/@flagship tier aliases so subagent spec.models
+// allowlists resolve against stock presets.
+func TestPresetTierAliases(t *testing.T) {
+	setupTestXDG(t)
+
+	tierProviders := map[string]bool{"anthropic": true, "antigravity": true, "google-genai": true, "ollama": true, "openai": true}
+	tiers := []string{"fast", "balanced", "smart", "flagship"}
+
+	for _, p := range Presets() {
+		if !tierProviders[p.Metadata.Name] {
+			continue
+		}
+		seen := map[string]int{}
+		for _, m := range p.Spec.Models {
+			for _, a := range m.Aliases {
+				seen[a]++
+			}
+		}
+		for _, tier := range tiers {
+			if seen[tier] != 1 {
+				t.Errorf("provider %s: tier alias %q declared on %d models, want exactly 1", p.Metadata.Name, tier, seen[tier])
+			}
+		}
+	}
+}
+
+// TestInheritAliasPassesValidation verifies the TaskSmith-reserved "@inherit"
+// model alias never surfaces as a registry validation warning and does not
+// mask genuine cross-reference problems reported after it.
+func TestInheritAliasPassesValidation(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: inherit\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-model\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentsDir := filepath.Join(dir, ".agents", "agents")
+	provDir := filepath.Join(dir, ".agents", "providers")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prov := "apiVersion: warp/v1alpha1\nkind: ModelProvider\nmetadata:\n  name: fake\nspec:\n  type: openai\n  models:\n    - id: fake-model\n      aliases: [fast]\n---\n"
+	if err := os.WriteFile(filepath.Join(provDir, "fake.provider.yaml"), []byte(prov), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ag := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: inheritfirst\nspec:\n  triggers: [agent]\n  models: [\"@fast\", \"@inherit\"]\n---\nbody\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "inheritfirst.agent.md"), []byte(ag), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, w := range ws.Catalog().Warnings() {
+		if strings.Contains(w, ModelAliasInherit) {
+			t.Errorf("unexpected @inherit validation warning: %q", w)
+		}
+	}
+	resolved, err := ws.Catalog().ResolveAgent("inheritfirst")
+	if err != nil {
+		t.Fatalf("ResolveAgent: %v", err)
+	}
+	if !slices.Contains(resolved.Agent.Spec.Models, ModelAliasInherit) {
+		t.Errorf("@inherit stripped from resolved spec.models: %v", resolved.Agent.Spec.Models)
+	}
+}
+
+// TestUnresolvableTierAliasesToleratedForBuiltinAgents verifies a workspace
+// whose only provider declares no tier aliases reports zero validation
+// warnings despite the built-in system agents listing @fast/@inherit/@default,
+// while a genuine unresolvable alias in a workspace agent still surfaces.
+func TestUnresolvableTierAliasesToleratedForBuiltinAgents(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: notiers\nspec:\n  defaultProvider: custom\n  defaultModels:\n    completion: custom-model\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agentsDir := filepath.Join(dir, ".agents", "agents")
+	provDir := filepath.Join(dir, ".agents", "providers")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prov := "apiVersion: warp/v1alpha1\nkind: ModelProvider\nmetadata:\n  name: custom\nspec:\n  type: openai\n  models:\n    - id: custom-model\n      capabilities:\n        completion: true\n---\n"
+	if err := os.WriteFile(filepath.Join(provDir, "custom.provider.yaml"), []byte(prov), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := Open(ctx, dir, WithBuiltinFS(builtinToolManifests(builtinToolNames)))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, w := range ws.Catalog().Warnings() {
+		if strings.Contains(w, "@fast") || strings.Contains(w, "@inherit") || strings.Contains(w, "@default") {
+			t.Errorf("unexpected tier/inherit alias warning with alias-less provider: %q", w)
+		}
+	}
+	if got := len(ws.Catalog().Warnings()); got != 0 {
+		t.Errorf("expected zero warnings, got %d: %v", got, ws.Catalog().Warnings())
+	}
+
+	// A genuine unresolvable alias in a workspace agent must still surface
+	// even though system agents with tier aliases were sanitized.
+	broken := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: broken\nspec:\n  triggers: [agent]\n  models: [\"@nope\"]\n---\nbody\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "broken.agent.md"), []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws2, err := Open(ctx, dir, WithBuiltinFS(builtinToolManifests(builtinToolNames)))
+	if err != nil {
+		t.Fatalf("Open (broken): %v", err)
+	}
+	found := false
+	for _, w := range ws2.Catalog().Warnings() {
+		if strings.Contains(w, "@nope") {
+			found = true
+		}
+		if strings.Contains(w, "@fast") || strings.Contains(w, "@inherit") {
+			t.Errorf("sanitized alias leaked into warnings: %q", w)
+		}
+	}
+	if !found {
+		t.Errorf("expected @nope warning to surface past sanitized system agents, got %v", ws2.Catalog().Warnings())
+	}
+
+	// The live registry must keep the built-in agents' full spec.models:
+	// sanitization runs on a scratch copy only.
+	resolved, err := ws.Catalog().ResolveAgent("explore")
+	if err != nil {
+		t.Fatalf("ResolveAgent(explore): %v", err)
+	}
+	if !slices.Contains(resolved.Agent.Spec.Models, ModelAliasInherit) {
+		t.Errorf("@inherit stripped from live registry spec.models: %v", resolved.Agent.Spec.Models)
+	}
+}

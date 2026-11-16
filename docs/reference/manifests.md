@@ -206,7 +206,7 @@ Never attempt to modify code directly; report your findings with precise line re
 | :--- | :--- | :--- |
 | `extends` | string | Qualified or short name of a base agent to inherit prompts and capabilities from. |
 | `triggers` | array of strings | Allowed caller types (`human`, `agent`, `system`). Empty allows all callers. Agents without `human` cannot be selected by human users via `--agent` or `/agent`. |
-| `models` | array of strings | Ordered model preferences (`provider/model` or workspace model alias). |
+| `models` | array of strings | Ordered model preferences (`provider/model`, model alias such as `@fast`, or `@default`). When an agent runs as a subagent, this list also acts as the allowlist enforced on `invoke_agent`'s `model` parameter; the reserved `@inherit` (the delegating session's model) may also be listed. See [tier aliases](./providers.md#tier-aliases). |
 | `temperature` | float | Sampling temperature override (`0.0` to `2.0`). Sent when supported; omitted with a session warning when unsupported. |
 | `thinking.type` | string | Reasoning strategy: `toggle`, `effort`, `budget`, or `adaptive`. |
 | `thinking.effort` | string | Effort level for the `effort` strategy (e.g. `low`, `medium`, `high`). |

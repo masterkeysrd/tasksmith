@@ -7,7 +7,7 @@ The **Anthropic** provider connects TaskSmith to Anthropic's Claude family of mo
 ## 1. Overview & Capabilities
 
 Anthropic models serve as primary System 2 reasoning and conversational agents in TaskSmith:
-- **Completion (`completion` — System 2)**: Multi-turn reasoning, coding, and tool execution using models such as `claude-sonnet-5-5`, `claude-opus-5-5`, and `claude-haiku-5-5`.
+- **Completion (`completion` — System 2)**: Multi-turn reasoning, coding, and tool execution using models such as `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, and `claude-haiku-5-5`.
 - **Decision (`decision` — System 1)**: Evaluates classification and routing via TaskSmith's completion fallback adapter, wrapping Claude with structured output schemas.
 - **Extended Thinking & Prompt Caching**: Natively supports thinking effort levels (`thinking.type: effort`) and automatic prompt prefix caching for reduced latency and token cost.
 
@@ -44,6 +44,7 @@ spec:
     - id: claude-sonnet-5-5
       name: claude-sonnet-5-5
       label: Claude 5.5 Sonnet
+      aliases: [balanced]
       limits:
         context: 1000000
         output: 128000
@@ -61,9 +62,20 @@ spec:
         output: 0.000015
         cacheRead: 0.0000003
         cacheWrite: 0.00000375
+    - id: claude-fable-5-2
+      name: claude-fable-5-2
+      label: Claude 5.2 Fable
+      aliases: [flagship]
+      limits:
+        context: 1000000
+        output: 128000
+      capabilities:
+        completion: true
+        tools: true
     - id: claude-opus-5-5
       name: claude-opus-5-5
       label: Claude 5.5 Opus
+      aliases: [smart]
       limits:
         context: 1000000
         output: 128000
@@ -78,6 +90,7 @@ spec:
     - id: claude-haiku-5-5
       name: claude-haiku-5-5
       label: Claude 5.5 Haiku
+      aliases: [fast]
       limits:
         context: 200000
         output: 64000

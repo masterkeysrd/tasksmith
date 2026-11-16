@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,11 +16,15 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 func TestSessionParentChildPersistenceAndScan(t *testing.T) {
@@ -814,5 +819,423 @@ func TestInvokeSubagentDoesNotLeakAgentPoliciesToParent(t *testing.T) {
 	}
 	if dec, _, err := parent.PermManager.Evaluate(invokePlan); err != nil || dec != tools.AccessAllow {
 		t.Fatalf("expected parent to still allow invoke_agent after spawning explore, got %v (err=%v)", dec, err)
+	}
+}
+
+// setupTierTestEnv builds a workspace whose fake provider declares the
+// standard tier aliases (@fast, @balanced) plus a project subagent with a
+// narrow spec.models allowlist, alongside the built-in explore (@fast,
+// @inherit) and general (unrestricted) subagents.
+func setupTierTestEnv(t *testing.T) (*workspace.Workspace, *models.Catalog) {
+	t.Helper()
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-tier-test")
+	t.Cleanup(func() { xdg.ClearCache() })
+
+	wsDir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: tiers\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake/fake-balanced-model\n---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prov := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: fake
+spec:
+  type: fake
+  defaultModels:
+    completion: fake-balanced-model
+  models:
+    - id: fake-fast-model
+      aliases: [fast]
+      capabilities:
+        completion: true
+    - id: fake-balanced-model
+      aliases: [balanced]
+      capabilities:
+        completion: true
+`
+	if err := os.WriteFile(filepath.Join(provDir, "fake.provider.yaml"), []byte(prov), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(context.Background(), wsDir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	cat, err := models.Build(ws.Catalog(), nil)
+	if err != nil {
+		t.Fatalf("models.Build: %v", err)
+	}
+	return ws, cat
+}
+
+func TestResolveSubagentModelTiers(t *testing.T) {
+	ws, cat := setupTierTestEnv(t)
+
+	parent := &Session{workspace: ws, catalog: func() *models.Catalog { return cat }}
+	parent.Config.Model = "fake/fake-balanced-model"
+
+	tests := []struct {
+		name      string
+		agent     string
+		requested string
+		want      string
+		wantErr   bool
+	}{
+		{name: "explore defaults to @fast", agent: "explore", want: "fake/fake-fast-model"},
+		{name: "explicit @inherit uses parent model", agent: "explore", requested: "@inherit", want: "fake/fake-balanced-model"},
+		{name: "@inherit is case-insensitive", agent: "explore", requested: "@INHERIT", want: "fake/fake-balanced-model"},
+		{name: "alias in allowlist canonicalizes", agent: "explore", requested: "@fast", want: "fake/fake-fast-model"},
+		{name: "provider-scoped alias canonicalizes", agent: "explore", requested: "fake/@fast", want: "fake/fake-fast-model"},
+		{name: "canonical id matches allowlist entry", agent: "explore", requested: "fake/fake-fast-model", want: "fake/fake-fast-model"},
+		{name: "tier outside allowlist is rejected", agent: "explore", requested: "@balanced", wantErr: true},
+		{name: "general has no allowlist", agent: "general", requested: "@balanced", want: "fake/fake-balanced-model"},
+		{name: "general defaults to agent model", agent: "general", want: ""},
+		{name: "unknown agent defers", agent: "nope", requested: "@whatever", want: "@whatever"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parent.resolveSubagentModel(tc.agent, tc.requested)
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidConfig) {
+					t.Fatalf("resolveSubagentModel(%q, %q) err = %v, want ErrInvalidConfig", tc.agent, tc.requested, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveSubagentModel(%q, %q) unexpected err: %v", tc.agent, tc.requested, err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveSubagentModel(%q, %q) = %q, want %q", tc.agent, tc.requested, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveSubagentModelInheritRejectedWhenNotAllowed(t *testing.T) {
+	ws, cat := setupTierTestEnv(t)
+
+	agDir := filepath.Join(ws.RootDir(), ".agents", "agents")
+	if err := os.MkdirAll(agDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fastOnly := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: fastonly\nspec:\n  triggers: [agent]\n  models: [\"@fast\"]\n---\nfast only\n"
+	if err := os.WriteFile(filepath.Join(agDir, "fastonly.agent.md"), []byte(fastOnly), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inheritFirst := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: inheritfirst\nspec:\n  triggers: [agent]\n  models: [\"@inherit\", \"@fast\"]\n---\ninherit first\n"
+	if err := os.WriteFile(filepath.Join(agDir, "inheritfirst.agent.md"), []byte(inheritFirst), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	parent := &Session{workspace: ws, catalog: func() *models.Catalog { return cat }}
+	parent.Config.Model = "fake/fake-balanced-model"
+
+	if _, err := parent.resolveSubagentModel("fastonly", "@inherit"); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("@inherit on allowlist without @inherit entry: err = %v, want ErrInvalidConfig", err)
+	}
+	if _, err := parent.resolveSubagentModel("fastonly", "@fast"); err != nil {
+		t.Fatalf("@fast on fastonly: unexpected err: %v", err)
+	}
+	// The parent's own model must never widen the allowlist: running the
+	// parent on an allowed model does not make disallowed requests legal.
+	parent.Config.Model = "fake/fake-fast-model"
+	if _, err := parent.resolveSubagentModel("fastonly", "@balanced"); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("@balanced on fastonly with parent on allowed model: err = %v, want ErrInvalidConfig", err)
+	}
+	if _, err := parent.resolveSubagentModel("explore", "@balanced"); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("@balanced on explore with parent on allowed model: err = %v, want ErrInvalidConfig", err)
+	}
+	if _, err := parent.resolveSubagentModel("explore", "fake/fake-balanced-model"); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("disallowed provider/model on explore with parent on allowed model: err = %v, want ErrInvalidConfig", err)
+	}
+	parent.Config.Model = "fake/fake-balanced-model"
+	// @inherit as the leading spec.models entry makes the parent's model the
+	// default even without an explicit request.
+	got, err := parent.resolveSubagentModel("inheritfirst", "")
+	if err != nil {
+		t.Fatalf("inheritfirst default: unexpected err: %v", err)
+	}
+	if got != "fake/fake-balanced-model" {
+		t.Fatalf("inheritfirst default model = %q, want fake/fake-balanced-model", got)
+	}
+}
+
+func TestInvokeSubagentAppliesResolvedModel(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"done"}, uuid.NewString(), nil
+		},
+	}
+
+	db, _, gw, pub, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	ws, cat := setupTierTestEnv(t)
+
+	parent, err := New(ctx, Config{
+		ID:          uuid.NewString(),
+		Title:       "Tier Parent",
+		Session:     api.SessionConfig{Agent: "main", Model: "fake/fake-balanced-model"},
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Catalog:     func() *models.Catalog { return cat },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New parent: %v", err)
+	}
+	defer func() { _ = parent.Close() }()
+
+	// Default delegation routes explore onto its @fast tier model.
+	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+		Agent:  "explore",
+		Title:  "Fast exploration",
+		Prompt: "Find all interfaces",
+	})
+	if err != nil {
+		t.Fatalf("InvokeSubagent: %v", err)
+	}
+	child, ok := parent.Child(out.SessionID)
+	if !ok {
+		t.Fatalf("child %q not registered", out.SessionID)
+	}
+	if child.Config.Model != "fake/fake-fast-model" {
+		t.Errorf("child model = %q, want fake/fake-fast-model", child.Config.Model)
+	}
+	_ = child.Wait(ctx)
+
+	// @inherit runs the child on the parent's model.
+	out, err = parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+		Agent:  "explore",
+		Title:  "Inherited exploration",
+		Prompt: "Find all interfaces",
+		Model:  "@inherit",
+	})
+	if err != nil {
+		t.Fatalf("InvokeSubagent(@inherit): %v", err)
+	}
+	child2, ok := parent.Child(out.SessionID)
+	if !ok {
+		t.Fatalf("child %q not registered", out.SessionID)
+	}
+	if child2.Config.Model != "fake/fake-balanced-model" {
+		t.Errorf("inherited child model = %q, want fake/fake-balanced-model", child2.Config.Model)
+	}
+	_ = child2.Wait(ctx)
+
+	// A tier outside explore's allowlist is rejected without spawning a child.
+	before := len(parent.Children())
+	if _, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+		Agent:  "explore",
+		Title:  "Rejected tier",
+		Prompt: "Find all interfaces",
+		Model:  "@balanced",
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("InvokeSubagent(@balanced) err = %v, want ErrInvalidConfig", err)
+	}
+	if after := len(parent.Children()); after != before {
+		t.Fatalf("rejected invoke spawned a child: %d -> %d children", before, after)
+	}
+}
+
+func TestMainAgentPromptSurfacesSubagentModelTiers(t *testing.T) {
+	ws, _ := setupTierTestEnv(t)
+
+	cat := ws.Catalog()
+	resolved, err := cat.ResolveAgent("main")
+	if err != nil {
+		t.Fatalf("ResolveAgent(main): %v", err)
+	}
+	prompt, err := resolved.Agent.Render(&warp.AgentRenderOptions{
+		Workspace: cat.WorkspaceSpec(),
+		Project:   cat.Project(),
+		Resolved:  resolved,
+		Globals:   cat.AgentRenderGlobals(resolved),
+	})
+	if err != nil {
+		t.Fatalf("Render(main): %v", err)
+	}
+	if !strings.Contains(prompt, "<default_model>@fast</default_model>") {
+		t.Errorf("main prompt missing explore default_model:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "<allowed_models> @fast @inherit</allowed_models>") {
+		t.Errorf("main prompt missing explore allowed_models:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Model Routing") {
+		t.Errorf("main prompt missing model routing guidance")
+	}
+}
+
+// setupMultiTierTestEnv builds a workspace with two providers that both
+// declare the standard tier aliases, so a bare "@fast" resolves once per
+// provider and provider-scoped references must match allowlist entries across
+// both providers.
+func setupMultiTierTestEnv(t *testing.T) (*workspace.Workspace, *models.Catalog) {
+	t.Helper()
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-multitier-test")
+	t.Cleanup(func() { xdg.ClearCache() })
+
+	wsDir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: multitiers\nspec:\n  defaultProvider: alpha\n  defaultModels:\n    completion: alpha/alpha-balanced-model\n---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prov := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: %s
+spec:
+  type: fake
+  defaultModels:
+    completion: %s-balanced-model
+  models:
+    - id: %s-fast-model
+      aliases: [fast]
+      capabilities:
+        completion: true
+    - id: %s-balanced-model
+      aliases: [balanced]
+      capabilities:
+        completion: true
+`
+	for _, name := range []string{"alpha", "beta"} {
+		body := fmt.Sprintf(prov, name, name, name, name)
+		if err := os.WriteFile(filepath.Join(provDir, name+".provider.yaml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ws, err := workspace.Open(context.Background(), wsDir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	cat, err := models.Build(ws.Catalog(), nil)
+	if err != nil {
+		t.Fatalf("models.Build: %v", err)
+	}
+	return ws, cat
+}
+
+// TestResolveSubagentModelMultiProvider verifies allowlist matching against
+// every provider's tier candidates (not just the first resolution), provider
+// preference for the parent's provider on defaults, and synchronous rejection
+// of references that cannot resolve while the agent restricts spec.models.
+func TestResolveSubagentModelMultiProvider(t *testing.T) {
+	ws, cat := setupMultiTierTestEnv(t)
+
+	parent := &Session{workspace: ws, catalog: func() *models.Catalog { return cat }}
+	parent.Config.Model = "beta/beta-balanced-model"
+
+	tests := []struct {
+		name      string
+		agent     string
+		requested string
+		want      string
+		wantErr   bool
+	}{
+		{name: "default prefers parent provider", agent: "explore", want: "beta/beta-fast-model"},
+		{name: "provider-scoped second provider allowed", agent: "explore", requested: "beta/@fast", want: "beta/beta-fast-model"},
+		{name: "second provider canonical id allowed", agent: "explore", requested: "beta/beta-fast-model", want: "beta/beta-fast-model"},
+		{name: "first provider canonical id allowed", agent: "explore", requested: "alpha/alpha-fast-model", want: "alpha/alpha-fast-model"},
+		{name: "parent id allowed when inherit listed", agent: "explore", requested: "beta/beta-balanced-model", want: "beta/beta-balanced-model"},
+		{name: "tier outside allowlist rejected", agent: "explore", requested: "beta/@balanced", wantErr: true},
+		{name: "unknown model rejected when restricted", agent: "explore", requested: "gamma/gamma-model", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parent.resolveSubagentModel(tc.agent, tc.requested)
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidConfig) {
+					t.Fatalf("resolveSubagentModel(%q, %q) err = %v, want ErrInvalidConfig", tc.agent, tc.requested, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveSubagentModel(%q, %q) unexpected err: %v", tc.agent, tc.requested, err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveSubagentModel(%q, %q) = %q, want %q", tc.agent, tc.requested, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveSubagentModelUnresolvableAliasRejected verifies that requesting a
+// tier alias the workspace cannot resolve fails synchronously with
+// ErrInvalidConfig instead of spawning a child bound to a literal "@fast".
+func TestResolveSubagentModelUnresolvableAliasRejected(t *testing.T) {
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-notier-test")
+	t.Cleanup(func() { xdg.ClearCache() })
+
+	wsDir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: notiers\nspec:\n  defaultProvider: plain\n  defaultModels:\n    completion: plain/plain-model\n---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prov := "apiVersion: warp/v1alpha1\nkind: ModelProvider\nmetadata:\n  name: plain\nspec:\n  type: fake\n  models:\n    - id: plain-model\n      capabilities:\n        completion: true\n---\n"
+	if err := os.WriteFile(filepath.Join(provDir, "plain.provider.yaml"), []byte(prov), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(context.Background(), wsDir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	cat, err := models.Build(ws.Catalog(), nil)
+	if err != nil {
+		t.Fatalf("models.Build: %v", err)
+	}
+
+	parent := &Session{workspace: ws, catalog: func() *models.Catalog { return cat }}
+	parent.Config.Model = "plain/plain-model"
+
+	if _, err := parent.resolveSubagentModel("explore", "@fast"); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("explicit @fast with no fast alias: err = %v, want ErrInvalidConfig", err)
+	}
+	// With nothing resolvable in the allowlist, the default falls back to the
+	// empty string so the child uses workspace defaults, never a literal alias.
+	got, err := parent.resolveSubagentModel("explore", "")
+	if err != nil {
+		t.Fatalf("explore default: unexpected err: %v", err)
+	}
+	if strings.HasPrefix(got, "@") {
+		t.Fatalf("explore default model = %q, want resolvable reference or empty", got)
+	}
+}
+
+// TestResolveConfigRejectsInherit verifies a top-level session config cannot
+// bind directly to the reserved "@inherit" alias.
+func TestResolveConfigRejectsInherit(t *testing.T) {
+	ws, cat := setupTierTestEnv(t)
+
+	if _, err := resolveConfig(ws, cat, api.SessionConfig{Agent: "main", Model: workspace.ModelAliasInherit}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("resolveConfig(@inherit) err = %v, want ErrInvalidConfig", err)
+	}
+	if _, _, _, _, err := Preview(context.Background(), ws, cat, api.SessionConfig{Agent: "main", Model: "@inherit"}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Preview(@inherit) err = %v, want ErrInvalidConfig", err)
 	}
 }

@@ -44,7 +44,7 @@ TaskSmith completely decouples agents and skills from specific AI vendors by rou
 Built-in driver support and presets include:
 - **OpenAI**: Native support for Chat Completions (`/v1/chat/completions`) and the modern Responses API (`/v1/responses`) with **Zero Data Retention (`store: false`)** by default, client-side encrypted reasoning continuity, native server-side tools (`webSearch`, `codeInterpreter`, `fileSearch`), and compatible endpoints (vLLM, LiteLLM, OpenRouter, Together AI).
 - **Anthropic**: Frontier reasoning (`claude-sonnet-5-5`, `claude-opus-5-5`), extended thinking (`type: effort`), and automated prompt prefix caching.
-- **Ollama**: 100% offline local inference (`qwen3.8`, `nemotron-3.5-lightning`, `ornith-1.5`) with zero API token costs and zero data egress.
+- **Ollama**: 100% offline local inference (`qwen3.8`, `mimo-v2.6`, `nemotron-3.5-lightning`) with zero API token costs and zero data egress.
 - **Google GenAI**: Frontier Gemini models (`gemini-4-hydrogen`) with 1M+ token context windows and native multimodal ingestion.
 - **TypeSafe**: Sub-50ms native System 1 deterministic decisions (`jev-latest`) at fractional cost.
 - **Antigravity**: Enterprise model gateway with managed thinking effort tiers.

@@ -7,6 +7,7 @@ metadata:
 spec:
   triggers:
     - system
+  models: ["@fast", "@default"]
   temperature: 0.1
   policies:
     tools:

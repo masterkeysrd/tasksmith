@@ -42,6 +42,29 @@ const (
 	AgentNameTitleGenerator = "title-generator"
 )
 
+// ModelAliasInherit is the TaskSmith-reserved model alias "@inherit". It never
+// resolves through a provider manifest: the session layer resolves it to the
+// delegating parent session's active model when a subagent is invoked. Because
+// WARP validates spec.models alias entries against declared provider aliases,
+// the catalog hides this alias while running registry validation.
+const ModelAliasInherit = "@inherit"
+
+// TierAliases lists the standardized completion-model tier aliases TaskSmith
+// recommends providers declare (fast, balanced, smart, flagship). Built-in
+// provider presets assign each tier alias to a model; workspaces driven by
+// custom providers may leave a tier unresolvable, which the catalog tolerates
+// for built-in agents.
+var TierAliases = []string{"@fast", "@balanced", "@smart", "@flagship"}
+
+// workspaceTierAliases indexes TierAliases for membership checks.
+var workspaceTierAliases = func() map[string]bool {
+	m := make(map[string]bool, len(TierAliases))
+	for _, a := range TierAliases {
+		m[a] = true
+	}
+	return m
+}()
+
 // Option configures how a Workspace is opened.
 type Option func(*openOptions)
 
