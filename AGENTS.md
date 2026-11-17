@@ -1,64 +1,99 @@
-# Documentation Maintenance Rule
+# TaskSmith Repository Guidelines
 
-All agents and contributors modifying TaskSmith must maintain strict documentation synchronization, portability, and structural integrity.
+## Project Overview
 
----
+TaskSmith is an extensible, daemon-backed AI coding agent for the terminal: OS-level sandboxing,
+multi-provider model routing, and declarative version-controlled workspaces. It is a single Go
+module (`github.com/masterkeysrd/tasksmith`, Go 1.26+) built as one binary (`cmd/tasksmith`) that
+serves two roles:
 
-## 1. When to Update Documentation
+- **Client**: interactive TUI/REPL plus one-shot commands (`internal/cli`, `internal/cmd`).
+- **Daemon**: headless service on a Unix domain socket (`$XDG_RUNTIME_DIR/tasksmith/brain.sock`),
+  running the agent harness, tool execution, provider gateway, and SQLite turn journal
+  (`internal/daemon`). Client and daemon talk over an HTTP API with a multiplexed SSE event bus.
 
-Whenever modifying code that alters user-facing behavior, configuration schemas, or system architecture, the corresponding documentation must be updated in the same change:
+Terminal UI is built on the `trail`/`kitex` stack (`masterkeysrd/kite`), agent graphs on
+`masterkeysrd/loom`, and workspace manifests on the WARP schema (`masterkeysrd/warp`). Windows is
+unsupported: the daemon relies on POSIX process groups and `flock`.
 
-- **CLI Commands, Flags, & Shortcuts**:
-  - Updates to `internal/cmd/`, `internal/cli/`, or REPL keybindings must update `docs/reference/cli.md`.
-  - Every CLI flag, slash command alias, and keyboard shortcut table must reflect real source behavior.
+## Build, Test & Lint Commands
 
-- **Built-in System Tools**:
-  - Updates to `internal/daemon/tools/builtin/`, `api/tools.go`, or tool manifests (`*.tool.md`) must update `docs/reference/tools.md`.
-  - Tool parameters, output types, default permission behaviors, and safety annotations (`isReadOnly`, `isDangerous`, `isOpenWorld`) must match tool definitions exactly.
+Run from the repository root after the last edit. `.github/workflows/ci.yml` enforces gofmt, vet,
+and tests on Linux and macOS, so anything below that fails locally fails CI.
 
-- **Manifest Specifications**:
-  - Updates to `internal/daemon/workspace/types.go` or Warp schemas must update `docs/reference/manifests.md`.
-  - Every resource kind (`Workspace`, `Context`, `Agent`, `Skill`, `Command`, `Decision`, `Tool`, `MCP`) must have up-to-date schema tables and annotated examples.
+| Purpose | Command |
+| :--- | :--- |
+| Build all packages | `go build ./...` |
+| Build the binary | `go build -o tasksmith ./cmd/tasksmith` |
+| Full test suite | `go test -count=1 ./...` |
+| Targeted tests | `go test -count=1 ./internal/daemon/harness/...` |
+| Apply standard fixes | `go fix ./...` |
+| Format check | `gofmt -l .` (must print nothing; fix with `gofmt -w`) |
+| Vet | `go vet ./...` |
+| Lint (new findings only) | `golangci-lint run --new-from-rev=HEAD~ ./...` |
+| Regenerate code | `go generate ./...` |
 
-- **Model Providers & Gateways**:
-  - Updates to `internal/daemon/gateway/` or provider presets must update `docs/reference/providers.md` and the appropriate guide in `docs/reference/providers/`.
+- `-count=1` is required so results are never served from the test cache.
+- There is **no** `.golangci.yml`: the repo carries a large pre-existing lint baseline, so gate on
+  **new** findings. Never widen lint config or add `nolint` comments to silence a finding you caused.
+- `go generate ./...` runs `tools/toolgen` (see the `//go:generate` directive in
+  `internal/daemon/tools/builtin/builtin.go`), which rewrites `generated.go` and the public tool
+  schemas in `api/tools.go`. Regenerate whenever built-in tool definitions change, and commit the
+  output.
+- Documentation site (Rspress 2 + React 19, TypeScript) lives in `site/` and is separate from the Go
+  toolchain: `npm ci`, then `npm run dev`, `npm run build`, `npm run preview`, or
+  `npm run typecheck`, all with the working directory set to `site/`.
 
-- **User Workflows (`docs/guides/`)**:
-  - Updates introducing or changing a user-facing concept or interactive workflow must update the corresponding guide (`cli.md`, `workspaces.md`, `permissions.md`, `customizations.md`, `tools-and-mcp.md`).
+## Architecture Map
 
-- **Subsystem Architecture (`docs/architecture/`)**:
-  - Updates changing the high-level mental model, lifecycle, or security boundaries of subsystems must update the corresponding specification (`daemon.md`, `harness.md`, `gateway.md`, `sandbox.md`, `permissions.md`).
+| Path | Responsibility |
+| :--- | :--- |
+| `cmd/tasksmith/` | Binary entry point; delegates to `internal/cmd`. |
+| `api/` | Public client/daemon protocol and tool/event schemas (partly codegen output). |
+| `client/` | Go client library for the daemon HTTP + SSE API. |
+| `internal/cmd/` | Cobra root command, flags, daemon start/stop lifecycle. |
+| `internal/cli/` | TUI app, REPL, slash commands (`command/`), components, state stores. |
+| `internal/ui/`, `internal/tui/` | Reusable `trail` components, theme, formatting, render test utils. |
+| `internal/daemon/` | Daemon subsystems: `server`, `broker` (SSE), `gateway` (providers), `harness` (agent graph), `session`, `journal` (SQLite), `timeline` (snapshots/revert), `tools` + `mcp`, `permissions`, `sandbox`/`sandboxcfg`, `workspace` (WARP loading, embedded built-ins). |
+| `internal/core/` | Shared, dependency-light utilities: `guard` (path confinement), `shellguard` (shell AST classifier), `xdg` (portable paths), `diff`, `sqlite`, `vcs`, `strutils`. |
+| `tools/toolgen/` | Code generator for built-in tool schemas. |
+| `.agents/` | Repository WARP resources: `rules/`, `skills/`, `commands/`, `providers/`. |
+| `docs/` | Public docs: `guides/` (workflows), `architecture/` (subsystem specs), `reference/` (schemas). |
+| `site/` | GitHub Pages documentation site that renders `docs/`. |
 
-### When NOT to Update Documentation
+`internal/` is off-limits to external importers; `api/` and `client/` are the stable surface other
+Go programs consume.
 
-- **Not every code change requires documentation updates.**
-- Do **not** update `docs/` for internal bug fixes, code refactoring, test additions, performance optimizations, or low-level implementation details that do not alter user-facing behavior, configuration schemas, or high-level subsystem architecture.
-- Only document changes that affect users or the conceptual architecture of TaskSmith.
+## Code Style & Engineering Conventions
 
----
+- Standard Go idioms: `gofmt` formatting, small packages with a `doc.go` stating package purpose,
+  table-driven `_test.go` tests colocated with the code they cover.
+- Errors are wrapped with context and propagated; never swallow an error to keep a path running.
+- Reuse before authoring: `internal/ui/format` for numbers/durations/tokens and
+  `internal/core/strutils` for truncation instead of hand-rolled helpers.
+- Terminal UI work follows `.agents/rules/tasksmith-ui-conventions.rule.md` and the `tasksmith-tui`
+  skill: `trail.FC`-style components, theme colors only via `theme.UseTheme()`, no `kitex.Render`
+  outside tests, and a render test for every new or changed component.
+- Security boundaries are invariants, not suggestions: filesystem access stays confined to the
+  workspace root, and shell commands pass `shellguard` AST inspection before execution. Do not
+  loosen path guards, sandbox capabilities, or permission defaults to make a test pass.
 
-## 2. Zero Machine-Local Paths
+## Documentation & Workspace Resources
 
-- **Forbidden Patterns**:
-  - Never commit machine-local absolute file paths (e.g., `/Users/...`, `/home/...`, or system-specific user directories) in documentation, comments, examples, or tests.
-  - Never use `file://` URI schemes in markdown links or documentation text.
+Documentation and embedded skills must be updated in the same change as the behavior they describe —
+see [.agents/rules/docs-maintenance.rule.md](./.agents/rules/docs-maintenance.rule.md) and
+[.agents/rules/builtin-skill-sync.rule.md](./.agents/rules/builtin-skill-sync.rule.md). Embedded
+built-in skills live in `internal/daemon/workspace/builtin/skills/`; any file added or renamed there
+must also be asserted in `internal/daemon/workspace/builtin_sync_test.go`.
 
-- **Required Conventions**:
-  - Always use **relative markdown links** for cross-document links (e.g., `../guides/workspaces.md`, `./providers.md`, `../architecture/sandbox.md`).
-  - Use **portable paths** when documenting filesystem layout:
-    - User configuration: `~/.config/tasksmith/` or `$XDG_CONFIG_HOME/tasksmith/`
-    - Application state & data: `~/.local/share/tasksmith/` or `$XDG_DATA_HOME/tasksmith/`
-    - Daemon runtime sockets: `/tmp/tsd-<uid>/` or `$XDG_RUNTIME_DIR/tasksmith/`
-    - Logs: `~/.local/state/tasksmith/logs/` or `$XDG_STATE_HOME/tasksmith/logs/`
-    - Workspace resources: `<workspace-root>/`, `.agents/`, `WORKSPACE.md`, `AGENTS.md`
+Conditional guardrails belong in `.agents/rules/*.rule.md` (path-, keyword-, or tool-triggered), and
+multi-step playbooks in `.agents/skills/<name>/SKILL.md` plus `references/*.md`. Keep this file
+short and high-signal: it should state non-obvious repository-wide facts, not duplicate a rule.
 
----
+## Critical Invariants
 
-## 3. Reference Style & Codebase Fidelity
-
-- **Crisp & Tabular**:
-  - Reference documentation must be schema-focused and organized with clear markdown tables.
-  - Avoid duplicate narrative tutorials in reference docs; link to User Guides (`docs/guides/`) or Architecture Deep Dives (`docs/architecture/`) instead.
-
-- **Strict Source Truth**:
-  - Never fabricate flags, arguments, or schema properties. All documentation must be verified against actual Go structs, CLI commands, and manifest definitions.
+- **Zero Machine-Local Paths**: Never commit machine-local absolute home/system paths or file-scheme URIs in documentation, comments, examples, or tests. Always use relative Markdown links and portable paths (`~`, `$XDG_CONFIG_HOME/tasksmith/`, `$XDG_DATA_HOME/tasksmith/`, `$XDG_RUNTIME_DIR/tasksmith/`, `<workspace-root>/`).
+- **Strict Source Truth**: Never invent CLI flags, tool parameters, or manifest fields; verify against actual Go structs, Cobra commands, and `.tool.md` / WARP definitions.
+- **Progressive Disclosure & Sync**: Keep always-on instructions concise and non-obvious. When altering user-facing behavior, CLI flags, built-in tools, WARP schemas, or subsystem architecture, update `docs/` and embedded skills in the same change per [.agents/rules/docs-maintenance.rule.md](./.agents/rules/docs-maintenance.rule.md) and [.agents/rules/builtin-skill-sync.rule.md](./.agents/rules/builtin-skill-sync.rule.md) (do not churn `docs/` for internal refactors, bug fixes, or test-only changes).
+- **No Secrets In Repo**: API keys live in the gitignored `env.sh` or the host environment; never paste credentials into tracked code, manifests, tests, fixtures, or commit messages, and never stage a secrets file.
+- **Verification Gate**: Nothing is "done" until `go fix ./...`, `gofmt -l .`, `go vet ./...`, `golangci-lint run --new-from-rev=HEAD~ ./...`, and `go test -count=1 ./...` all pass, per [.agents/rules/go-verification-gate.rule.md](./.agents/rules/go-verification-gate.rule.md). Never weaken, skip, or delete a test to make the gate green.
