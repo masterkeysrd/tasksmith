@@ -28,6 +28,7 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - [ ] **Multimodal input**: image and PDF ingestion in `view`, `@` media attachments, and clipboard image paste in the composer
 - [ ] **Built-in `web_search` & CLI `auth`**: host-mediated web search tool and `tasksmith auth login|status|logout` subcommands
 - [ ] **WARP-managed `/providers` & deterministic `spec.enabled` policies**: interactive `/providers` browser, inline `F2` alias editor, and manifest-driven `spec.enabled` / `WORKSPACE.md` exclusions for providers, tools, and MCP servers
+- [ ] **Claude Code & GitHub Copilot providers**: subscription-backed `claudecode` and `github-copilot` LLM gateway providers (via `loom`) with OAuth sign-in, built-in presets, `@fast`/`@balanced`/`@smart`/`@flagship` model tiers, and quota tracking
 
 ---
 
