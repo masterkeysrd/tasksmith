@@ -15,7 +15,7 @@ require (
 	github.com/masterkeysrd/warp v0.0.7-0.20261116034747-3a99d999f6cc
 	github.com/mattn/go-isatty v0.0.24
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/ollama/ollama v0.40.15
+	github.com/ollama/ollama v0.40.16
 	github.com/openai/openai-go/v3 v3.96.0
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/goldmark v1.8.6
