@@ -32,7 +32,17 @@
 //
 // All SSE streams yield structured [api.Event] values whose typed payloads satisfy [api.EventPayload].
 //
-// This package depends exclusively on [github.com/masterkeysrd/tasksmith/api]
-// and the Go standard library, maintaining strict separation from internal
-// daemon and engine packages.
+// # Daemon Lifecycle
+//
+// Go consumers drive the whole daemon lifecycle through this package:
+//   - [ConnectOrStart]: connect to a running daemon or spawn a detached one and
+//     wait for it to become healthy, surfacing version-skew as notices.
+//   - [SpawnDetached], [WaitForSocketHealthy], [WaitForSocketLockRelease], and
+//     the path helpers [DefaultSocketPath], [DefaultLockPath], and
+//     [LockPathForSocket] compose the same startup flow the `tasksmith` CLI uses.
+//
+// This package depends on [github.com/masterkeysrd/tasksmith/api], the Go
+// standard library, and dependency-light shared utilities under
+// `internal/core` (system, path, and version helpers), maintaining strict
+// separation from the daemon and engine packages.
 package client

@@ -17,6 +17,7 @@ import (
 
 	"github.com/masterkeysrd/loom/auth"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -50,23 +51,19 @@ var (
 
 // DefaultSocketPath returns the default XDG runtime Unix domain socket path ("brain.sock").
 func DefaultSocketPath() (string, error) {
-	return xdg.SocketPath("brain.sock")
+	return client.DefaultSocketPath()
 }
 
 // DefaultLockPath returns the default XDG runtime lockfile path ("brain.lock").
 func DefaultLockPath() (string, error) {
-	return xdg.SocketPath("brain.lock")
+	return client.DefaultLockPath()
 }
 
 // LockPathForSocket returns the lockfile path paired with a socket path: the
 // same directory and base name with a ".lock" extension. A socket that does not
 // end in ".sock" gets ".lock" appended.
 func LockPathForSocket(socketPath string) string {
-	base := filepath.Clean(strings.TrimSpace(socketPath))
-	if before, ok := strings.CutSuffix(base, ".sock"); ok {
-		return before + ".lock"
-	}
-	return base + ".lock"
+	return client.LockPathForSocket(socketPath)
 }
 
 // Config holds the mandatory configuration parameters for starting a [Daemon].

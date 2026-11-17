@@ -11,7 +11,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/core/sys"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
-	"github.com/masterkeysrd/tasksmith/internal/daemon"
 )
 
 func TestWaitForDaemonLockReleaseSkipsMissingLock(t *testing.T) {
@@ -28,7 +27,7 @@ func TestWaitForDaemonLockReleaseSkipsMissingLock(t *testing.T) {
 func TestWaitForDaemonLockReleaseWaitsForHolder(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "d.sock")
-	lockPath := daemon.LockPathForSocket(sock)
+	lockPath := client.LockPathForSocket(sock)
 
 	held, err := sys.AcquireLock(lockPath)
 	if err != nil {
@@ -47,7 +46,7 @@ func TestWaitForDaemonLockReleaseWaitsForHolder(t *testing.T) {
 func TestWaitForDaemonLockReleaseTimesOut(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "d.sock")
-	lockPath := daemon.LockPathForSocket(sock)
+	lockPath := client.LockPathForSocket(sock)
 
 	held, err := sys.AcquireLock(lockPath)
 	if err != nil {
@@ -76,7 +75,7 @@ func TestWaitForDaemonReadyReportsEarlyChildExit(t *testing.T) {
 
 	exited := make(chan struct{})
 	close(exited)
-	spawned := &daemon.SpawnedDaemon{PID: 4242, Done: exited}
+	spawned := &client.SpawnedDaemon{PID: 4242, Done: exited}
 
 	start := time.Now()
 	err = waitForDaemonReady(context.Background(), c, sock, spawned)
@@ -100,10 +99,10 @@ func TestWaitForDaemonReadyIsBounded(t *testing.T) {
 		t.Fatalf("client.New: %v", err)
 	}
 
-	prev := daemon.SpawnWaitTimeout
-	daemon.SpawnWaitTimeout = 400 * time.Millisecond
+	prev := client.SpawnWaitTimeout
+	client.SpawnWaitTimeout = 400 * time.Millisecond
 	t.Cleanup(func() {
-		daemon.SpawnWaitTimeout = prev
+		client.SpawnWaitTimeout = prev
 	})
 
 	start := time.Now()
@@ -140,10 +139,10 @@ func TestConnectOrStartFailsWhenSpawnedDaemonDies(t *testing.T) {
 		xdg.ClearCache()
 	})
 
-	prev := daemon.SpawnWaitTimeout
-	daemon.SpawnWaitTimeout = 5 * time.Second
+	prev := client.SpawnWaitTimeout
+	client.SpawnWaitTimeout = 5 * time.Second
 	t.Cleanup(func() {
-		daemon.SpawnWaitTimeout = prev
+		client.SpawnWaitTimeout = prev
 	})
 
 	// Running this test binary with a filter that matches no tests exits

@@ -12,7 +12,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
-	"github.com/masterkeysrd/tasksmith/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -206,12 +205,7 @@ func daemonVersionLabel(h *api.HealthResponse) string {
 // hasActiveSessions reports whether any session on the daemon is doing work
 // that a restart would interrupt.
 func hasActiveSessions(sessions []api.Session) bool {
-	for _, s := range sessions {
-		if s.Status != api.StatusIdle {
-			return true
-		}
-	}
-	return false
+	return client.HasActiveSessions(sessions)
 }
 
 // waitForDaemonLockRelease blocks until the lock paired with socketPath is free
@@ -219,7 +213,7 @@ func hasActiveSessions(sessions []api.Session) bool {
 // timeout is non-fatal: the spawned daemon's own retry window may still recover
 // the handoff.
 func waitForDaemonLockRelease(ctx context.Context, socketPath string) error {
-	return daemon.WaitForSocketLockRelease(ctx, socketPath)
+	return client.WaitForSocketLockRelease(ctx, socketPath)
 }
 
 // restartDaemon asks a healthy daemon to shut down gracefully and waits for it to
@@ -258,61 +252,14 @@ func restartDaemon(ctx context.Context, c *client.Client) error {
 // can surface it in their own UI; the user then restarts the daemon when it is
 // safe instead of having work interrupted.
 func ConnectOrStart(ctx context.Context, socketPath string, spawnArgs ...string) (*client.Client, []string, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
-	}
-
-	socketPath = strings.TrimSpace(socketPath)
-	if socketPath == "" {
-		defaultSock, err := daemon.DefaultSocketPath()
-		if err != nil {
-			return nil, nil, fmt.Errorf("resolve default socket path: %w", err)
-		}
-		socketPath = defaultSock
-	}
-
-	c, err := client.New(socketPath)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var notices []string
-	h, healthy := healthDaemon(ctx, c)
-	if healthy {
-		if !daemonVersionSkewed(h) {
-			return c, notices, nil
-		}
-		sessions, err := c.ListSessions(ctx)
-		if err != nil || hasActiveSessions(sessions) {
-			notices = append(notices, fmt.Sprintf(
-				"Daemon version %s differs from TaskSmith %s. Restart the daemon when it is safe to update it: run `tasksmith daemon stop` or press r in /daemon.",
-				daemonVersionLabel(h), version.Get()))
-			return c, notices, nil
-		}
-		notices = append(notices, fmt.Sprintf(
-			"Daemon version %s differs from TaskSmith %s; restarting the daemon to match.",
-			daemonVersionLabel(h), version.Get()))
-		if err := restartDaemon(ctx, c); err != nil {
-			return nil, notices, err
-		}
-	}
-
-	spawned, err := spawnDetachedDaemon(socketPath, spawnArgs)
-	if err != nil {
-		return nil, notices, err
-	}
-
-	if err := waitForDaemonReady(ctx, c, socketPath, spawned); err != nil {
-		return nil, notices, err
-	}
-	return c, notices, nil
+	return client.ConnectOrStart(ctx, socketPath, spawnArgs...)
 }
 
 // waitForDaemonReady polls health checks for a freshly spawned daemon until it
 // answers, the spawned child process exits, or the bounded startup timeout
 // elapses. The shared wait reports failures with a pointer to the daemon logs.
-func waitForDaemonReady(ctx context.Context, c *client.Client, socketPath string, spawned *daemon.SpawnedDaemon) error {
-	_, err := daemon.WaitForSocketHealthy(ctx, socketPath, spawned, daemon.SpawnWaitTimeout, c.Health)
+func waitForDaemonReady(ctx context.Context, c *client.Client, socketPath string, spawned *client.SpawnedDaemon) error {
+	_, err := client.WaitForSocketHealthy(ctx, socketPath, spawned, client.SpawnWaitTimeout, c.Health)
 	return err
 }
 
@@ -320,33 +267,13 @@ func waitForDaemonReady(ctx context.Context, c *client.Client, socketPath string
 // differs from this client's. Daemons that predate version reporting are
 // treated as skewed so they get upgraded on the next client launch.
 func daemonVersionSkewed(h *api.HealthResponse) bool {
-	if h == nil {
-		return false
-	}
-	return strings.TrimSpace(h.Version) != version.Get()
-}
-
-func healthDaemon(ctx context.Context, c *client.Client) (*api.HealthResponse, bool) {
-	pingCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
-	defer cancel()
-	h, err := c.Health(pingCtx)
-	if err != nil {
-		return nil, false
-	}
-	return h, true
+	return client.DaemonVersionSkewed(h)
 }
 
 func connectOrStart(ctx context.Context, socketPath string, spawnArgs ...string) (*client.Client, []string, error) {
-	return ConnectOrStart(ctx, socketPath, spawnArgs...)
+	return client.ConnectOrStart(ctx, socketPath, spawnArgs...)
 }
 
 func isDaemonHealthy(ctx context.Context, c *client.Client) bool {
-	pingCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
-	defer cancel()
-	_, err := c.Health(pingCtx)
-	return err == nil
-}
-
-func spawnDetachedDaemon(socketPath string, spawnArgs []string) (*daemon.SpawnedDaemon, error) {
-	return daemon.SpawnDetached(socketPath, spawnArgs...)
+	return client.IsDaemonHealthy(ctx, c)
 }

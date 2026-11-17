@@ -18,7 +18,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/mentions"
-	"github.com/masterkeysrd/tasksmith/internal/daemon"
 )
 
 // SessionState holds the active session and its configuration, permission mode,
@@ -1507,24 +1506,24 @@ func StartDaemon(ctx context.Context) (*api.HealthResponse, error) {
 
 // spawnDaemon starts a daemon through the injected starter when present,
 // otherwise by spawning the current executable detached.
-func spawnDaemon(c *client.Client, starter func(context.Context, string) error, ctx context.Context) (*daemon.SpawnedDaemon, error) {
+func spawnDaemon(c *client.Client, starter func(context.Context, string) error, ctx context.Context) (*client.SpawnedDaemon, error) {
 	if starter != nil {
 		return nil, starter(ctx, c.SocketPath())
 	}
-	return daemon.SpawnDetached(c.SocketPath())
+	return client.SpawnDetached(c.SocketPath())
 }
 
 // awaitSpawnedDaemon waits for a freshly spawned daemon to answer health checks,
 // bounded so a hung or dead child fails with a diagnostic instead of blocking
 // the REPL. A caller-provided deadline on ctx takes precedence over timeout.
-func awaitSpawnedDaemon(ctx context.Context, c *client.Client, spawned *daemon.SpawnedDaemon, timeout time.Duration) (*api.HealthResponse, error) {
+func awaitSpawnedDaemon(ctx context.Context, c *client.Client, spawned *client.SpawnedDaemon, timeout time.Duration) (*api.HealthResponse, error) {
 	waitTimeout := timeout
 	if deadline, ok := ctx.Deadline(); ok {
 		if remaining := time.Until(deadline); remaining < waitTimeout {
 			waitTimeout = remaining
 		}
 	}
-	return daemon.WaitForSocketHealthy(ctx, c.SocketPath(), spawned, waitTimeout, c.Health)
+	return client.WaitForSocketHealthy(ctx, c.SocketPath(), spawned, waitTimeout, c.Health)
 }
 
 // waitForDaemonLockRelease blocks until the lock paired with the client's socket
@@ -1533,7 +1532,7 @@ func awaitSpawnedDaemon(ctx context.Context, c *client.Client, spawned *daemon.S
 // alone does not mean a respawn can acquire the lock yet. A timeout is non-fatal:
 // the spawned daemon retries lock acquisition itself for a short window.
 func waitForDaemonLockRelease(ctx context.Context, c *client.Client) {
-	_ = daemon.WaitForSocketLockRelease(ctx, c.SocketPath())
+	_ = client.WaitForSocketLockRelease(ctx, c.SocketPath())
 }
 
 // StopDaemon gracefully stops the running Brain Daemon.
