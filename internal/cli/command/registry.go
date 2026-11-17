@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,11 @@ import (
 
 // Handler executes a slash command with supplied arguments.
 type Handler func(args []string) error
+
+// ErrUnknownCommand reports a slash command no local handler owns. Callers
+// forward such a line to the daemon, which resolves workspace commands, skills,
+// and MCP prompts, so the TUI, exec, and ACP share one workflow surface.
+var ErrUnknownCommand = errors.New("unknown command")
 
 // Command defines a REPL slash command and its metadata.
 type Command struct {
@@ -248,7 +254,7 @@ func (r *Registry) Execute(line string) error {
 	fields := strings.Fields(trimmed)
 	cmd, ok := r.Lookup(fields[0])
 	if !ok {
-		return fmt.Errorf("unknown command: %s", trimmed)
+		return fmt.Errorf("%w: %s", ErrUnknownCommand, trimmed)
 	}
 	if cmd.Handler == nil {
 		return fmt.Errorf("command /%s has no handler", cmd.Name)

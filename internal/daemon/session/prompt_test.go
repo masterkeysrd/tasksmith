@@ -132,3 +132,47 @@ func TestSessionUpdateRejectsNonCompletionModel(t *testing.T) {
 		}
 	}
 }
+
+func TestParseMCPPromptRef(t *testing.T) {
+	tests := []struct {
+		token  string
+		server string
+		prompt string
+		wantOK bool
+	}{
+		{token: "mcp:github:list_issues", server: "github", prompt: "list_issues", wantOK: true},
+		{token: "MCP:GitHub:List_Issues", server: "GitHub", prompt: "List_Issues", wantOK: true},
+		// URI-style and path-like refs stay plain prompts, not prompt refs.
+		{token: "mcp://github/list"},
+		{token: "mcp:github"},
+		{token: "mcp::prompt"},
+		{token: "mcp:github:list/issues"},
+		{token: "file:mcp:github:x"},
+	}
+	for _, tt := range tests {
+		server, prompt, ok := parseMCPPromptRef(tt.token)
+		if ok != tt.wantOK {
+			t.Errorf("parseMCPPromptRef(%q) ok = %v, want %v", tt.token, ok, tt.wantOK)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if server != tt.server || prompt != tt.prompt {
+			t.Errorf("parseMCPPromptRef(%q) = (%q, %q), want (%q, %q)", tt.token, server, prompt, tt.server, tt.prompt)
+		}
+	}
+}
+
+func TestLooksLikePath(t *testing.T) {
+	for _, token := range []string{"etc/hosts", "./run.sh", "../script", "a/b"} {
+		if !looksLikePath(token) {
+			t.Errorf("looksLikePath(%q) = false, want true", token)
+		}
+	}
+	for _, token := range []string{"compact", "mcp:github:x", "review"} {
+		if looksLikePath(token) {
+			t.Errorf("looksLikePath(%q) = true, want false", token)
+		}
+	}
+}

@@ -43,6 +43,14 @@ func (r *ToolRuntime) ReadMCPResource(ctx context.Context, serverName, uri strin
 	return r.manager.ReadMCPResource(ctx, serverName, api.MCPResourceRequest{URI: uri, AllowProhibited: allowProhibited})
 }
 
+// GetMCPPrompt renders one prompt discovered on the named server.
+func (r *ToolRuntime) GetMCPPrompt(ctx context.Context, serverName, prompt string, args map[string]string, allowProhibited bool) (api.MCPPromptResponse, error) {
+	if r == nil {
+		return api.MCPPromptResponse{}, ErrManagerClosed
+	}
+	return r.manager.GetMCPPrompt(ctx, serverName, prompt, args, allowProhibited)
+}
+
 // HasAllowedMCPResources reports whether any server exposes a permitted resource.
 func (r *ToolRuntime) HasAllowedMCPResources() bool {
 	if r == nil {

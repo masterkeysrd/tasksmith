@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,10 @@ func (s *stubResourceReader) ReadMCPResource(_ context.Context, serverName, uri 
 }
 
 func (s *stubResourceReader) HasAllowedMCPResources() bool { return true }
+
+func (s *stubResourceReader) GetMCPPrompt(context.Context, string, string, map[string]string, bool) (api.MCPPromptResponse, error) {
+	return api.MCPPromptResponse{}, errors.New("not implemented")
+}
 
 // readResourceEnv writes a workspace declaring one MCP server whose manifest blocks
 // one resource, then wires the built-in tools with a stub MCP runtime.

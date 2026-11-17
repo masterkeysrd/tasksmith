@@ -36,6 +36,10 @@ func (s *stubAttachmentMCPCaller) ReadMCPResource(_ context.Context, serverName,
 
 func (s *stubAttachmentMCPCaller) HasAllowedMCPResources() bool { return true }
 
+func (s *stubAttachmentMCPCaller) GetMCPPrompt(context.Context, string, string, map[string]string, bool) (api.MCPPromptResponse, error) {
+	return api.MCPPromptResponse{}, errors.New("not implemented")
+}
+
 func setupAttachmentTestEnv(t *testing.T) (*AttachmentResolver, *workspace.Workspace, tools.Container) {
 	t.Helper()
 	xdg.SetTestEnv(t.TempDir(), "tasksmith-attachments-test")

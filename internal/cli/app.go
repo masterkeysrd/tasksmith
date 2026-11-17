@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -131,6 +132,13 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 			OnSubmit: func(text string, attachments []api.Attachment) {
 				if strings.HasPrefix(text, "/") && !strings.HasPrefix(text, command.MCPRefPrefix) {
 					if err := registry.Execute(text); err != nil {
+						// A line no local handler owns may still be a workspace
+						// command, skill, or MCP prompt the daemon resolves, so
+						// forward it instead of failing locally.
+						if errors.Is(err, command.ErrUnknownCommand) {
+							store.Send(text, attachments...)
+							return
+						}
 						store.AppendError("Error", err.Error())
 					}
 					return

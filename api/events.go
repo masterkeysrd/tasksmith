@@ -12,6 +12,11 @@ const HeaderSubscriberID = "X-TaskSmith-Subscriber-ID"
 // ErrCodeNeedSync is the API error code returned when a subscriber's cursor is out of date.
 const ErrCodeNeedSync = "need_sync"
 
+// ErrCodeUnknownCommand is the API error code returned when a prompt begins with
+// a "/" that resolves to no command, skill, or MCP reference. Clients use it to
+// distinguish a mistyped workflow from other rejected requests.
+const ErrCodeUnknownCommand = "unknown_command"
+
 // TopicSessions is the broker topic for session lifecycle and metadata events.
 const TopicSessions = "sessions"
 

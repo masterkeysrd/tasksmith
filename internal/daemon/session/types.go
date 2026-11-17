@@ -30,6 +30,7 @@ var (
 	ErrSessionConflict      = errors.New("session: session already exists with different parameters")
 	ErrSessionRunning       = errors.New("session: session already has an active turn")
 	ErrEmptyMessage         = errors.New("session: message content must not be empty")
+	ErrUnknownCommand       = errors.New("session: unknown slash command")
 )
 
 type queueItem struct {

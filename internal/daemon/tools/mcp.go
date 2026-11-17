@@ -29,6 +29,10 @@ type MCPCaller interface {
 	CallMCPTool(ctx context.Context, serverName, rawToolName string, args map[string]any) (tool.ToolStream, error)
 	// ReadMCPResource reads one resource URI from the named server.
 	ReadMCPResource(ctx context.Context, serverName, uri string, allowProhibited bool) (api.MCPResourceResponse, error)
+	// GetMCPPrompt renders one prompt discovered on the named server. It backs
+	// daemon-side `/mcp:<server>:<prompt>` execution so every client gets the
+	// same prompt rendering through a single `Send`.
+	GetMCPPrompt(ctx context.Context, serverName, prompt string, args map[string]string, allowProhibited bool) (api.MCPPromptResponse, error)
 	// HasAllowedMCPResources reports whether any server exposes a resource that
 	// spec.policies permits.
 	HasAllowedMCPResources() bool

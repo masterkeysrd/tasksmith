@@ -3,6 +3,7 @@ package session
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -22,6 +23,10 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
+
+// mcpPromptRenderTimeout bounds one daemon-side MCP prompt render so a
+// half-connected server cannot stall a Send indefinitely.
+const mcpPromptRenderTimeout = 30 * time.Second
 
 // renderWorkspaceRules renders the always-active workspace rules into a
 // <workspace_rules> block, ordered by priority descending then name ascending
@@ -190,7 +195,11 @@ type commandExecution struct {
 }
 
 // resolveCommandExecution resolves a slash command message into its execution
-// plan. It returns nil, nil for messages that are not slash commands.
+// plan. It returns nil, nil for messages that are not slash commands. A leading
+// "/" token that resolves to no command, skill, or MCP prompt is rejected with
+// ErrUnknownCommand unless it names a filesystem path, so every client (TUI,
+// exec, ACP, SDKs) gets identical workflow behavior from a single Send while
+// paths like "/etc/hosts" stay ordinary prompts.
 func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecution, error) {
 	if msg == nil {
 		return nil, nil
@@ -211,6 +220,10 @@ func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecutio
 	rawArgs := fields[1:]
 
 	cat := s.workspace.Catalog()
+
+	if cmdKey == "" {
+		return nil, nil
+	}
 
 	// 1. Try resolving as Command
 	if cmd, ok := cat.GetCommand(cmdKey); ok && cmd.Def != nil {
@@ -379,7 +392,171 @@ func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecutio
 		return &commandExecution{Message: newMsg}, nil
 	}
 
-	return nil, nil
+	// 3. Try resolving as an MCP prompt reference: /mcp:<server>:<prompt> [args].
+	//    Resolving it here (instead of in each client) means the TUI, exec, ACP,
+	//    and SDK callers all render the same prompt through one Send.
+	if server, prompt, ok := parseMCPPromptRef(rawKey); ok {
+		exec, err := s.resolveMCPPromptCommand(msg, server, prompt, strings.Join(rawArgs, " "), text)
+		if err != nil {
+			return nil, err
+		}
+		if exec != nil {
+			return exec, nil
+		}
+		// A resource-style or unknown-server reference is left as an ordinary
+		// prompt: the payload travels as an attachment the daemon resolves.
+		return nil, nil
+	}
+
+	// 4. A leading "/" that is neither a command, a skill, nor an MCP reference
+	//    is a mistake, not a prompt. Reject it so a typo never burns a turn,
+	//    while filesystem paths stay ordinary text.
+	if looksLikePath(rawKey) {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("%w: %q", ErrUnknownCommand, "/"+rawKey)
+}
+
+// parseMCPPromptRef splits an "/mcp:<server>:<prompt>" token into its parts.
+// It reports false for anything that is not an MCP reference, and for
+// resource-style references (a URI rather than a prompt name), which travel as
+// attachments rather than being rendered as a turn.
+func parseMCPPromptRef(token string) (string, string, bool) {
+	trimmed := strings.TrimSpace(token)
+	if len(trimmed) < 4 || !strings.EqualFold(trimmed[:4], "mcp:") {
+		return "", "", false
+	}
+	body := trimmed[4:]
+	server, prompt, found := strings.Cut(body, ":")
+	prompt = strings.TrimSpace(prompt)
+	if !found || strings.TrimSpace(server) == "" || prompt == "" ||
+		strings.Contains(prompt, "://") || strings.Contains(prompt, "/") || strings.HasPrefix(prompt, ":") {
+		return "", "", false
+	}
+	return server, prompt, true
+}
+
+// resolveMCPPromptCommand renders an MCP prompt through the workspace's MCP
+// runtime and returns the rendered messages as the turn's user message. It
+// returns (nil, nil) when the reference names a server the workspace does not
+// configure, so prose that merely mentions the prefix stays a plain prompt.
+func (s *Session) resolveMCPPromptCommand(msg message.Message, serverName, promptName, argText, rawText string) (*commandExecution, error) {
+	cat := s.workspace.Catalog()
+	snap, found := cat.GetMCPSnapshot(serverName)
+	if !found || snap.Def == nil {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rawText), "/"))), "mcp:") {
+			return nil, fmt.Errorf("%w: unknown MCP server %q", ErrUnknownCommand, serverName)
+		}
+		return nil, nil
+	}
+
+	promptFound := false
+	promptArg := api.MCPPromptSummary{Name: promptName}
+	for _, p := range snap.Prompts {
+		if p.Name == promptName {
+			promptArg = p
+			promptFound = true
+			break
+		}
+	}
+	// Discovery may not have run yet (server still connecting), so an empty
+	// prompt list is not proof of absence; the render call reports the truth.
+	if len(snap.Prompts) > 0 && !promptFound {
+		return nil, fmt.Errorf("%w: MCP prompt %q was not found on server %q", ErrUnknownCommand, promptName, snap.Name)
+	}
+
+	var args map[string]string
+	suffix := argText
+	if trimmed := strings.TrimSpace(argText); trimmed != "" {
+		if strings.HasPrefix(trimmed, "{") {
+			var parsed map[string]string
+			if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+				return nil, fmt.Errorf("%w: MCP prompt arguments must be a JSON object of string values: %v", ErrInvalidConfig, err)
+			}
+			args = parsed
+			suffix = ""
+		} else if len(promptArg.Arguments) == 1 {
+			args = map[string]string{promptArg.Arguments[0].Name: trimmed}
+			suffix = ""
+		}
+	}
+
+	if !snap.Def.AllowsPrompt(promptName) {
+		return nil, fmt.Errorf("%w: MCP prompt %q is prohibited by spec.policies.prompts in %s",
+			ErrInvalidConfig, promptName, mcpManifestLabel(s.workspace, snap.Def.GetPath()))
+	}
+
+	var caller tools.MCPCaller
+	if s.mcpCaller != nil {
+		caller = s.mcpCaller()
+	}
+	if caller == nil {
+		return nil, fmt.Errorf("%w: MCP prompt %q needs a running MCP runtime", ErrInvalidConfig, promptName)
+	}
+
+	ctx, cancel := context.WithTimeout(s.bgCtx, mcpPromptRenderTimeout)
+	defer cancel()
+	resp, err := caller.GetMCPPrompt(ctx, snap.Name, promptName, args, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to render MCP prompt %q from server %q: %w", promptName, snap.Name, err)
+	}
+
+	var builder strings.Builder
+	for _, m := range resp.Messages {
+		if strings.TrimSpace(m.Text) == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString(m.Text)
+	}
+	if builder.Len() == 0 {
+		return nil, fmt.Errorf("%w: MCP prompt %q on server %q rendered no messages", ErrInvalidConfig, promptName, snap.Name)
+	}
+	if trimmed := strings.TrimSpace(suffix); trimmed != "" {
+		builder.WriteString("\n\n")
+		builder.WriteString(trimmed)
+	}
+
+	newMsg := &message.User{
+		Base: message.Base{Metadata: map[string]any{
+			"mcp_prompt": snap.Name + ":" + promptName,
+			"command":    rawText,
+		}},
+		Content: message.Content{&message.TextBlock{Text: builder.String()}},
+	}
+	if msg.GetID() != "" {
+		newMsg.SetID(msg.GetID())
+	}
+	return &commandExecution{Message: newMsg}, nil
+}
+
+// mcpManifestLabel renders a manifest path for an error message, falling back
+// to a generic phrase when the definition has no path (embedded definitions).
+func mcpManifestLabel(ws *workspace.Workspace, path string) string {
+	if strings.TrimSpace(path) == "" {
+		return "the server manifest"
+	}
+	if ws != nil {
+		if portable := ws.PortablePath(path); portable != "" {
+			return portable
+		}
+	}
+	return path
+}
+
+// looksLikePath reports whether a leading "/" token is a filesystem path rather
+// than a command name, so prompts that begin with a path (for example when a
+// user pastes "/etc/hosts and explain it") stay ordinary prompts.
+func looksLikePath(token string) bool {
+	if token == "" {
+		return false
+	}
+	if strings.Contains(token, "/") {
+		return true
+	}
+	return strings.HasPrefix(token, ".")
 }
 
 // validateCommandContext normalizes and validates a command's declared context
@@ -536,7 +713,7 @@ func (s *Session) generateTitle(userText string) {
 	now := time.Now().UTC()
 
 	s.Lock()
-	if strings.TrimSpace(s.Title) != "" {
+	if s.closing || strings.TrimSpace(s.Title) != "" {
 		s.Unlock()
 		return
 	}
@@ -555,6 +732,9 @@ func (s *Session) generateTitle(userText string) {
 		return
 	}
 
+	if s.IsClosing() {
+		return
+	}
 	s.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
 		Workspace: s.workspace.RootDir(),
 		Session:   ToAPISession(s),

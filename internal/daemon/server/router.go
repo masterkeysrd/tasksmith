@@ -153,6 +153,9 @@ func classifyError(err error) (int, string) {
 		strings.Contains(err.Error(), "subscriber not found"):
 		return http.StatusNotFound, "not_found"
 
+	case errors.Is(err, session.ErrUnknownCommand):
+		return http.StatusBadRequest, api.ErrCodeUnknownCommand
+
 	case errors.Is(err, session.ErrSessionConflict),
 		errors.Is(err, session.ErrRevertConflict),
 		errors.Is(err, broker.ErrExists),

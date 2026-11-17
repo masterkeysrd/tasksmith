@@ -71,6 +71,10 @@ func (f *fakeMCPCaller) ReadMCPResource(_ context.Context, serverName, uri strin
 
 func (f *fakeMCPCaller) HasAllowedMCPResources() bool { return f.resources }
 
+func (f *fakeMCPCaller) GetMCPPrompt(context.Context, string, string, map[string]string, bool) (api.MCPPromptResponse, error) {
+	return api.MCPPromptResponse{}, errors.New("fakeMCPCaller does not render prompts")
+}
+
 // textChunks builds a single-chunk text result like the ones an MCP server returns.
 func textChunks(text string) []message.ToolChunk {
 	return []message.ToolChunk{{Content: message.Content{&message.TextBlock{Text: text}}}}
