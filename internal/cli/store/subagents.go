@@ -277,6 +277,16 @@ func (s *SubagentConversation) LoadTimeline(entries []api.TimelineEntry, pending
 	s.acc.loadTimeline(entries, pending...)
 }
 
+// LoadTimelineSnapshot hydrates the subagent conversation from its session snapshot and persisted timeline.
+func (s *SubagentConversation) LoadTimelineSnapshot(sess *api.Session, entries []api.TimelineEntry, pendingQuestions []api.QuestionRequest) {
+	s.acc.loadTimelineSnapshot(sess, entries, pendingQuestions)
+}
+
+// ReconcileStreamStatus aligns the subagent stream state with its session snapshot.
+func (s *SubagentConversation) ReconcileStreamStatus(sess *api.Session) {
+	s.acc.ReconcileStreamStatus(sess)
+}
+
 // SeedPermissions imports pending permission requests into the subagent conversation.
 func (s *SubagentConversation) SeedPermissions(requests []api.PermissionRequest) {
 	s.acc.SeedPermissions(requests)

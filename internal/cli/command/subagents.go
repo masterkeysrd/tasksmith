@@ -122,11 +122,12 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 			if loaded, err := c.GetSession(ctx, props.SubagentID); err == nil && loaded != nil {
 				setSubSession(loaded)
 				if tl, err := c.Timeline(ctx, props.SubagentID); err == nil {
-					conv.LoadTimeline(tl, loaded.PendingQuestions)
+					conv.LoadTimelineSnapshot(loaded, tl, loaded.PendingQuestions)
 				}
 				if len(loaded.PendingPermissions) > 0 {
 					conv.SeedPermissions(loaded.PendingPermissions)
 				}
+				conv.ReconcileStreamStatus(loaded)
 				localRev++
 				setRev(localRev)
 			}

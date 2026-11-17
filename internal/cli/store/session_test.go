@@ -1161,3 +1161,209 @@ func TestDraftSessionClearsQuota(t *testing.T) {
 		t.Fatalf("draft session kept quota state: billed=%v quota=%+v", GetSession().ModelQuotaBilled, GetQuota())
 	}
 }
+
+// TestSwitchSessionRunningSessionSeedsSpinnerImmediately verifies resuming or
+// switching to a session the daemon reports as running publishes the running
+// spinner and status on the first frame, without waiting for a live SSE event.
+func TestSwitchSessionRunningSessionSeedsSpinnerImmediately(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	rt := &mockSessionRoundTripper{
+		handler: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/v1/sessions/sess-run") {
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(strings.NewReader(`{
+						"id": "sess-run",
+						"status": "executing",
+						"config": {"mode": "default"}
+					}`)),
+					Header: make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			if req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/v1/sessions/sess-run/timeline") {
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`[]`)),
+					Header:     make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	sessMu.Lock()
+	activeClient = c
+	activeCtx = context.Background()
+	sessMu.Unlock()
+	defer func() {
+		sessMu.Lock()
+		if streamCancel != nil {
+			streamCancel()
+			streamCancel = nil
+		}
+		sessMu.Unlock()
+	}()
+
+	SwitchSession("sess-run")
+
+	deadline := time.Now().Add(2 * time.Second)
+	var st StreamState
+	for time.Now().Before(deadline) {
+		st = GetStream()
+		if st.Streaming {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !st.Streaming {
+		t.Fatalf("expected Streaming immediately after switching to a running session, got %+v", st)
+	}
+	if st.Status != api.StatusExecuting {
+		t.Fatalf("published Status = %s, want %s", st.Status, api.StatusExecuting)
+	}
+}
+
+// TestSwitchSessionDelegatedSlashCommandSeedsSpinnerAndSettles verifies
+// re-entering a session started with a delegated slash command (parent status
+// is idle while its child subagent runs) immediately surfaces the delegated
+// in-progress spinner and clears it once the subagent goes idle.
+func TestSwitchSessionDelegatedSlashCommandSeedsSpinnerAndSettles(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	subStart := time.Now().UTC().Add(-25 * time.Second).Truncate(time.Second)
+	rt := &mockSessionRoundTripper{
+		handler: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/v1/sessions/sess-cmd") {
+				data, _ := json.Marshal(api.Session{
+					ID:     "sess-cmd",
+					Status: api.StatusIdle,
+					Config: api.SessionConfig{Mode: api.ModeDefault},
+					Subagents: []api.Session{
+						{
+							ID:        "sub-commit",
+							ParentID:  "sess-cmd",
+							Title:     "/commit",
+							Status:    api.StatusThinking,
+							Activity:  "Staging changes",
+							CreatedAt: subStart,
+							Config:    api.SessionConfig{Agent: "main"},
+						},
+					},
+				})
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			if req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/v1/sessions/sess-cmd/timeline") {
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(strings.NewReader(`[
+						{
+							"id": "entry-cmd",
+							"kind": "message",
+							"message": {"id": "msg-cmd", "role": "user", "content": [{"type": "text", "text": "/commit"}]}
+						}
+					]`)),
+					Header: make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	sessMu.Lock()
+	activeClient = c
+	activeCtx = context.Background()
+	sessMu.Unlock()
+	defer func() {
+		sessMu.Lock()
+		if streamCancel != nil {
+			streamCancel()
+			streamCancel = nil
+		}
+		sessMu.Unlock()
+	}()
+
+	SwitchSession("sess-cmd")
+
+	deadline := time.Now().Add(2 * time.Second)
+	var st StreamState
+	for time.Now().Before(deadline) {
+		st = GetStream()
+		if st.Streaming {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !st.Streaming || !st.Delegated {
+		t.Fatalf("expected Streaming and Delegated immediately on re-entering delegated slash command session, got %+v", st)
+	}
+	if !st.TurnStartedAt.Equal(subStart) {
+		t.Fatalf("TurnStartedAt = %v, want delegated subagent start %v", st.TurnStartedAt, subStart)
+	}
+
+	// Once the child subagent finishes, Delegated clears while the stream
+	// stays in flight for the parent's <subagent_completed> turn, then settles
+	// when EventCompleted arrives on the parent.
+	UpsertSubagent(api.Session{
+		ID:       "sub-commit",
+		ParentID: "sess-cmd",
+		Title:    "/commit",
+		Status:   api.StatusIdle,
+		Config:   api.SessionConfig{Agent: "main"},
+	})
+	refreshSubagentState()
+
+	if st := GetStream(); st.Delegated || !st.Streaming {
+		t.Fatalf("expected Delegated to clear while parent turn stays in flight, got %+v", st)
+	}
+
+	ApplyEvent(api.Event{
+		Type:    api.EventCompleted,
+		Payload: api.CompletedEvent{SessionID: "sess-cmd"},
+	})
+	if st := GetStream(); st.Streaming || st.Delegated {
+		t.Fatalf("expected stream to settle after parent completion, got %+v", st)
+	}
+}

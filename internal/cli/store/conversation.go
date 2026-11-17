@@ -959,6 +959,21 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 }
 
 func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry, pending ...[]api.QuestionRequest) {
+	var pendingQuestions []api.QuestionRequest
+	if len(pending) > 0 {
+		pendingQuestions = pending[0]
+	}
+	acc.loadTimelineSnapshot(nil, entries, pendingQuestions)
+}
+
+// loadTimelineSnapshot rebuilds the transcript from a journal timeline. When a
+// session snapshot is provided, its pending permissions and live status are
+// seeded before the timeline is projected: an assistant message with an
+// unresolved tool call belongs to the in-flight turn, so it must stay in the
+// mutable stream as running or waiting-permission instead of being marked
+// interrupted and flushed to immutable scrollback, where a later status
+// reconcile would duplicate it under the live spinner.
+func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entries []api.TimelineEntry, pendingQuestions []api.QuestionRequest) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
 
@@ -1001,10 +1016,43 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry, pe
 		}
 	}
 
-	if len(pending) > 0 {
-		acc.addQuestionsLocked(pending[0])
+	if len(pendingQuestions) > 0 {
+		acc.addQuestionsLocked(pendingQuestions)
 		if len(acc.questions) > 0 && len(acc.permissions) == 0 {
 			acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
+		}
+	}
+
+	// Seed the live snapshot before projecting so in-flight tool calls project
+	// as mutable stream state instead of interrupted scrollback history, and
+	// sessions waiting solely on delegated subagents (e.g. a slash command
+	// running in clean/fork context while the parent sits idle) surface their
+	// delegated spinner immediately.
+	if sess != nil && (sess.ID == "" || acc.sessionID == "" || sess.ID == acc.sessionID) && acc.pendingUser == nil && acc.pendingCommand == "" {
+		if len(sess.PendingPermissions) > 0 {
+			_ = acc.addPermissionsLocked(sess.PendingPermissions)
+		}
+		switch sess.Status {
+		case api.StatusThinking, api.StatusGenerating, api.StatusExecuting, api.StatusCompacting:
+			acc.status, acc.sessionStatus, acc.err = StreamRunning, sess.Status, nil
+			acc.parentTurnActive = true
+		case api.StatusWaitingPermission:
+			acc.status, acc.sessionStatus, acc.err = StreamWaitingPermission, sess.Status, nil
+			acc.parentTurnActive = true
+		case api.StatusWaitingQuestion:
+			acc.status, acc.sessionStatus, acc.err = StreamWaitingQuestion, sess.Status, nil
+			acc.parentTurnActive = true
+		case api.StatusIdle, "":
+			if hasRunningSubagents(sess.Subagents) {
+				acc.status, acc.sessionStatus, acc.err = StreamRunning, api.StatusThinking, nil
+				acc.parentTurnActive = false
+			}
+		}
+	}
+	if acc.pendingUser == nil && acc.pendingCommand == "" &&
+		(acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion) {
+		if start := inFlightTurnStart(sess, entries); !start.IsZero() {
+			acc.turnStart = start
 		}
 	}
 
@@ -1032,6 +1080,130 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry, pe
 	}
 
 	acc.publishLocked()
+}
+
+// ReconcileStreamStatus aligns the stream state with a session snapshot so
+// attaching or switching to a session mid-turn shows the spinner and status on
+// the first frame instead of waiting seconds for the next live event, and a
+// stream frozen by missed events settles to the snapshot's truth. It only
+// touches a stream with no locally pending state: a waiting-permission or
+// waiting-question state seeded from the snapshot, or a turn the user just
+// started from this client, is never overwritten. Callers invoke it after the
+// timeline and pending requests are loaded.
+func (acc *conversationAccumulator) ReconcileStreamStatus(sess *api.Session) {
+	if sess == nil {
+		return
+	}
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	if sess.ID != "" && acc.sessionID != "" && sess.ID != acc.sessionID {
+		return
+	}
+	if acc.pendingUser != nil || acc.pendingCommand != "" {
+		return
+	}
+	switch acc.status {
+	case StreamIdle:
+		switch sess.Status {
+		case api.StatusThinking, api.StatusGenerating, api.StatusExecuting, api.StatusCompacting:
+			acc.status = StreamRunning
+			acc.sessionStatus = sess.Status
+			acc.err = nil
+			acc.parentTurnActive = true
+		case api.StatusIdle, "":
+			if !hasRunningSubagents(sess.Subagents) {
+				return
+			}
+			acc.status = StreamRunning
+			acc.sessionStatus = api.StatusThinking
+			acc.err = nil
+			acc.parentTurnActive = false
+		default:
+			return
+		}
+		acc.turnStart = inFlightTurnStart(sess, nil)
+	case StreamRunning:
+		// A snapshot that reports the turn over (or waiting on the user) means
+		// the terminal event was missed; settle so the UI never spins forever,
+		// unless the session is actively waiting on delegated child subagents.
+		switch sess.Status {
+		case api.StatusIdle:
+			if hasRunningSubagents(sess.Subagents) {
+				acc.parentTurnActive = false
+				acc.discardDraftLocked()
+			} else {
+				acc.status = StreamCompleted
+				acc.sessionStatus = api.StatusIdle
+				acc.discardDraftLocked()
+			}
+		case api.StatusWaitingPermission:
+			acc.status = StreamWaitingPermission
+			acc.sessionStatus = api.StatusWaitingPermission
+		case api.StatusWaitingQuestion:
+			acc.status = StreamWaitingQuestion
+			acc.sessionStatus = api.StatusWaitingQuestion
+		default:
+			acc.sessionStatus = sess.Status
+			return
+		}
+	default:
+		return
+	}
+	acc.publishLocked()
+}
+
+func hasRunningSubagents(subs []api.Session) bool {
+	for _, s := range subs {
+		if s.Status != "" && s.Status != api.StatusIdle {
+			return true
+		}
+	}
+	return false
+}
+
+// inFlightTurnStart derives when the active turn began from a session snapshot
+// and its persisted timeline so reattaching or switching to a running session
+// preserves elapsed time instead of restarting the spinner at zero.
+func inFlightTurnStart(sess *api.Session, entries []api.TimelineEntry) time.Time {
+	var start time.Time
+	for _, entry := range entries {
+		switch entry.Kind {
+		case api.TimelineKindTurnCompleted, api.TimelineKindInterrupted, api.TimelineKindCommand:
+			start = time.Time{}
+		case api.TimelineKindModel, api.TimelineKindEffort, api.TimelineKindThinking, api.TimelineKindAgent, api.TimelineKindMode, api.TimelineKindCompacted:
+			// Idle configuration changes and finished compactions sit between turns.
+		default:
+			if start.IsZero() {
+				start = timelineEntryTime(entry)
+			}
+		}
+	}
+	if start.IsZero() && sess != nil {
+		for _, sub := range sess.Subagents {
+			if sub.Status != "" && sub.Status != api.StatusIdle && !sub.CreatedAt.IsZero() {
+				if start.IsZero() || sub.CreatedAt.Before(start) {
+					start = sub.CreatedAt
+				}
+			}
+		}
+	}
+	if start.IsZero() && sess != nil {
+		if !sess.UpdatedAt.IsZero() {
+			return sess.UpdatedAt
+		}
+		return sess.CreatedAt
+	}
+	return start
+}
+
+func timelineEntryTime(entry api.TimelineEntry) time.Time {
+	if !entry.CreatedAt.IsZero() {
+		return entry.CreatedAt
+	}
+	if entry.Message != nil {
+		return entry.Message.CreatedAt
+	}
+	return time.Time{}
 }
 
 // SeedPermissions imports pending permission requests (e.g. from session state) into the active turn.
@@ -1339,7 +1511,9 @@ func (acc *conversationAccumulator) publishLocked() {
 
 	if isStreaming && !acc.wasStreaming {
 		totals := GetUsage().Totals
-		acc.turnStart = time.Now()
+		if acc.turnStart.IsZero() {
+			acc.turnStart = time.Now()
+		}
 		acc.baseInput, acc.baseOutput, acc.baseCalls = totals.Tokens.Input, totals.Tokens.Output, totals.Calls
 		acc.callInput, acc.callOutput = 0, 0
 	} else if !isStreaming && acc.wasStreaming {

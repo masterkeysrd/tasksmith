@@ -48,7 +48,7 @@ flowchart TD
 ### 1. Client-Daemon IPC & Multiplexed Event Stream
 TaskSmith operates as an on-demand, headless background process listening on a local Unix domain socket (`$XDG_RUNTIME_DIR/tasksmith/brain.sock`, or `~/.local/state/tasksmith/run/brain.sock` when `XDG_RUNTIME_DIR` is unset):
 - **REST Endpoints**: CLI and external tools issue standard HTTP commands across `/v1/sessions`, `/v1/workspace`, `/v1/permissions`, `/v1/sandbox`, and `/v1/tasks`.
-- **Multiplexed SSE Event Bus**: Clients subscribe to a single Server-Sent Events stream (`GET /v1/events`) powered by an internal publish-subscribe message broker. Real-time token streams, tool start/finish events, interactive permission requests, and background task updates are broadcast concurrently to all connected interfaces without polling.
+- **Multiplexed SSE Event Bus**: Clients subscribe to a single Server-Sent Events stream (`GET /v1/events`) powered by an internal publish-subscribe message broker. Real-time token streams, tool start/finish events, interactive permission requests, and background task updates are broadcast concurrently to all connected interfaces without polling. Delivery is never silently dropped on either side: a broker subscriber that falls behind is disconnected so its client resubscribes and reloads its snapshot, and a client watcher whose consumer stalls applies backpressure to the shared connection instead of discarding events. The endpoint writes heartbeat comments every 15 seconds, and a client tears down any connection that stays silent past several intervals so a half-open stream reconnects and resyncs rather than freezing a live session.
 
 ### 2. Workspace Runtime Pool
 The daemon maintains a pool of active workspace runtimes indexed by canonical root path:

@@ -9,9 +9,21 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
 )
+
+// watcherBufferSize is how many undelivered events a watcher may hold before
+// the multiplexer starts applying backpressure to the shared SSE connection.
+var watcherBufferSize = 256
+
+// watcherStallTimeout bounds how long the multiplexer waits on a watcher with
+// a full buffer before treating it as wedged. A consumer that never catches
+// up is delivered ErrNeedSync and detached, so one stalled watcher can never
+// freeze the shared connection for every other watcher; the affected watcher
+// recovers through the standard snapshot-resync path.
+var watcherStallTimeout = 30 * time.Second
 
 type eventResult struct {
 	ev  api.Event
@@ -22,6 +34,43 @@ type eventWatcher struct {
 	topics []string
 	ch     chan eventResult
 	ctx    context.Context
+
+	// reaped marks a watcher the mux already removed (wedged consumer or stream
+	// generation torn down); its deferred detach must not unwind topic refs a
+	// second time. closeErr is the terminal error the mux could not push into
+	// ch (it was full or closed); Watch yields it when the consumer finally
+	// drains ch and observes the close. reaped is written under eventMux.mu;
+	// closeErr is written by the mux goroutine before it closes ch, so the
+	// happens-before edge through close makes it safe to read after <-ch
+	// returns !ok.
+	reaped   bool
+	closeErr error
+}
+
+// tryDeliver hands res to the watcher. It never drops silently: when the
+// buffer is full it blocks until the consumer catches up, the watcher's
+// context ends, or the stall timeout trips. It reports whether the watcher
+// received res normally; false means the watcher is dead (context ended or
+// wedged) and must be removed from the mux.
+func (w *eventWatcher) tryDeliver(res eventResult) bool {
+	if w.ctx.Err() != nil {
+		return false
+	}
+	select {
+	case w.ch <- res:
+		return true
+	default:
+	}
+	timer := time.NewTimer(watcherStallTimeout)
+	defer timer.Stop()
+	select {
+	case w.ch <- res:
+		return true
+	case <-w.ctx.Done():
+		return false
+	case <-timer.C:
+		return false
+	}
 }
 
 type eventMux struct {
@@ -59,7 +108,7 @@ func (c *Client) Watch(ctx context.Context, since string, topics ...string) iter
 
 		watcher := &eventWatcher{
 			topics: cleanTopics,
-			ch:     make(chan eventResult, 256),
+			ch:     make(chan eventResult, watcherBufferSize),
 			ctx:    ctx,
 		}
 
@@ -77,6 +126,9 @@ func (c *Client) Watch(ctx context.Context, since string, topics ...string) iter
 				return
 			case res, ok := <-watcher.ch:
 				if !ok {
+					if watcher.closeErr != nil {
+						yield(api.Event{}, watcher.closeErr)
+					}
 					return
 				}
 				if res.err != nil {
@@ -119,6 +171,7 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 			select {
 			case <-ctx.Done():
 				m.mu.Lock()
+				watcher.reaped = true
 				m.removeWatcherLocked(watcher)
 				if len(m.watchers) == 0 {
 					m.closeStreamLocked()
@@ -129,6 +182,7 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 				m.mu.Lock()
 				if m.connectErr != nil {
 					err := m.connectErr
+					watcher.reaped = true
 					m.removeWatcherLocked(watcher)
 					if len(m.watchers) == 0 {
 						m.closeStreamLocked()
@@ -174,6 +228,7 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 		if len(needed) > 0 {
 			if _, err := c.Subscribe(ctx, subID, since, needed...); err != nil {
 				m.mu.Lock()
+				watcher.reaped = true
 				m.removeWatcherLocked(watcher)
 				for _, t := range topics {
 					m.topicRefs[t]--
@@ -248,15 +303,57 @@ func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, since s
 			m.mu.Unlock()
 			break
 		}
-		for _, w := range m.watchers {
-			if slices.Contains(w.topics, ev.Topic) {
-				select {
-				case w.ch <- eventResult{ev: ev}:
-				default:
-				}
+		watchers := slices.Clone(m.watchers)
+		m.mu.Unlock()
+
+		var dead []*eventWatcher
+		for _, w := range watchers {
+			if slices.Contains(w.topics, ev.Topic) && !w.tryDeliver(eventResult{ev: ev}) {
+				dead = append(dead, w)
 			}
 		}
-		m.mu.Unlock()
+
+		if len(dead) > 0 {
+			m.mu.Lock()
+			var toUnsub []string
+			var reaped []*eventWatcher
+			for _, w := range dead {
+				if w.reaped {
+					continue
+				}
+				w.reaped = true
+				reaped = append(reaped, w)
+				m.removeWatcherLocked(w)
+				for _, t := range w.topics {
+					m.topicRefs[t]--
+					if m.topicRefs[t] <= 0 {
+						delete(m.topicRefs, t)
+						toUnsub = append(toUnsub, t)
+					}
+				}
+			}
+			subID := m.subID
+			if len(m.watchers) == 0 {
+				m.closeStreamLocked()
+			}
+			m.mu.Unlock()
+			for _, w := range reaped {
+				select {
+				case w.ch <- eventResult{err: fmt.Errorf("%w: consumer stalled", ErrNeedSync)}:
+				default:
+					// The buffer is still full: remember the terminal error so
+					// Watch yields it once the consumer drains and sees close,
+					// instead of the exit looking like a clean end of stream.
+					w.closeErr = fmt.Errorf("%w: consumer stalled", ErrNeedSync)
+				}
+				close(w.ch)
+			}
+			if len(toUnsub) > 0 && subID != "" {
+				go func() {
+					_, _ = c.Unsubscribe(context.Background(), subID, toUnsub...)
+				}()
+			}
+		}
 	}
 
 	if streamErr == nil {
@@ -280,12 +377,24 @@ func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, since s
 		m.streamCancel()
 		m.streamCancel = nil
 	}
+	// Mark every watcher of this generation reaped: the mux no longer tracks
+	// them, so their deferred detach must not unwind the next generation's
+	// topic refs.
+	for _, w := range watchers {
+		w.reaped = true
+	}
 	m.mu.Unlock()
 
 	for _, w := range watchers {
-		select {
-		case w.ch <- eventResult{err: streamErr}:
-		default:
+		if !w.tryDeliver(eventResult{err: streamErr}) {
+			// The consumer is wedged or gone: deliver the terminal error via
+			// closeErr so Watch still surfaces it after draining, rather than
+			// looking like a clean end of stream.
+			select {
+			case w.ch <- eventResult{err: streamErr}:
+			default:
+				w.closeErr = streamErr
+			}
 		}
 		close(w.ch)
 	}
@@ -293,6 +402,11 @@ func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, since s
 
 func (m *eventMux) detach(c *Client, watcher *eventWatcher, subID string) {
 	m.mu.Lock()
+	if watcher.reaped {
+		m.mu.Unlock()
+		return
+	}
+	watcher.reaped = true
 	m.removeWatcherLocked(watcher)
 
 	var toUnsub []string

@@ -1623,3 +1623,366 @@ func TestConversationResumeHistoryDoesNotMarkParentTurn(t *testing.T) {
 		t.Fatalf("expected Delegated after resuming history and delegating, got %+v", st)
 	}
 }
+
+// TestReconcileStreamStatusSeedsRunningOnAttach verifies attaching or switching
+// to an already-running session publishes the running spinner immediately from
+// the session snapshot, without waiting for a live SSE event.
+func TestReconcileStreamStatusSeedsRunningOnAttach(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	for _, status := range []api.SessionStatus{api.StatusThinking, api.StatusExecuting, api.StatusGenerating, api.StatusCompacting} {
+		acc := newConversationAccumulator()
+		acc.setSessionID("sess-run")
+
+		acc.ReconcileStreamStatus(&api.Session{ID: "sess-run", Status: status})
+
+		st := GetStream()
+		if !st.Streaming {
+			t.Fatalf("status %s: expected Streaming immediately after snapshot reconcile, got %+v", status, st)
+		}
+		if st.Status != status {
+			t.Fatalf("status %s: published Status = %s, want %s", status, st.Status, status)
+		}
+		if st.TurnStartedAt.IsZero() {
+			t.Fatalf("status %s: expected turn bookkeeping to start with the seeded turn", status)
+		}
+	}
+}
+
+// TestReconcileStreamStatusSettlesStalledStream verifies a stream frozen in
+// running (its terminal event was dropped) settles to the snapshot's truth
+// instead of spinning forever.
+func TestReconcileStreamStatusSettlesStalledStream(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-stall")
+	acc.applyEvent(api.Event{Type: api.EventStatusChanged, Payload: api.StatusChangedEvent{SessionID: "sess-stall", Status: api.StatusThinking}})
+	if st := GetStream(); !st.Streaming {
+		t.Fatalf("expected running stream before settle, got %+v", st)
+	}
+
+	acc.ReconcileStreamStatus(&api.Session{ID: "sess-stall", Status: api.StatusIdle})
+	if st := GetStream(); st.Streaming || st.Status != api.StatusIdle {
+		t.Fatalf("expected settled idle stream, got %+v", st)
+	}
+
+	acc.applyEvent(api.Event{Type: api.EventStatusChanged, Payload: api.StatusChangedEvent{SessionID: "sess-stall", Status: api.StatusExecuting}})
+	acc.ReconcileStreamStatus(&api.Session{ID: "sess-stall", Status: api.StatusWaitingPermission})
+	if st := GetStream(); !st.WaitingPermission {
+		t.Fatalf("expected waiting-permission settle, got %+v", st)
+	}
+}
+
+// TestReconcileStreamStatusKeepsLocalTurnAndWaits verifies reconciliation never
+// clobbers a locally started turn, a snapshot-seeded waiting state, or another
+// session's snapshot.
+func TestReconcileStreamStatusKeepsLocalTurnAndWaits(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-a")
+	acc.addPendingUser("user-1", "in flight from this client")
+
+	acc.ReconcileStreamStatus(&api.Session{ID: "sess-a", Status: api.StatusIdle})
+	if st := GetStream(); !st.Streaming {
+		t.Fatalf("locally started turn must survive an idle snapshot, got %+v", st)
+	}
+
+	ResetStream()
+	acc2 := newConversationAccumulator()
+	acc2.setSessionID("sess-a")
+	acc2.SeedPermissions([]api.PermissionRequest{{ID: "perm-1", ToolCallID: "call-1"}})
+	acc2.ReconcileStreamStatus(&api.Session{ID: "sess-a", Status: api.StatusThinking})
+	if st := GetStream(); !st.WaitingPermission {
+		t.Fatalf("snapshot-seeded waiting state must survive reconcile, got %+v", st)
+	}
+
+	ResetStream()
+	acc3 := newConversationAccumulator()
+	acc3.setSessionID("sess-a")
+	acc3.ReconcileStreamStatus(&api.Session{ID: "sess-b", Status: api.StatusThinking})
+	if st := GetStream(); st.Streaming {
+		t.Fatalf("snapshot of another session must not seed this session, got %+v", st)
+	}
+}
+
+// snapshotTimeline builds a journal timeline whose last assistant message has
+// an unresolved tool call: exactly what a daemon mid-turn persists.
+func snapshotTimeline() []api.TimelineEntry {
+	return []api.TimelineEntry{
+		{
+			ID: "entry-user", Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID: "msg-user", Role: api.RoleUser, CreatedAt: time.Now().UTC(),
+				Content: []api.Block{{Type: api.BlockText, Text: "run the tool"}},
+			},
+		},
+		{
+			ID: "entry-assistant", Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID: "msg-assistant", Role: api.RoleAssistant, CreatedAt: time.Now().UTC(),
+				Content: []api.Block{{Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "call-1", Name: "bash", Args: map[string]any{"command": "echo hi"}}}},
+			},
+		},
+	}
+}
+
+func streamToolStatus(t *testing.T, want ToolStatus) {
+	t.Helper()
+	st := GetStream()
+	if st.Messages == nil {
+		t.Fatalf("expected stream messages, got nil state %+v", st)
+	}
+	for _, msg := range *st.Messages {
+		for _, part := range msg.Parts {
+			if part.Tool != nil && part.Tool.ID == "call-1" {
+				if part.Tool.Status != want {
+					t.Fatalf("stream tool status = %s, want %s", part.Tool.Status, want)
+				}
+				return
+			}
+		}
+	}
+	t.Fatalf("unresolved tool call missing from live stream messages: %+v", *st.Messages)
+}
+
+func assertNoInterruptedToolInTranscript(t *testing.T) {
+	t.Helper()
+	items := GetTranscript().Items
+	if items == nil {
+		return
+	}
+	for _, item := range *items {
+		if item.Kind != TranscriptKindMessage {
+			continue
+		}
+		msg, ok := item.Data.(Message)
+		if !ok {
+			continue
+		}
+		for _, part := range msg.Parts {
+			if part.Tool != nil && part.Tool.Status == ToolInterrupted {
+				t.Fatalf("in-flight tool call flushed to scrollback as interrupted: %+v", msg)
+			}
+		}
+	}
+}
+
+// Attaching mid-turn must keep the in-flight tool call in the live stream:
+// projecting the timeline while the status is still idle used to mark the
+// unresolved call interrupted and flush it to scrollback, where the later
+// status reconcile duplicated it under the live spinner.
+func TestLoadTimelineSnapshotKeepsInFlightToolInStream(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-run")
+
+	acc.loadTimelineSnapshot(&api.Session{ID: "sess-run", Status: api.StatusExecuting}, snapshotTimeline(), nil)
+
+	st := GetStream()
+	if !st.Streaming || st.Status != api.StatusExecuting {
+		t.Fatalf("expected running stream seeded from snapshot, got %+v", st)
+	}
+	streamToolStatus(t, ToolRunning)
+	assertNoInterruptedToolInTranscript(t)
+}
+
+// A snapshot waiting on a permission must hydrate the tool call as
+// waiting-permission with the request attached, not as interrupted history.
+func TestLoadTimelineSnapshotSeedsWaitingPermissionTool(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-perm")
+
+	acc.loadTimelineSnapshot(&api.Session{
+		ID:     "sess-perm",
+		Status: api.StatusWaitingPermission,
+		PendingPermissions: []api.PermissionRequest{
+			{ID: "perm-1", ToolCallID: "call-1", ToolName: "bash", Summary: "run echo"},
+		},
+	}, snapshotTimeline(), nil)
+
+	st := GetStream()
+	if !st.WaitingPermission {
+		t.Fatalf("expected waiting-permission stream, got %+v", st)
+	}
+	streamToolStatus(t, ToolWaitingPermission)
+	assertNoInterruptedToolInTranscript(t)
+}
+
+// A parent session executing its own turn while children also run must not be
+// labelled as merely delegated: the snapshot proves the parent is working.
+func TestLoadTimelineSnapshotRunningSnapshotIsNotDelegated(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+	UpsertSubagent(runningSubagent("sub-1", "main"))
+
+	acc.loadTimelineSnapshot(&api.Session{ID: "sess-1", Status: api.StatusExecuting}, snapshotTimeline(), nil)
+
+	if st := GetStream(); st.Delegated {
+		t.Fatalf("running parent snapshot with running children must not report Delegated, got %+v", st)
+	}
+}
+
+// ReconcileStreamStatus seeding a running stream is evidence the parent turn
+// itself is executing, so delegated labelling must not fire even while child
+// subagents are also running.
+func TestReconcileStreamStatusRunningSeedsParentTurnActive(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+	UpsertSubagent(runningSubagent("sub-1", "main"))
+
+	acc.ReconcileStreamStatus(&api.Session{ID: "sess-1", Status: api.StatusExecuting})
+
+	if st := GetStream(); st.Delegated {
+		t.Fatalf("snapshot-seeded parent turn must not report Delegated, got %+v", st)
+	}
+}
+
+// Re-entering a running session must preserve when the active turn started
+// (skipping finished turns and between-turn config changes) rather than
+// resetting the spinner timer to zero, while still stamping fresh live turns
+// after completion.
+func TestLoadTimelineSnapshotPreservesInFlightTurnStart(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	turn1Start := now.Add(-2 * time.Minute)
+	turn1Done := now.Add(-90 * time.Second)
+	modelChangeAt := now.Add(-60 * time.Second)
+	turn2Start := now.Add(-22 * time.Second)
+	assistantAt := now.Add(-18 * time.Second)
+
+	entries := []api.TimelineEntry{
+		{
+			ID: "e1", Kind: api.TimelineKindMessage, CreatedAt: turn1Start,
+			Message: &api.Message{
+				ID: "m1", Role: api.RoleUser, CreatedAt: turn1Start,
+				Content: []api.Block{{Type: api.BlockText, Text: "first turn"}},
+			},
+		},
+		{
+			ID: "e2", Kind: api.TimelineKindTurnCompleted, CreatedAt: turn1Done,
+			TurnCompleted: &api.TurnCompletedRecord{TurnID: "t1", Status: api.TurnStatusDone},
+		},
+		{
+			ID: "e3", Kind: api.TimelineKindModel, CreatedAt: modelChangeAt,
+			Model: &api.ModelChange{To: "provider/model-b"},
+		},
+		{
+			ID: "e4", Kind: api.TimelineKindMessage, CreatedAt: turn2Start,
+			Message: &api.Message{
+				ID: "m2", Role: api.RoleUser, CreatedAt: turn2Start,
+				Content: []api.Block{{Type: api.BlockText, Text: "second turn"}},
+			},
+		},
+		{
+			ID: "e5", Kind: api.TimelineKindMessage, CreatedAt: assistantAt,
+			Message: &api.Message{
+				ID: "m3", Role: api.RoleAssistant, CreatedAt: assistantAt,
+				Content: []api.Block{{Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "call-1", Name: "bash", Args: map[string]any{"command": "sleep 5"}}}},
+			},
+		},
+	}
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-timer")
+	acc.loadTimelineSnapshot(&api.Session{
+		ID:        "sess-timer",
+		Status:    api.StatusExecuting,
+		CreatedAt: turn1Start,
+		UpdatedAt: assistantAt,
+	}, entries, nil)
+
+	st := GetStream()
+	if !st.TurnStartedAt.Equal(turn2Start) {
+		t.Fatalf("TurnStartedAt = %v, want %v", st.TurnStartedAt, turn2Start)
+	}
+
+	acc.applyEvent(api.Event{
+		Type:    api.EventCompleted,
+		Payload: api.CompletedEvent{SessionID: "sess-timer"},
+	})
+	if got := GetStream().TurnStartedAt; !got.IsZero() {
+		t.Fatalf("expected TurnStartedAt cleared on completion, got %v", got)
+	}
+
+	beforeLive := time.Now()
+	acc.addPendingUser("m4", "third turn")
+	if got := GetStream().TurnStartedAt; got.Before(beforeLive) {
+		t.Fatalf("live turn TurnStartedAt = %v, want >= %v", got, beforeLive)
+	}
+}
+
+func TestSubagentConversationLoadTimelineSnapshotSeedsTurnStart(t *testing.T) {
+	subStart := time.Now().UTC().Add(-35 * time.Second).Truncate(time.Millisecond)
+	conv := NewSubagentConversation("sub-timer")
+	conv.LoadTimelineSnapshot(&api.Session{
+		ID:        "sub-timer",
+		Status:    api.StatusThinking,
+		CreatedAt: subStart,
+		UpdatedAt: subStart,
+	}, []api.TimelineEntry{
+		{
+			ID: "e-sub", Kind: api.TimelineKindMessage, CreatedAt: subStart,
+			Message: &api.Message{
+				ID: "m-sub", Role: api.RoleUser, CreatedAt: subStart,
+				Content: []api.Block{{Type: api.BlockText, Text: "inspect changes"}},
+			},
+		},
+	}, nil)
+
+	if !conv.IsStreaming() {
+		t.Fatal("expected SubagentConversation to be streaming immediately from snapshot")
+	}
+	startedAt, _, _ := conv.TurnStats()
+	if !startedAt.Equal(subStart) {
+		t.Fatalf("SubagentConversation TurnStats startedAt = %v, want %v", startedAt, subStart)
+	}
+}

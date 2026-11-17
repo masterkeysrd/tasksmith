@@ -129,7 +129,12 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 
 	var sess *api.Session
 	sid := strings.TrimSpace(opts.SessionID)
+	var watchSince string
 	if sid != "" {
+		// Anchor the later subscription to a cursor taken before the snapshot
+		// fetch so anything published while the snapshot was in flight replays
+		// from the daemon ring instead of being lost between fetch and watch.
+		watchSince = client.NewCursor()
 		if loaded, err := c.GetSession(subCtx, sid); err == nil && loaded != nil {
 			sess = loaded
 			title := strings.TrimSpace(opts.Title)
@@ -223,7 +228,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	if sid != "" && sess != nil {
 		FreezeTranscript()
 		if tl, err := c.Timeline(subCtx, sid); err == nil {
-			globalConversation.loadTimeline(tl, sess.PendingQuestions)
+			globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions)
 		}
 		if len(sess.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(sess.PendingPermissions)
@@ -235,14 +240,20 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		if len(sess.Todos) > 0 {
 			SeedTodos(sess.Todos)
 		}
+		globalConversation.ReconcileStreamStatus(sess)
 		showSessionDiagnostics(sess, true)
-		startSessionStreamWatcher(subCtx, sid)
+		startSessionStreamWatcher(subCtx, sid, watchSince)
 	}
 
 	startSessionsWatcher(subCtx)
 }
 
-func startSessionStreamWatcher(ctx context.Context, sessionID string) {
+// startSessionStreamWatcher watches a session's event stream. since anchors
+// the first subscription: callers pass a cursor captured before they fetched
+// GetSession/Timeline so events published during the snapshot fetch are
+// replayed from the daemon's ring instead of falling into the gap between the
+// fetch and the subscription. An empty since subscribes live-only.
+func startSessionStreamWatcher(ctx context.Context, sessionID string, since string) {
 	sessMu.Lock()
 	if streamCancel != nil {
 		streamCancel()
@@ -259,7 +270,6 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string) {
 	go loadSessionUsage(watchCtx, c, sessionID)
 
 	go func() {
-		var since string
 		for {
 			if watchCtx.Err() != nil {
 				return
@@ -267,11 +277,15 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string) {
 			for ev, err := range c.Watch(watchCtx, since, api.SessionStreamTopic(sessionID)) {
 				if err != nil {
 					if client.IsNeedSync(err) {
+						resyncSince := client.NewCursor()
 						loadSessionUsage(watchCtx, c, sessionID)
 						sess, sessErr := c.GetSession(watchCtx, sessionID)
+						if sessErr == nil && sess != nil {
+							SetSession(sess)
+						}
 						if tl, tlErr := c.Timeline(watchCtx, sessionID); tlErr == nil {
 							if sessErr == nil && sess != nil {
-								globalConversation.loadTimeline(tl, sess.PendingQuestions)
+								globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions)
 							} else {
 								globalConversation.loadTimeline(tl)
 							}
@@ -279,8 +293,9 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string) {
 						if sessErr == nil && sess != nil {
 							globalConversation.reconcilePermissions(sess.PendingPermissions)
 							globalConversation.SeedQuestions(sess.PendingQuestions)
+							globalConversation.ReconcileStreamStatus(sess)
 						}
-						since = ""
+						since = resyncSince
 					}
 					break
 				}
@@ -429,7 +444,7 @@ func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 	SetSession(created)
 	globalConversation.setSessionID(created.ID)
 	showSessionDiagnostics(created, false)
-	startSessionStreamWatcher(ctx, created.ID)
+	startSessionStreamWatcher(ctx, created.ID, "")
 	return created, nil
 }
 
@@ -1385,12 +1400,13 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 			updateDraftModel(ctx, c, cfg)
 		}
 	} else {
+		watchSince := client.NewCursor()
 		if loadedSess, err := c.GetSession(ctx, sess.ID); err == nil && loadedSess != nil {
 			SetSession(loadedSess)
 			sess = loadedSess
 		}
 		if tl, err := c.Timeline(ctx, sess.ID); err == nil {
-			globalConversation.loadTimeline(tl, sess.PendingQuestions)
+			globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions)
 		}
 		loadSessionUsage(ctx, c, sess.ID)
 		if len(sess.PendingPermissions) > 0 {
@@ -1403,8 +1419,9 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 		if len(sess.Todos) > 0 {
 			SeedTodos(sess.Todos)
 		}
+		globalConversation.ReconcileStreamStatus(sess)
 		showSessionDiagnostics(sess, false)
-		startSessionStreamWatcher(pCtx, sess.ID)
+		startSessionStreamWatcher(pCtx, sess.ID, watchSince)
 	}
 }
 
@@ -1679,6 +1696,7 @@ func SwitchSession(sessionID string) {
 		if ctx == nil || ctx.Err() != nil {
 			ctx = context.Background()
 		}
+		watchSince := client.NewCursor()
 		loaded, err := c.GetSession(ctx, sessionID)
 		if err != nil {
 			AppendError("Error", err.Error())
@@ -1702,7 +1720,7 @@ func SwitchSession(sessionID string) {
 		ResetForSessionSwitch()
 
 		if tl, err := c.Timeline(ctx, loaded.ID); err == nil {
-			globalConversation.loadTimeline(tl, loaded.PendingQuestions)
+			globalConversation.loadTimelineSnapshot(loaded, tl, loaded.PendingQuestions)
 		}
 		if len(loaded.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(loaded.PendingPermissions)
@@ -1714,8 +1732,9 @@ func SwitchSession(sessionID string) {
 		if len(loaded.Todos) > 0 {
 			SeedTodos(loaded.Todos)
 		}
+		globalConversation.ReconcileStreamStatus(loaded)
 		showSessionDiagnostics(loaded, true)
-		startSessionStreamWatcher(ctx, loaded.ID)
+		startSessionStreamWatcher(ctx, loaded.ID, watchSince)
 	}()
 }
 

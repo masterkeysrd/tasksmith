@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +23,13 @@ import (
 )
 
 const baseURL = "http://unix"
+
+// defaultSSEIdleTimeout bounds how long an SSE connection may deliver no
+// bytes at all before the client tears it down so the caller reconnects. The
+// daemon writes a heartbeat comment every 15 seconds, so four missed
+// intervals mean the connection is half-open and would otherwise leave the
+// session frozen mid-turn forever.
+const defaultSSEIdleTimeout = 60 * time.Second
 
 // Sentinel errors returned by the client package.
 var (
@@ -30,6 +39,7 @@ var (
 	ErrEmptySessionID    = errors.New("client: session ID must not be empty")
 	ErrEmptySubscriberID = errors.New("client: subscriber ID must not be empty")
 	ErrNeedSync          = errors.New("client: stream out of sync")
+	ErrSSEIdle           = errors.New("client: sse stream idle")
 )
 
 // IsNeedSync reports whether err represents a stream cursor desync requiring a full snapshot reload.
@@ -71,12 +81,28 @@ func WithCWD(cwd string) Option {
 	}
 }
 
+// WithSSEIdleTimeout overrides how long an SSE stream may stay silent before
+// the client treats the connection as dead and fails the stream so callers
+// reconnect. The daemon emits heartbeat comments every 15 seconds, so the
+// default (4x that interval) only trips on genuinely half-open connections.
+func WithSSEIdleTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		if d > 0 {
+			c.sseIdleTimeout = d
+		}
+	}
+}
+
 // Client communicates with the TaskSmith Brain Daemon over a Unix domain socket.
 type Client struct {
 	socketPath string
 	cwd        string
 	httpClient *http.Client
 	mux        *eventMux
+
+	// sseIdleTimeout bounds how long an SSE connection may deliver no bytes
+	// before it is torn down for reconnect.
+	sseIdleTimeout time.Duration
 }
 
 // New constructs a new [Client] connected to socketPath.
@@ -94,11 +120,10 @@ func New(socketPath string, opts ...Option) (*Client, error) {
 	}
 
 	c := &Client{
-		socketPath: socketPath,
-		httpClient: &http.Client{
-			Transport: transport,
-		},
-		mux: newEventMux(),
+		socketPath:     socketPath,
+		httpClient:     &http.Client{Transport: transport},
+		mux:            newEventMux(),
+		sseIdleTimeout: defaultSSEIdleTimeout,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -907,7 +932,10 @@ func (c *Client) EventsWithReady(ctx context.Context, subscriberID, since string
 			u += "?" + encoded
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		reqCtx, watchdog, stop := newSSEIdleWatchdog(ctx, c.sseIdleTimeout)
+		defer stop()
+
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, u, nil)
 		if err != nil {
 			yield(api.Event{}, fmt.Errorf("client: build events request: %w", err))
 			return
@@ -923,6 +951,10 @@ func (c *Client) EventsWithReady(ctx context.Context, subscriberID, since string
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			if watchdog.fired.Load() && ctx.Err() == nil {
+				yield(api.Event{}, fmt.Errorf("client: sse stream silent for %s: %w", c.sseIdleTimeout, ErrSSEIdle))
+				return
+			}
 			yield(api.Event{}, err)
 			return
 		}
@@ -944,8 +976,58 @@ func (c *Client) EventsWithReady(ctx context.Context, subscriberID, since string
 			ready(strings.TrimSpace(resp.Header.Get(api.HeaderSubscriberID)))
 		}
 
-		streamSSE(ctx, resp.Body, yield)
+		streamSSE(reqCtx, &sseTouchedReader{Reader: resp.Body, watchdog: watchdog}, yield)
+		if watchdog.fired.Load() && ctx.Err() == nil {
+			yield(api.Event{}, fmt.Errorf("client: sse stream silent for %s: %w", c.sseIdleTimeout, ErrSSEIdle))
+		}
 	}
+}
+
+// sseIdleWatchdog cancels its context once the stream has delivered no bytes
+// for the configured idle interval. The daemon's heartbeat comments reset the
+// timer on healthy connections, so firing means the connection is half-open.
+type sseIdleWatchdog struct {
+	idle  time.Duration
+	last  atomic.Int64
+	fired atomic.Bool
+}
+
+func newSSEIdleWatchdog(ctx context.Context, idle time.Duration) (context.Context, *sseIdleWatchdog, context.CancelFunc) {
+	streamCtx, cancel := context.WithCancel(ctx)
+	w := &sseIdleWatchdog{idle: idle}
+	w.last.Store(time.Now().UnixNano())
+	stop := sync.OnceFunc(cancel)
+	go func() {
+		ticker := time.NewTicker(max(idle/4, 10*time.Millisecond))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-streamCtx.Done():
+				return
+			case <-ticker.C:
+				if time.Since(time.Unix(0, w.last.Load())) >= w.idle {
+					w.fired.Store(true)
+					stop()
+					return
+				}
+			}
+		}
+	}()
+	return streamCtx, w, stop
+}
+
+// sseTouchedReader records every successful read as stream activity.
+type sseTouchedReader struct {
+	io.Reader
+	watchdog *sseIdleWatchdog
+}
+
+func (r *sseTouchedReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 {
+		r.watchdog.last.Store(time.Now().UnixNano())
+	}
+	return n, err
 }
 
 func streamSSE(ctx context.Context, body io.Reader, yield func(api.Event, error) bool) {

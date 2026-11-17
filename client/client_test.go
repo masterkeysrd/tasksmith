@@ -1177,3 +1177,267 @@ func argValue(body map[string]any, key string) any {
 	}
 	return args[key]
 }
+
+// TestSlowWatcherBackpressureNoDrop verifies a watcher whose consumer stalls
+// never silently loses events: the mux blocks the shared connection until the
+// consumer catches up, so the status event behind a chunk burst still arrives.
+func TestSlowWatcherBackpressureNoDrop(t *testing.T) {
+	orig := watcherBufferSize
+	watcherBufferSize = 4
+	defer func() { watcherBufferSize = orig }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dir, err := os.MkdirTemp("", "tsc-bp-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	sockPath := filepath.Join(dir, "t.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	var eventCh = make(chan string, 512)
+
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/events" {
+			http.NotFound(w, r)
+			return
+		}
+		flusher := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set(api.HeaderSubscriberID, "sub-bp")
+		w.WriteHeader(http.StatusOK)
+		connEv := api.Event{Type: api.EventConnected, Payload: api.ConnectedEvent{SubscriberID: "sub-bp"}}
+		data, _ := json.Marshal(connEv)
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", connEv.Type, data)
+		flusher.Flush()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case msg := <-eventCh:
+				_, _ = fmt.Fprint(w, msg)
+				flusher.Flush()
+			}
+		}
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
+
+	c, err := New(sockPath, WithCWD("/test"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wCtx, wCancel := context.WithCancel(ctx)
+	defer wCancel()
+
+	got := make(chan struct{})
+	go func() {
+		// Consumer reads one event, stalls so the small watcher buffer fills
+		// while the burst is published, then drains until it sees the status
+		// event queued behind the burst.
+		first := true
+		for ev, err := range c.Watch(wCtx, "", "topic.bp") {
+			if err != nil {
+				return
+			}
+			if first {
+				first = false
+				time.Sleep(300 * time.Millisecond)
+			}
+			if ev.Type == api.EventStatusChanged {
+				close(got)
+				return
+			}
+		}
+	}()
+
+	for i := range 40 {
+		eventCh <- fmt.Sprintf(`data: {"id":"%d","type":"chunk","topic":"topic.bp","payload":{"session_id":"s1","chunk":{"id":"c1","content":[{"type":"text","text":"x"}]}}}`+"\n\n", i)
+	}
+	eventCh <- `data: {"id":"99999999-9999-7000-8000-000000000000","type":"status_changed","topic":"topic.bp","payload":{"session_id":"s1","status":"executing"}}` + "\n\n"
+
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("status event lost behind a chunk burst: slow consumer caused a silent drop")
+	}
+}
+
+// TestSSEIdleWatchdogReconnects verifies a half-open connection that stops
+// delivering bytes (no events, no heartbeats) is torn down after the read-idle
+// timeout with ErrSSEIdle so callers can reconnect, instead of blocking forever.
+func TestSSEIdleWatchdogReconnects(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dir, err := os.MkdirTemp("", "tsc-idle-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	sockPath := filepath.Join(dir, "t.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/events" {
+			http.NotFound(w, r)
+			return
+		}
+		flusher := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set(api.HeaderSubscriberID, "sub-idle")
+		w.WriteHeader(http.StatusOK)
+		connEv := api.Event{Type: api.EventConnected, Payload: api.ConnectedEvent{SubscriberID: "sub-idle"}}
+		data, _ := json.Marshal(connEv)
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", connEv.Type, data)
+		flusher.Flush()
+		// Then go silent forever: no events, no heartbeat comments.
+		<-r.Context().Done()
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
+
+	c, err := New(sockPath, WithCWD("/test"), WithSSEIdleTimeout(200*time.Millisecond))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var streamErr error
+	watchCtx, wCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer wCancel()
+	for ev, err := range c.Watch(watchCtx, "", "topic.idle") {
+		if err != nil {
+			streamErr = err
+			break
+		}
+		_ = ev
+	}
+	if streamErr == nil {
+		t.Fatal("expected idle stream to fail with ErrSSEIdle, got clean exit")
+	}
+	if !errors.Is(streamErr, ErrSSEIdle) {
+		t.Fatalf("idle stream error = %v, want ErrSSEIdle", streamErr)
+	}
+}
+
+// TestWedgedWatcherReapDeliversNeedSync verifies a watcher whose consumer never
+// catches up is reaped with ErrNeedSync surfaced: after the mux closes the
+// channel, the consumer's drain must end with ErrNeedSync rather than a clean
+// end-of-stream, so the caller reconnects with a snapshot resync instead of
+// silently skipping the events published after its watermark.
+func TestWedgedWatcherReapDeliversNeedSync(t *testing.T) {
+	origBuf, origStall := watcherBufferSize, watcherStallTimeout
+	watcherBufferSize = 2
+	watcherStallTimeout = 50 * time.Millisecond
+	defer func() { watcherBufferSize, watcherStallTimeout = origBuf, origStall }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dir, err := os.MkdirTemp("", "tsc-wedge-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	sockPath := filepath.Join(dir, "t.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	var eventCh = make(chan string, 512)
+
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/events" {
+			http.NotFound(w, r)
+			return
+		}
+		flusher := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set(api.HeaderSubscriberID, "sub-wedge")
+		w.WriteHeader(http.StatusOK)
+		connEv := api.Event{Type: api.EventConnected, Payload: api.ConnectedEvent{SubscriberID: "sub-wedge"}}
+		data, _ := json.Marshal(connEv)
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", connEv.Type, data)
+		flusher.Flush()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case msg := <-eventCh:
+				_, _ = fmt.Fprint(w, msg)
+				flusher.Flush()
+			}
+		}
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
+
+	c, err := New(sockPath, WithCWD("/test"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wCtx, wCancel := context.WithCancel(ctx)
+	defer wCancel()
+
+	type watchOutcome struct {
+		err    error
+		events int
+	}
+	outcome := make(chan watchOutcome, 1)
+	go func() {
+		// The consumer attaches, takes the first event, then parks inside the
+		// loop body past the stall timeout so the small buffer fills and the
+		// mux reaps the watcher while it is away. On wake-up it drains the
+		// buffer and must observe ErrNeedSync at the close instead of a clean
+		// end of stream.
+		var n int
+		var lastErr error
+		first := true
+		for _, err := range c.Watch(wCtx, "", "topic.wedge") {
+			if first {
+				first = false
+				time.Sleep(600 * time.Millisecond)
+			}
+			if err != nil {
+				lastErr = err
+				break
+			}
+			n++
+		}
+		outcome <- watchOutcome{err: lastErr, events: n}
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	for i := range 8 {
+		eventCh <- fmt.Sprintf(`data: {"id":"%d","type":"chunk","topic":"topic.wedge","payload":{"session_id":"s1","chunk":{"id":"c1","content":[{"type":"text","text":"x"}]}}}`+"\n\n", i)
+	}
+
+	select {
+	case res := <-outcome:
+		if res.err == nil {
+			t.Fatalf("wedged watcher drained to a clean end of stream; ErrNeedSync was dropped on reap (drained %d events)", res.events)
+		}
+		if !errors.Is(res.err, ErrNeedSync) {
+			t.Fatalf("wedged watcher error = %v, want ErrNeedSync", res.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wedged watcher never finished draining after reap")
+	}
+}
