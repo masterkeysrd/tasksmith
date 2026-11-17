@@ -2,8 +2,9 @@ package strutils
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // ClosestMatch represents a ranked candidate identifier returned by fuzzy matching.
@@ -13,6 +14,33 @@ type ClosestMatch struct {
 	ID    string
 	Tier  int
 	Score int
+}
+
+// BestRank accumulates the best (lowest Tier, then lowest Score) fuzzy match
+// across multiple candidate fields of a single item.
+type BestRank struct {
+	tier  int
+	score int
+	ok    bool
+}
+
+// Consider records (tier, score) when ok is true and it improves on the best
+// match recorded so far.
+func (b *BestRank) Consider(tier, score int, ok bool) {
+	if !ok {
+		return
+	}
+	if !b.ok || tier < b.tier || (tier == b.tier && score < b.score) {
+		b.tier = tier
+		b.score = score
+		b.ok = true
+	}
+}
+
+// Result returns the best (tier, score, true) recorded, or (0, 0, false) when
+// no candidate matched.
+func (b BestRank) Result() (tier, score int, ok bool) {
+	return b.tier, b.score, b.ok
 }
 
 // Levenshtein returns the rune-wise Levenshtein edit distance between a and b.
@@ -44,11 +72,23 @@ func Levenshtein(a, b string) int {
 	return prev[len(rb)]
 }
 
+// DefaultEditThreshold returns a conservative maximum Levenshtein edit distance
+// for typo recovery between query and target (one-third of the shorter string's
+// rune length, with a floor of 1 for non-empty inputs).
+func DefaultEditThreshold(query, target string) int {
+	n := min(utf8.RuneCountInString(query), utf8.RuneCountInString(target))
+	if n <= 0 {
+		return 0
+	}
+	return max(1, n/3)
+}
+
 // RankMatch evaluates how closely target matches query (case-insensitively),
 // classifying matches across three tiers:
 //   - Tier 0: exact equality (score 0)
-//   - Tier 1: non-empty substring containment (score = Levenshtein(q, t))
-//   - Tier 2: bounded edit distance <= maxDist (score = Levenshtein(q, t))
+//   - Tier 1: target contains query as a substring (score = Levenshtein(q, t))
+//   - Tier 2: bounded edit distance <= maxDist between comparably sized strings
+//     (score = Levenshtein(q, t)); pass maxDist < 0 to disable edit-distance matching.
 func RankMatch(query, target string, maxDist int) (tier, score int, ok bool) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	t := strings.ToLower(strings.TrimSpace(target))
@@ -58,14 +98,68 @@ func RankMatch(query, target string, maxDist int) (tier, score int, ok bool) {
 	if q == t {
 		return 0, 0, true
 	}
-	dist := Levenshtein(q, t)
-	if strings.Contains(t, q) || strings.Contains(q, t) {
-		return 1, dist, true
+	if strings.Contains(t, q) {
+		return 1, Levenshtein(q, t), true
 	}
-	if maxDist >= 0 && dist <= maxDist {
+	if maxDist < 0 {
+		return 0, 0, false
+	}
+	ql := utf8.RuneCountInString(q)
+	tl := utf8.RuneCountInString(t)
+	if max(ql, tl)-min(ql, tl) > max(2, min(ql, tl)/2) {
+		return 0, 0, false
+	}
+	if dist := Levenshtein(q, t); dist <= maxDist {
 		return 2, dist, true
 	}
 	return 0, 0, false
+}
+
+// RankBy filters items to those for which match returns ok == true and orders
+// them by ascending (tier, score, key(item)). If limit > 0, the returned slice
+// is capped to limit elements; total always reports the full match count prior
+// to truncation.
+func RankBy[T any](items []T, limit int, key func(T) string, match func(T) (tier, score int, ok bool)) (ranked []T, total int) {
+	type entry struct {
+		item  T
+		key   string
+		tier  int
+		score int
+	}
+	var matched []entry
+	for _, it := range items {
+		tier, score, ok := match(it)
+		if !ok {
+			continue
+		}
+		matched = append(matched, entry{
+			item:  it,
+			key:   key(it),
+			tier:  tier,
+			score: score,
+		})
+	}
+	slices.SortFunc(matched, func(a, b entry) int {
+		if a.tier != b.tier {
+			return a.tier - b.tier
+		}
+		if a.score != b.score {
+			return a.score - b.score
+		}
+		return strings.Compare(a.key, b.key)
+	})
+	total = len(matched)
+	if limit > 0 && len(matched) > limit {
+		matched = matched[:limit]
+	}
+	if len(matched) == 0 {
+		return nil, 0
+	}
+	out := make([]T, len(matched))
+	for i, e := range matched {
+		out[i] = e.item
+	}
+	return out, total
 }
 
 // TopClosestIDs deduplicates matches by ID (keeping each ID's lowest Tier and
@@ -81,24 +175,16 @@ func TopClosestIDs(matches []ClosestMatch, limit int) []string {
 			bestByID[m.ID] = m
 		}
 	}
-	ordered := make([]ClosestMatch, 0, len(bestByID))
+	unique := make([]ClosestMatch, 0, len(bestByID))
 	for _, m := range bestByID {
-		ordered = append(ordered, m)
+		unique = append(unique, m)
 	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].Tier != ordered[j].Tier {
-			return ordered[i].Tier < ordered[j].Tier
-		}
-		if ordered[i].Score != ordered[j].Score {
-			return ordered[i].Score < ordered[j].Score
-		}
-		return ordered[i].ID < ordered[j].ID
-	})
-	if len(ordered) > limit {
-		ordered = ordered[:limit]
-	}
-	out := make([]string, len(ordered))
-	for i, m := range ordered {
+	ranked, _ := RankBy(unique, limit,
+		func(m ClosestMatch) string { return m.ID },
+		func(m ClosestMatch) (int, int, bool) { return m.Tier, m.Score, true },
+	)
+	out := make([]string, len(ranked))
+	for i, m := range ranked {
 		out[i] = m.ID
 	}
 	return out
@@ -111,14 +197,13 @@ func SuggestClosestStrings(query string, targets []string, limit int) []string {
 	if q == "" || len(targets) == 0 || limit <= 0 {
 		return nil
 	}
-	var matches []ClosestMatch
-	for _, target := range targets {
-		maxDist := max(2, max(len(q), len(target))/2+1)
-		if tier, score, ok := RankMatch(q, target, maxDist); ok {
-			matches = append(matches, ClosestMatch{ID: target, Tier: tier, Score: score})
-		}
-	}
-	return TopClosestIDs(matches, limit)
+	ranked, _ := RankBy(targets, limit,
+		func(s string) string { return s },
+		func(target string) (int, int, bool) {
+			return RankMatch(q, target, DefaultEditThreshold(q, target))
+		},
+	)
+	return ranked
 }
 
 // FormatDidYouMean formats ranked suggestions as " (did you mean \"a\", \"b\"?)"

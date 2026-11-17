@@ -141,6 +141,38 @@ func TestManageAgentsToolWidget(t *testing.T) {
 	if !strings.Contains(got, "Killed agent") || !strings.Contains(got, "sub-123") || !strings.Contains(got, "(idle)") {
 		t.Fatalf("expected killed agent sub-123 (idle), got %q", got)
 	}
+
+	// Models listing
+	modelsCall := &api.ToolCall{
+		Name: "manage_agents",
+		Args: map[string]any{"action": "models"},
+	}
+	modelsResp := &api.Message{
+		Name:              "manage_agents",
+		StructuredContent: []byte(`{"models":[{"id":"alpha/alpha-fast","provider":"alpha"},{"id":"beta/beta-fast","provider":"beta"}]}`),
+	}
+	got = render(MessageTool(MessageToolProps{
+		Tool: store.ToolPart{Call: modelsCall, Response: modelsResp, Status: store.ToolSucceeded},
+	}))
+	if !strings.Contains(got, "Listed models") || !strings.Contains(got, "(2 models)") {
+		t.Fatalf("expected listed 2 models, got %q", got)
+	}
+
+	// Models search with query
+	searchCall := &api.ToolCall{
+		Name: "manage_agents",
+		Args: map[string]any{"action": "models", "query": "qwen"},
+	}
+	searchResp := &api.Message{
+		Name:              "manage_agents",
+		StructuredContent: []byte(`{"models":[{"id":"ollama/qwen3","provider":"ollama"}]}`),
+	}
+	got = render(MessageTool(MessageToolProps{
+		Tool: store.ToolPart{Call: searchCall, Response: searchResp, Status: store.ToolSucceeded},
+	}))
+	if !strings.Contains(got, `Searched models "qwen"`) || !strings.Contains(got, "(1 model)") {
+		t.Fatalf("expected searched models qwen (1 model), got %q", got)
+	}
 }
 
 func TestTasksComponentUnifiedSubagentsAndTasks(t *testing.T) {

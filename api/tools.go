@@ -229,10 +229,27 @@ type ManageAgentsAgent struct {
 	Error     string `json:"error,omitempty" jsonschema:"Error message if the subagent turn failed."`
 }
 
+// ManageAgentsModel represents an item in models.
+type ManageAgentsModel struct {
+	ID               string   `json:"id" jsonschema:"Qualified model identifier (\"<provider>/<model>\") to pass as invoke_agent's model parameter."`
+	Provider         string   `json:"provider" jsonschema:"Provider name owning the model."`
+	Aliases          []string `json:"aliases,omitempty" jsonschema:"Alternate references this model answers to ('@fast', 'provider/@balanced', ...)."`
+	Attachment       bool     `json:"attachment,omitempty" jsonschema:"Whether the model accepts image or file attachments."`
+	ContextLimit     int      `json:"context_limit,omitempty" jsonschema:"Maximum context window in tokens."`
+	Description      string   `json:"description,omitempty" jsonschema:"Short human-readable summary of what the model is good at."`
+	Name             string   `json:"name,omitempty" jsonschema:"Display name of the model."`
+	StructuredOutput bool     `json:"structured_output,omitempty" jsonschema:"Whether the model supports structured (JSON schema) output."`
+	Tools            bool     `json:"tools,omitempty" jsonschema:"Whether the model supports tool calling."`
+}
+
 // ManageAgentsInput defines the input parameters for the manage_agents tool.
 type ManageAgentsInput struct {
-	Action    string `json:"action" jsonschema:"The action to perform: 'list', 'status', 'send', or 'kill'."`
+	Action    string `json:"action" jsonschema:"The action to perform: 'list', 'status', 'send', 'kill', or 'models'."`
+	Agent     string `json:"agent,omitempty" jsonschema:"Optional subagent name for the 'models' action (must be in the session's subagent roster); intersects candidates against that subagent's spec.models allowlist."`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Optional maximum number of models to return for the 'models' action (default 20, max 50)."`
 	Message   string `json:"message,omitempty" jsonschema:"Message to send to the subagent (required for 'send')."`
+	Provider  string `json:"provider,omitempty" jsonschema:"Optional provider name filter for the 'models' action."`
+	Query     string `json:"query,omitempty" jsonschema:"Optional fuzzy search term for the 'models' action (matches model ID, display name, description, and @aliases)."`
 	SessionID string `json:"session_id,omitempty" jsonschema:"The session ID of the subagent (required for 'status', 'send', and 'kill')."`
 }
 
@@ -241,6 +258,7 @@ type ManageAgentsOutput struct {
 	Agent     string              `json:"agent,omitempty" jsonschema:"Agent name of the target subagent."`
 	Agents    []ManageAgentsAgent `json:"agents,omitempty" jsonschema:"List of child subagents (returned for 'list')."`
 	Message   string              `json:"message,omitempty" jsonschema:"Human-readable summary of the action result."`
+	Models    []ManageAgentsModel `json:"models,omitempty" jsonschema:"Model summaries (returned for 'models')."`
 	Output    string              `json:"output,omitempty" jsonschema:"Latest assistant response text from the subagent (returned for 'status')."`
 	SessionID string              `json:"session_id,omitempty" jsonschema:"Session ID of the target subagent."`
 	Status    string              `json:"status,omitempty" jsonschema:"Current status of the target subagent."`

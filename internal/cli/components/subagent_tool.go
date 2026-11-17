@@ -128,10 +128,14 @@ var ManageAgentsToolWidget = trail.FC("ManageAgentsToolWidget", func(props Manag
 	scheme := theme.UseTheme()
 	tool := props.Tool
 	status := tool.Status
-	isDone := status == store.ToolSucceeded || status == store.ToolFailed
 
 	input := parseToolInput[api.ManageAgentsInput](tool.Call)
 	output := parseToolOutput[api.ManageAgentsOutput](tool.Response)
+
+	if status == store.ToolFailed || (tool.Response != nil && tool.Response.IsError) {
+		status = store.ToolFailed
+	}
+	isDone := status == store.ToolSucceeded || status == store.ToolFailed
 
 	var verb string
 	var target string
@@ -149,6 +153,27 @@ var ManageAgentsToolWidget = trail.FC("ManageAgentsToolWidget", func(props Manag
 				suffix = " (1 agent)"
 			} else {
 				suffix = fmt.Sprintf(" (%d agents)", n)
+			}
+		}
+	case "models":
+		if q := strings.TrimSpace(input.Query); q != "" {
+			verb = "Searching models"
+			if isDone {
+				verb = "Searched models"
+			}
+			target = fmt.Sprintf("%q", q)
+		} else {
+			verb = "Listing models"
+			if isDone {
+				verb = "Listed models"
+			}
+		}
+		if tool.Response != nil && !tool.Response.IsError {
+			n := len(output.Models)
+			if n == 1 {
+				suffix = " (1 model)"
+			} else {
+				suffix = fmt.Sprintf(" (%d models)", n)
 			}
 		}
 	case "status":

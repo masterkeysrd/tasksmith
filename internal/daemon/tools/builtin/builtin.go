@@ -176,7 +176,7 @@ func New(cfg Config) ([]tools.Tool, error) {
 				factory func(meta tools.Metadata) tools.Tool
 			}{
 				ToolManageAgents, func(m tools.Metadata) tools.Tool {
-					return tools.NewHandler(ToolManageAgents, m, &manageAgentsTool{agents: cfg.Agents})
+					return tools.NewHandler(ToolManageAgents, m, newManageAgentsTool(cfg.Agents, cfg.Subagents))
 				},
 			},
 		)

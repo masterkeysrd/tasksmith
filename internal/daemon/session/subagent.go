@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -322,63 +323,7 @@ func unresolvedModelHint(cat *workspace.Catalog, listed []models.Model, requeste
 // suggestClosestModels returns up to 3 closest model IDs from listed for typo
 // recovery, or an empty string if no reasonable matches exist.
 func suggestClosestModels(listed []models.Model, requested string) string {
-	if len(listed) == 0 {
-		return ""
-	}
-	query := strings.ToLower(strings.TrimSpace(requested))
-	if query == "" {
-		return ""
-	}
-	queryNoAt := strings.TrimPrefix(query, "@")
-	queryProv := strings.ToLower(models.ID(requested).Provider())
-	queryName := strings.TrimPrefix(strings.ToLower(models.ID(requested).Name()), "@")
-	if queryName == "" {
-		queryName = queryNoAt
-	}
-
-	var matches []strutils.ClosestMatch
-	for _, m := range listed {
-		id := string(m.ID)
-		lowerID := strings.ToLower(id)
-		lowerName := strings.ToLower(m.ID.Name())
-		lowerProv := strings.ToLower(m.ID.Provider())
-
-		bestTier, bestScore := 99, 1<<20
-		consider := func(tier, score int) {
-			if tier < bestTier || (tier == bestTier && score < bestScore) {
-				bestTier, bestScore = tier, score
-			}
-		}
-
-		for _, alias := range m.Aliases {
-			if tier, score, ok := strutils.RankMatch(queryNoAt, alias, max(2, len(alias)/2)); ok {
-				consider(tier, score)
-			}
-			if strings.EqualFold(strings.TrimSpace(alias), queryName) {
-				consider(0, 0)
-			}
-		}
-
-		switch {
-		case lowerID == query || lowerName == queryName:
-			consider(0, 0)
-		case strings.Contains(lowerID, queryNoAt) || (queryName != "" && strings.Contains(lowerName, queryName)):
-			consider(1, strutils.Levenshtein(query, lowerID))
-		default:
-			dID := strutils.Levenshtein(query, lowerID)
-			dName := strutils.Levenshtein(queryName, lowerName)
-			thresholdID := max(3, max(len(query), len(lowerID))/2+1)
-			thresholdName := max(2, max(len(queryName), len(lowerName))/2+1)
-			if dID <= thresholdID || dName <= thresholdName || (queryProv != "" && lowerProv == queryProv) {
-				consider(2, min(dID, dName))
-			}
-		}
-
-		if bestTier <= 2 {
-			matches = append(matches, strutils.ClosestMatch{ID: id, Tier: bestTier, Score: bestScore})
-		}
-	}
-	return strutils.FormatDidYouMean(strutils.TopClosestIDs(matches, 3))
+	return strutils.FormatDidYouMean(models.SuggestClosest(listed, requested, 3))
 }
 
 // isAliasRequest reports whether a reference is alias-shaped ("@fast",
@@ -522,9 +467,13 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 	return child.startTurn(hInput)
 }
 
-// ManageSubagents handles management operations (list, status, send, kill) on child subagent sessions.
+// ManageSubagents handles management operations (list, status, send, kill,
+// models) on child subagent sessions and model discovery.
 func (s *Session) ManageSubagents(ctx context.Context, in api.ManageAgentsInput) (api.ManageAgentsOutput, error) {
 	switch in.Action {
+	case "models":
+		return s.listSubagentModels(in)
+
 	case "list":
 		children := s.Children()
 		agents := make([]api.ManageAgentsAgent, 0, len(children))
@@ -633,6 +582,119 @@ func (s *Session) ManageSubagents(ctx context.Context, in api.ManageAgentsInput)
 	default:
 		return api.ManageAgentsOutput{}, fmt.Errorf("%w: unsupported action %q", std.ErrInvalidArgument, in.Action)
 	}
+}
+
+const (
+	subagentModelListDefaultLimit = 20
+	subagentModelListMaxLimit     = 50
+)
+
+// listSubagentModels backs the manage_agents "models" action: it returns
+// bounded summaries of completion-capable models subagents can run on,
+// optionally fuzzy-filtered by query and provider and intersected with a
+// specific subagent's spec.models allowlist, so orchestrators can discover
+// valid invoke_agent model overrides without the full catalog living in the
+// system prompt.
+func (s *Session) listSubagentModels(in api.ManageAgentsInput) (api.ManageAgentsOutput, error) {
+	limit := in.Limit
+	switch {
+	case limit <= 0:
+		limit = subagentModelListDefaultLimit
+	case limit > subagentModelListMaxLimit:
+		limit = subagentModelListMaxLimit
+	}
+
+	provider := strings.ToLower(strings.TrimSpace(in.Provider))
+	query := strings.ToLower(strings.TrimSpace(in.Query))
+
+	// An agent filter intersects candidates against that subagent's resolved
+	// spec.models allowlist. ResolveModelsWithParent with an explicit requested
+	// reference enforces the same literal/alias/@inherit/glob/negation
+	// semantics invoke_agent applies, per candidate; agents with an empty
+	// spec.models accept any model and stay unrestricted.
+	var isAllowed func(id string) bool
+	if agent := strings.TrimSpace(in.Agent); agent != "" {
+		cat := s.workspace.Catalog()
+		resolved, err := cat.ResolveAgent(agent)
+		if err != nil || resolved == nil || resolved.Agent == nil {
+			return api.ManageAgentsOutput{}, fmt.Errorf("%w: unknown subagent %q", std.ErrInvalidArgument, agent)
+		}
+		parentModel := strings.TrimSpace(s.configSnapshot().Model)
+		if len(resolved.Agent.Spec.Models) > 0 {
+			isAllowed = func(id string) bool {
+				effectiveParent := ""
+				if parentModel != "" && strings.EqualFold(id, parentModel) {
+					effectiveParent = parentModel
+				}
+				candidates, err := resolved.ResolveModelsWithParent(cat.Resolver(), effectiveParent, id)
+				if err != nil {
+					return false
+				}
+				return hasDeclaredModelCandidate(candidates)
+			}
+		}
+	}
+
+	var listed []models.Model
+	if modelsCat := s.modelCatalog(); modelsCat != nil {
+		listed = modelsCat.List()
+	}
+
+	var candidates []models.Model
+	for _, m := range listed {
+		if !m.SupportsCompletion() {
+			continue
+		}
+		if provider != "" && !strings.EqualFold(m.ID.Provider(), provider) {
+			continue
+		}
+		if isAllowed != nil && !isAllowed(string(m.ID)) {
+			continue
+		}
+		candidates = append(candidates, m)
+	}
+
+	matched, total := strutils.RankBy(candidates, limit,
+		func(m models.Model) string { return string(m.ID) },
+		func(m models.Model) (int, int, bool) {
+			if query == "" {
+				return 0, 0, true
+			}
+			return models.RankMatch(query, m)
+		},
+	)
+	truncated := total > limit
+
+	summaries := make([]api.ManageAgentsModel, len(matched))
+	for i, m := range matched {
+		summaries[i] = subagentModelSummary(m)
+	}
+
+	message := fmt.Sprintf("Found %d models", len(summaries))
+	if query != "" {
+		message = fmt.Sprintf("Found %d models matching %q", len(summaries), strings.TrimSpace(in.Query))
+	}
+	if truncated {
+		message += fmt.Sprintf(" (showing first %d)", limit)
+	}
+	return api.ManageAgentsOutput{Models: summaries, Message: message}, nil
+}
+
+// subagentModelSummary projects a catalog model onto the compact summary the
+// manage_agents "models" action returns.
+func subagentModelSummary(m models.Model) api.ManageAgentsModel {
+	out := api.ManageAgentsModel{
+		ID:           string(m.ID),
+		Provider:     m.ID.Provider(),
+		Name:         cmp.Or(m.Name, string(m.ID.Name())),
+		Description:  m.Description,
+		Aliases:      m.AliasRefs(),
+		ContextLimit: m.Limits.Context,
+	}
+	out.Tools = m.Capabilities.Tools != nil && *m.Capabilities.Tools
+	out.Attachment = m.Capabilities.Attachment != nil && *m.Capabilities.Attachment
+	out.StructuredOutput = m.Capabilities.StructuredOutput != nil && *m.Capabilities.StructuredOutput
+	return out
 }
 
 func (s *Session) updateActivityFromThought(thought string) {

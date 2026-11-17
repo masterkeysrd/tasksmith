@@ -21,6 +21,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -1083,8 +1084,17 @@ func TestMainAgentPromptSurfacesSubagentModelTiers(t *testing.T) {
 	if !strings.Contains(prompt, "<allowed_models> @fast @inherit</allowed_models>") {
 		t.Errorf("main prompt missing explore allowed_models:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "Model Routing") {
-		t.Errorf("main prompt missing model routing guidance")
+	if strings.Contains(prompt, "### `invoke_agent` tool") || strings.Contains(prompt, "### `manage_agents` tool") {
+		t.Errorf("main prompt should not duplicate subagent tool mechanics already on *.tool.md")
+	}
+
+	invokeTool, ok := cat.GetTool("invoke_agent")
+	if !ok || !strings.Contains(invokeTool.Spec.Instructions, "Model Routing") {
+		t.Errorf("invoke_agent.tool.md missing Model Routing guidance: %+v", invokeTool)
+	}
+	manageTool, ok := cat.GetTool("manage_agents")
+	if !ok || !strings.Contains(manageTool.Spec.Instructions, `action: "models"`) {
+		t.Errorf("manage_agents.tool.md missing models discovery guidance: %+v", manageTool)
 	}
 }
 
@@ -1131,6 +1141,19 @@ spec:
 		if err := os.WriteFile(filepath.Join(provDir, name+".provider.yaml"), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	agentsDir := filepath.Join(wsDir, ".agents", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	globAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: globalpha\nspec:\n  triggers: [agent]\n  models: [\"alpha/*\"]\n---\nglob alpha\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "globalpha.agent.md"), []byte(globAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	anyAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: anymodel\nspec:\n  triggers: [agent]\n---\nany model\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "anymodel.agent.md"), []byte(anyAgent), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	ws, err := workspace.Open(context.Background(), wsDir, workspace.WithBuiltinFS(builtin.FS()))
@@ -1233,6 +1256,167 @@ func TestResolveSubagentModelUnresolvableAliasRejected(t *testing.T) {
 	if strings.HasPrefix(got, "@") {
 		t.Fatalf("explore default model = %q, want resolvable reference or empty", got)
 	}
+}
+
+// TestManageSubagentsModelsDiscovery verifies the manage_agents "models"
+// action: full listing, provider filtering, fuzzy query ranking, intersection
+// with a subagent's spec.models allowlist, bounded limit, and unknown-agent
+// rejection.
+func TestManageSubagentsModelsDiscovery(t *testing.T) {
+	ws, cat := setupMultiTierTestEnv(t)
+
+	parent := &Session{workspace: ws, catalog: func() *models.Catalog { return cat }}
+	parent.Config.Model = "beta/beta-balanced-model"
+
+	modelIDs := func(out api.ManageAgentsOutput) map[string]bool {
+		set := make(map[string]bool, len(out.Models))
+		for _, m := range out.Models {
+			set[m.ID] = true
+		}
+		return set
+	}
+
+	t.Run("list all", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models"})
+		if err != nil {
+			t.Fatalf("models list: %v", err)
+		}
+		if len(out.Models) != 4 {
+			t.Fatalf("models = %d, want 4: %+v", len(out.Models), out.Models)
+		}
+		if out.Message != "Found 4 models" {
+			t.Errorf("message = %q, want %q", out.Message, "Found 4 models")
+		}
+		for _, m := range out.Models {
+			if m.Provider == "" || m.ID == "" {
+				t.Errorf("summary missing id/provider: %+v", m)
+			}
+		}
+	})
+
+	t.Run("provider filter", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Provider: "beta"})
+		if err != nil {
+			t.Fatalf("models provider filter: %v", err)
+		}
+		if len(out.Models) != 2 {
+			t.Fatalf("models = %d, want 2: %+v", len(out.Models), out.Models)
+		}
+		for _, m := range out.Models {
+			if m.Provider != "beta" {
+				t.Errorf("model %q outside provider filter", m.ID)
+			}
+		}
+	})
+
+	t.Run("fuzzy query matches aliases", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Query: "fast"})
+		if err != nil {
+			t.Fatalf("models query: %v", err)
+		}
+		got := modelIDs(out)
+		if !got["alpha/alpha-fast-model"] || !got["beta/beta-fast-model"] {
+			t.Fatalf("fast-tier models missing: %+v", out.Models)
+		}
+		if len(out.Models) != 2 {
+			t.Fatalf("models = %d, want 2: %+v", len(out.Models), out.Models)
+		}
+		if !strings.Contains(out.Message, `matching "fast"`) {
+			t.Errorf("message = %q, want matching query", out.Message)
+		}
+	})
+
+	t.Run("agent allowlist intersection", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Agent: "explore"})
+		if err != nil {
+			t.Fatalf("models agent filter: %v", err)
+		}
+		got := modelIDs(out)
+		if !got["alpha/alpha-fast-model"] || !got["beta/beta-fast-model"] || !got["beta/beta-balanced-model"] {
+			t.Fatalf("allowlisted models missing: %+v", out.Models)
+		}
+		if got["alpha/alpha-balanced-model"] {
+			t.Fatalf("alpha/alpha-balanced-model outside explore allowlist: %+v", out.Models)
+		}
+	})
+
+	t.Run("agent with wildcard spec.models", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Agent: "general"})
+		if err != nil {
+			t.Fatalf("models general agent: %v", err)
+		}
+		if len(out.Models) != 4 {
+			t.Fatalf("models = %d, want 4 (general allows @inherit + \"*\"): %+v", len(out.Models), out.Models)
+		}
+	})
+
+	t.Run("agent with glob-only spec.models", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Agent: "globalpha"})
+		if err != nil {
+			t.Fatalf("models glob agent: %v", err)
+		}
+		if len(out.Models) != 2 {
+			t.Fatalf("models = %d, want 2 (alpha/* only): %+v", len(out.Models), out.Models)
+		}
+		for _, m := range out.Models {
+			if m.Provider != "alpha" {
+				t.Errorf("model %q outside alpha/* glob", m.ID)
+			}
+		}
+	})
+
+	t.Run("agent with empty spec.models allows all", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Agent: "anymodel"})
+		if err != nil {
+			t.Fatalf("models empty-allowlist agent: %v", err)
+		}
+		if len(out.Models) != 4 {
+			t.Fatalf("models = %d, want 4 (empty spec.models allows any): %+v", len(out.Models), out.Models)
+		}
+	})
+
+	t.Run("aliases returned as @refs", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Query: "fast"})
+		if err != nil {
+			t.Fatalf("models query: %v", err)
+		}
+		for _, m := range out.Models {
+			for _, alias := range m.Aliases {
+				if !strings.HasPrefix(alias, "@") {
+					t.Errorf("model %q alias %q missing @ prefix", m.ID, alias)
+				}
+			}
+		}
+	})
+
+	t.Run("specific query does not over-match aliases", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Query: "deepseek-fast-coder"})
+		if err != nil {
+			t.Fatalf("models specific query: %v", err)
+		}
+		if len(out.Models) != 0 {
+			t.Fatalf("models = %+v, want no matches (query must not match via reverse containment)", out.Models)
+		}
+	})
+
+	t.Run("bounded limit", func(t *testing.T) {
+		out, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Limit: 1})
+		if err != nil {
+			t.Fatalf("models limit: %v", err)
+		}
+		if len(out.Models) != 1 {
+			t.Fatalf("models = %d, want 1: %+v", len(out.Models), out.Models)
+		}
+		if !strings.Contains(out.Message, "(showing first 1)") {
+			t.Errorf("message = %q, want truncation notice", out.Message)
+		}
+	})
+
+	t.Run("unknown agent rejected", func(t *testing.T) {
+		if _, err := parent.ManageSubagents(context.Background(), api.ManageAgentsInput{Action: "models", Agent: "nope"}); !errors.Is(err, std.ErrInvalidArgument) {
+			t.Fatalf("unknown agent err = %v, want ErrInvalidArgument", err)
+		}
+	})
 }
 
 // TestResolveSubagentModelWildcardsAndFuzzyHints verifies:

@@ -39,6 +39,47 @@ func TestRankMatch(t *testing.T) {
 	if _, _, ok := strutils.RankMatch("xyz", "completely-different", 2); ok {
 		t.Fatal("expected distant strings not to match")
 	}
+	// Reverse containment ("query contains target") must not match short targets.
+	if _, _, ok := strutils.RankMatch("deepseek-fast-coder", "fast", 10); ok {
+		t.Fatal("expected long query not to match short target via reverse containment")
+	}
+	// Substring-only mode (maxDist < 0) permits containment and rejects typos.
+	if tier, _, ok := strutils.RankMatch("sonnet", "Claude Sonnet 4.6", -1); !ok || tier != 1 {
+		t.Fatalf("expected substring match with maxDist=-1, got tier=%d ok=%v", tier, ok)
+	}
+	if _, _, ok := strutils.RankMatch("ollxma", "ollama", -1); ok {
+		t.Fatal("expected edit-distance match to be disabled when maxDist < 0")
+	}
+}
+
+func TestBestRankAndRankBy(t *testing.T) {
+	type item struct {
+		id      string
+		aliases []string
+	}
+	items := []item{
+		{id: "gamma", aliases: []string{"fast-lite"}},
+		{id: "beta", aliases: []string{"fast"}},
+		{id: "alpha", aliases: []string{"fast-pro"}},
+		{id: "delta", aliases: []string{"unrelated"}},
+	}
+	ranked, total := strutils.RankBy(items, 2,
+		func(it item) string { return it.id },
+		func(it item) (int, int, bool) {
+			var best strutils.BestRank
+			best.Consider(strutils.RankMatch("fast", it.id, 1))
+			for _, a := range it.aliases {
+				best.Consider(strutils.RankMatch("fast", a, 1))
+			}
+			return best.Result()
+		},
+	)
+	if total != 3 {
+		t.Fatalf("total = %d, want 3", total)
+	}
+	if len(ranked) != 2 || ranked[0].id != "beta" || ranked[1].id != "alpha" {
+		t.Fatalf("ranked = %+v, want [beta (tier 0), alpha (tier 1 shorter/alpha)]", ranked)
+	}
 }
 
 func TestTopClosestIDsAndSuggestClosestStrings(t *testing.T) {
@@ -56,8 +97,8 @@ func TestTopClosestIDsAndSuggestClosestStrings(t *testing.T) {
 	}
 
 	gotStrings := strutils.SuggestClosestStrings("explre", []string{"explore", "general", "planner", "extra"}, 2)
-	if !slices.Equal(gotStrings, []string{"explore"}) && (len(gotStrings) == 0 || gotStrings[0] != "explore") {
-		t.Fatalf("SuggestClosestStrings = %v, want explore first", gotStrings)
+	if !slices.Equal(gotStrings, []string{"explore"}) {
+		t.Fatalf("SuggestClosestStrings = %v, want [explore]", gotStrings)
 	}
 
 	if gotFmt := strutils.FormatDidYouMean(nil); gotFmt != "" {

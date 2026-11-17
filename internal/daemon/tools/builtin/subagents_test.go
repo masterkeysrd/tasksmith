@@ -337,6 +337,27 @@ func TestManageAgentsPrepareAndExecute(t *testing.T) {
 		t.Errorf("planList.ReadOnly = %v, want true", planList.ReadOnly)
 	}
 
+	// Prepare models
+	planModels, err := container.Prepare(ctx, &message.ToolCall{
+		Name: builtin.ToolManageAgents,
+		Args: map[string]any{"action": "models", "query": "fast"},
+	})
+	if err != nil {
+		t.Fatalf("Prepare models failed: %v", err)
+	}
+	if !planModels.ReadOnly {
+		t.Errorf("planModels.ReadOnly = %v, want true", planModels.ReadOnly)
+	}
+
+	// Prepare models with a non-roster agent is rejected like invoke_agent
+	_, err = container.Prepare(ctx, &message.ToolCall{
+		Name: builtin.ToolManageAgents,
+		Args: map[string]any{"action": "models", "agent": "main"},
+	})
+	if !errors.Is(err, std.ErrInvalidArgument) {
+		t.Errorf("Prepare models with non-roster agent error = %v, want %v", err, std.ErrInvalidArgument)
+	}
+
 	// Prepare send
 	planSend, err := container.Prepare(ctx, &message.ToolCall{
 		Name: builtin.ToolManageAgents,
@@ -382,5 +403,43 @@ func TestManageAgentsPrepareAndExecute(t *testing.T) {
 	}
 	if len(out.Agents) != 1 || out.Agents[0].SessionID != "child-1" {
 		t.Errorf("unexpected list output: %+v", out)
+	}
+
+	// Execute models normalizes discovery args before delegating
+	var modelsIn api.ManageAgentsInput
+	mgr.manageFunc = func(c context.Context, in api.ManageAgentsInput) (api.ManageAgentsOutput, error) {
+		modelsIn = in
+		return api.ManageAgentsOutput{
+			Models:  []api.ManageAgentsModel{{ID: "alpha/alpha-fast", Provider: "alpha"}},
+			Message: `Found 1 models matching "fast"`,
+		}, nil
+	}
+
+	modelsRes, err := container.Execute(ctx, &message.ToolCall{
+		ID:   "call-models",
+		Name: builtin.ToolManageAgents,
+		Args: map[string]any{"action": "models ", "query": "  fast ", "provider": " alpha ", "agent": " GENERAL ", "limit": 5},
+	})
+	if err != nil || modelsRes.IsError {
+		t.Fatalf("Execute models failed: %v, content=%s", err, modelsRes.Content.Text())
+	}
+	modelsOut, ok := modelsRes.StructuredContent.(api.ManageAgentsOutput)
+	if !ok {
+		t.Fatalf("unexpected structured output: %T", modelsRes.StructuredContent)
+	}
+	if len(modelsOut.Models) != 1 || modelsOut.Models[0].ID != "alpha/alpha-fast" {
+		t.Errorf("unexpected models output: %+v", modelsOut)
+	}
+	if modelsIn.Query != "fast" || modelsIn.Provider != "alpha" || modelsIn.Agent != "general" || modelsIn.Limit != 5 {
+		t.Errorf("normalized models input = %+v, want trimmed query/provider, canonical agent, and limit 5", modelsIn)
+	}
+
+	// Execute models rejects agents outside the roster
+	if rejRes, err := container.Execute(ctx, &message.ToolCall{
+		ID:   "call-models-2",
+		Name: builtin.ToolManageAgents,
+		Args: map[string]any{"action": "models", "agent": "main"},
+	}); err == nil && !rejRes.IsError {
+		t.Errorf("Execute models with non-roster agent = %+v, want rejection", rejRes)
 	}
 }

@@ -42,6 +42,8 @@ Delegation model selection follows these rules when a parent invokes a subagent 
 
 The main agent's system prompt surfaces each subagent's `<default_model>` (first `spec.models` entry) and `<allowed_models>` so the orchestrator can route tiers deliberately. For example, `system/Agent/explore` declares `models: ["@fast", "@inherit"]`, so it defaults to the workspace's fast tier but can be pinned to the parent's model with `model: "@inherit"` when the task needs the same reasoning strength as the orchestrator; `system/Agent/general` declares `models: ["@inherit", "*"]`, so it defaults to inheriting the parent session's active model while permitting any explicit override; and `system/Agent/title-generator` declares `models: ["@fast", "@default"]` so title generation stays off expensive session models.
 
+When a workspace lists many models and a tier alias is not enough, the orchestrator discovers valid `invoke_agent` model values through the built-in `manage_agents` tool with `action: "models"` instead of guessing identifiers: it returns bounded summaries (qualified `id`, `provider`, `name`, `description`, `aliases`, `context_limit`, and tool/attachment/structured-output capabilities) of completion-capable catalog models, optionally fuzzy-filtered by `query`, narrowed by `provider`, and intersected with a specific subagent's allowlist via `agent`.
+
 ## Inheritance
 
 `extends` recursively resolves the parent, including its own ancestors. WARP copies the resolved parent as the merge base and replaces its metadata, namespace, and directory with the child's. The merge rules are:

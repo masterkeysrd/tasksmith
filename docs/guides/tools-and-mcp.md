@@ -21,7 +21,7 @@ TaskSmith ships with core tools built directly into the daemon binary and execut
 | `todos` | `write` | `safe` | Create and update the session's structured task checklist. |
 | `load_skill` | `read` | `safe` | Load specialized domain instructions and runbooks from a workspace or built-in skill. |
 | `invoke_agent` | `exec` | `safe` | Spawn an asynchronous child subagent session (optionally in an isolated Git worktree). |
-| `manage_agents` | `exec` | `safe` | List child subagents, check their status and output, send follow-up messages, or kill them. |
+| `manage_agents` | `exec` | `safe` | List child subagents, check their status and output, send follow-up messages, kill them, or discover models subagents can run on. |
 
 For complete parameter schemas and tool options, see the [Built-in Tools Reference](../reference/tools.md).
 

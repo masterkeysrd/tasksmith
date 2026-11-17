@@ -23,6 +23,16 @@ type invokeAgentTool struct {
 }
 
 func newInvokeAgentTool(mgr AgentManager, subagents []*warp.Agent) *invokeAgentTool {
+	return &invokeAgentTool{
+		agents:    mgr,
+		subagents: subagentRosterIndex(subagents),
+	}
+}
+
+// subagentRosterIndex indexes roster agents by short and qualified name,
+// case-insensitively, so tools can validate and canonicalize agent
+// references identically.
+func subagentRosterIndex(subagents []*warp.Agent) map[string]*warp.Agent {
 	allowed := make(map[string]*warp.Agent, len(subagents)*2)
 	for _, ag := range subagents {
 		if ag == nil {
@@ -35,10 +45,7 @@ func newInvokeAgentTool(mgr AgentManager, subagents []*warp.Agent) *invokeAgentT
 			allowed[strings.ToLower(qn)] = ag
 		}
 	}
-	return &invokeAgentTool{
-		agents:    mgr,
-		subagents: allowed,
-	}
+	return allowed
 }
 
 func (t *invokeAgentTool) Prepare(_ context.Context, in api.InvokeAgentInput) (*tools.Plan, error) {
@@ -103,13 +110,32 @@ func (t *invokeAgentTool) Execute(ctx context.Context, in api.InvokeAgentInput) 
 }
 
 type manageAgentsTool struct {
-	agents AgentManager
+	agents    AgentManager
+	subagents map[string]*warp.Agent
+}
+
+func newManageAgentsTool(mgr AgentManager, subagents []*warp.Agent) *manageAgentsTool {
+	return &manageAgentsTool{
+		agents:    mgr,
+		subagents: subagentRosterIndex(subagents),
+	}
+}
+
+// resolveRosterAgent canonicalizes an agent reference against the roster,
+// mirroring invoke_agent so both tools accept and reject the same names.
+func (t *manageAgentsTool) resolveRosterAgent(agent string) (*warp.Agent, error) {
+	resolved, ok := t.subagents[strings.ToLower(agent)]
+	if !ok || resolved == nil {
+		return nil, fmt.Errorf("%w: subagent %q is not in the allowed subagents roster", std.ErrInvalidArgument, agent)
+	}
+	return resolved, nil
 }
 
 func (t *manageAgentsTool) Prepare(_ context.Context, in api.ManageAgentsInput) (*tools.Plan, error) {
 	action := strings.TrimSpace(in.Action)
 	sessionID := strings.TrimSpace(in.SessionID)
 	msg := strings.TrimSpace(in.Message)
+	agent := strings.TrimSpace(in.Agent)
 
 	switch action {
 	case "list":
@@ -118,6 +144,29 @@ func (t *manageAgentsTool) Prepare(_ context.Context, in api.ManageAgentsInput) 
 			Action:   api.ActionRead,
 			Safety:   api.SafetySafe,
 			Summary:  "List subagents",
+			ReadOnly: true,
+		}, nil
+	case "models":
+		q := strings.TrimSpace(in.Query)
+		if agent != "" {
+			if _, err := t.resolveRosterAgent(agent); err != nil {
+				return nil, err
+			}
+		}
+		if q != "" {
+			return &tools.Plan{
+				ToolName: ToolManageAgents,
+				Action:   api.ActionRead,
+				Safety:   api.SafetySafe,
+				Summary:  fmt.Sprintf("Search models %q", q),
+				ReadOnly: true,
+			}, nil
+		}
+		return &tools.Plan{
+			ToolName: ToolManageAgents,
+			Action:   api.ActionRead,
+			Safety:   api.SafetySafe,
+			Summary:  "List models",
 			ReadOnly: true,
 		}, nil
 	case "status":
@@ -157,7 +206,7 @@ func (t *manageAgentsTool) Prepare(_ context.Context, in api.ManageAgentsInput) 
 			ReadOnly: false,
 		}, nil
 	default:
-		return nil, fmt.Errorf("%w: unsupported action %q, must be 'list', 'status', 'send', or 'kill'", std.ErrInvalidArgument, in.Action)
+		return nil, fmt.Errorf("%w: unsupported action %q, must be 'list', 'status', 'send', 'kill', or 'models'", std.ErrInvalidArgument, in.Action)
 	}
 }
 
@@ -165,9 +214,18 @@ func (t *manageAgentsTool) Execute(ctx context.Context, in api.ManageAgentsInput
 	action := strings.TrimSpace(in.Action)
 	sessionID := strings.TrimSpace(in.SessionID)
 	msg := strings.TrimSpace(in.Message)
+	agent := strings.TrimSpace(in.Agent)
 
 	switch action {
 	case "list":
+	case "models":
+		if agent != "" {
+			resolved, err := t.resolveRosterAgent(agent)
+			if err != nil {
+				return api.ManageAgentsOutput{}, err
+			}
+			agent = resolved.Metadata.Name
+		}
 	case "status":
 		if sessionID == "" {
 			return api.ManageAgentsOutput{}, fmt.Errorf("%w: session_id is required for status action", std.ErrInvalidArgument)
@@ -190,6 +248,9 @@ func (t *manageAgentsTool) Execute(ctx context.Context, in api.ManageAgentsInput
 	in.Action = action
 	in.SessionID = sessionID
 	in.Message = msg
+	in.Query = strings.TrimSpace(in.Query)
+	in.Provider = strings.TrimSpace(in.Provider)
+	in.Agent = agent
 
 	return t.agents.ManageSubagents(ctx, in)
 }

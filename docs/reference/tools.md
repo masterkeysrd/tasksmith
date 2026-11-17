@@ -25,7 +25,7 @@ TaskSmith provides 19 core built-in system tools backed by virtualized OS sandbo
 | **`load_rule`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads the full instructions of a conditional workspace rule by name. Auto-activated when the agent has at least one conditional rule. |
 | **`read_mcp_resource`** | `Net`, `Workspace` | Safe & Read-Only / Auto-allowed | Reads one resource URI from a configured MCP server. Auto-activated when a connected server exposes a permitted resource. |
 | **`invoke_agent`** | `Session` | Safe & Read-Only / Auto-allowed | Spawns a specialized subagent asynchronously in an isolated child session. |
-| **`manage_agents`** | `Session` | Safe / Auto-allowed for `list`/`status`, Prompts for `send`/`kill` | Lists subagents, checks subagent status, sends messages, or terminates running subagents. |
+| **`manage_agents`** | `Session` | Safe / Auto-allowed for `list`/`status`/`models`, Prompts for `send`/`kill` | Lists subagents, checks subagent status, sends messages, terminates running subagents, or discovers subagent models. |
 | **`tool_search`** | `Session`, `Workspace` | Safe & Read-Only / Auto-allowed | Searches deferred (not eagerly loaded) tools by name, description, or parameters via BM25 and loads the matches into context. Auto-activated when the session has at least one deferred tool. |
 
 ---
@@ -733,7 +733,7 @@ Spawns a specialized subagent asynchronously in an isolated child session.
 
 ### `manage_agents`
 
-Lists subagents, checks a subagent's status, sends a message to a subagent, or terminates a running subagent.
+Lists subagents, checks a subagent's status, sends a message to a subagent, terminates a running subagent, or discovers models subagents can run on.
 
 #### Safety Profile
 - **`isReadOnly`**: `false`
@@ -746,15 +746,20 @@ Lists subagents, checks a subagent's status, sends a message to a subagent, or t
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
-| `action` | string | **Yes** | The action to perform: `'list'`, `'status'`, `'send'`, or `'kill'`. |
+| `action` | string | **Yes** | The action to perform: `'list'`, `'status'`, `'send'`, `'kill'`, or `'models'`. |
 | `session_id` | string | No | The session ID of the subagent (required for `'status'`, `'send'`, and `'kill'`). |
 | `message` | string | No | Message to send to the subagent (required for `'send'`). |
+| `query` | string | No | Fuzzy search term for `'models'` (matches model ID, display name, description, and `@aliases`). |
+| `provider` | string | No | Provider name filter for `'models'`. |
+| `agent` | string | No | Subagent name for `'models'` (must be in the session's subagent roster); intersects candidates against that subagent's `spec.models` allowlist. |
+| `limit` | integer | No | Maximum models to return for `'models'` (default 20, max 50). |
 
 #### Output Fields
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `agents` | array of objects | List of child subagents (returned for `'list'`), each containing `session_id`, `agent`, `title`, `status`, `work_dir`, and optional `error`. |
+| `models` | array of objects | Model summaries (returned for `'models'`), each containing `id`, `provider`, and optional `name`, `description`, `aliases`, `context_limit`, `tools`, `attachment`, and `structured_output`. |
 | `session_id` | string | Session ID of the target subagent. |
 | `agent` | string | Agent name of the target subagent. |
 | `title` | string | Title of the target subagent. |
@@ -765,8 +770,9 @@ Lists subagents, checks a subagent's status, sends a message to a subagent, or t
 
 ```json
 {
-  "action": "status",
-  "session_id": "018f6e8b-9d41-7e8c-b631-c48f2195dfb0"
+  "action": "models",
+  "query": "qwen",
+  "agent": "general"
 }
 ```
 
