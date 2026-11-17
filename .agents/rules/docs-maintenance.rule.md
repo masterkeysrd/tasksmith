@@ -13,6 +13,7 @@ spec:
     globs:
       - "docs/**"
       - "README.md"
+      - "ROADMAP.md"
       - "AGENTS.md"
       - "api/**"
       - "internal/cmd/**"
@@ -56,6 +57,8 @@ Whenever modifying code that alters user-facing behavior, configuration schemas,
   - Updates introducing or changing a user-facing concept or interactive workflow must update the corresponding guide (`cli.md`, `workspaces.md`, `permissions.md`, `customizations.md`, `tools-and-mcp.md`).
 - **Subsystem Architecture (`docs/architecture/`)**:
   - Updates changing the high-level mental model, lifecycle, or security boundaries of subsystems must update the corresponding specification (`daemon.md`, `harness.md`, `gateway.md`, `sandbox.md`, `permissions.md`).
+- **Public Roadmap (`ROADMAP.md`)**:
+  - When completing, rescoping, or adding a milestone capability tracked in `ROADMAP.md`, update its checkbox/entry in `ROADMAP.md` in the same change.
 
 ### When NOT to Update Documentation
 
