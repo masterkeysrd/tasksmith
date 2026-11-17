@@ -45,13 +45,7 @@ func (r *workspaceRuntime) loadOrCacheSession(ctx context.Context, dbSess *sessi
 		// Restored sessions need the caller too, or a session resumed after a
 		// daemon restart would silently lose every MCP tool.
 		MCPCaller: r.MCPCaller,
-		OnUpdate: func(ctx context.Context, s *session.Session) error {
-			if err := s.CheckpointTo(ctx, r.sessionStore); err != nil {
-				return err
-			}
-			r.sessions.Save(s)
-			return nil
-		},
+		OnUpdate:  r.persistSession,
 	}
 
 	sess, err := session.Open(ctx, dbSess, cfg)
@@ -129,13 +123,7 @@ func (r *workspaceRuntime) CreateSession(ctx context.Context, req api.CreateSess
 		Context:         r.bgCtx,
 		WaitGroup:       &r.wg,
 		MCPCaller:       r.MCPCaller,
-		OnUpdate: func(ctx context.Context, s *session.Session) error {
-			if err := s.CheckpointTo(ctx, r.sessionStore); err != nil {
-				return err
-			}
-			r.sessions.Save(s)
-			return nil
-		},
+		OnUpdate:        r.persistSession,
 	}
 
 	newSession, err := session.New(ctx, cfg)
@@ -156,6 +144,22 @@ func (r *workspaceRuntime) CreateSession(ctx context.Context, req api.CreateSess
 	})
 
 	return newSession, true, nil
+}
+
+// persistSession checkpoints a live session unless teardown has started.
+// Serializing with DeleteSession on createMu prevents background goroutines
+// (such as async title generation) from resurrecting a deleted session row.
+func (r *workspaceRuntime) persistSession(ctx context.Context, s *session.Session) error {
+	r.createMu.Lock()
+	defer r.createMu.Unlock()
+	if s.IsClosing() {
+		return nil
+	}
+	if err := s.CheckpointTo(ctx, r.sessionStore); err != nil {
+		return err
+	}
+	r.sessions.Save(s)
+	return nil
 }
 
 // PreviewSession inspects the proposed session configuration without creating a session.
@@ -306,7 +310,11 @@ func (r *workspaceRuntime) DeleteSession(ctx context.Context, id string) error {
 		}
 	}
 
-	if err := r.sessionStore.Delete(ctx, id); err != nil {
+	r.createMu.Lock()
+	r.sessions.Delete(id)
+	err := r.sessionStore.Delete(ctx, id)
+	r.createMu.Unlock()
+	if err != nil {
 		return err
 	}
 

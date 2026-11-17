@@ -414,13 +414,23 @@ func (s *Session) Clone() *Session {
 	return cp
 }
 
+// IsClosing reports whether Close has been called on the session.
+func (s *Session) IsClosing() bool {
+	s.Lock()
+	defer s.Unlock()
+	return s.closing
+}
+
 // CheckpointTo persists a snapshot of the session to store.
 func (s *Session) CheckpointTo(ctx context.Context, store Store) error {
+	if s.IsClosing() {
+		return nil
+	}
 	return store.Save(ctx, s.Clone())
 }
 
 func (s *Session) checkpoint(ctx context.Context) error {
-	if s.onUpdate == nil {
+	if s.IsClosing() || s.onUpdate == nil {
 		return nil
 	}
 	return s.onUpdate(ctx, s)
