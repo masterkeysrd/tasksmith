@@ -52,7 +52,7 @@ The following flags are accepted by `tasksmith` and `tasksmith repl` only — `t
 
 | Flag | Subcommand | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `--lock <path>` | `daemon serve` | `$XDG_RUNTIME_DIR/tasksmith/brain.lock` | Override path for the daemon process lockfile. |
+| `--lock <path>` | `daemon serve` | `$XDG_RUNTIME_DIR/tasksmith/brain.lock` | Override path for the daemon process lockfile. With a custom `--socket` and no `--lock`, the lock defaults to the socket path with a `.lock` extension. |
 
 ---
 

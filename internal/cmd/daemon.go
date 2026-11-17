@@ -105,11 +105,18 @@ func runDaemonServe(cmd *cobra.Command, rootOpts *rootOptions, lockOverride stri
 
 	lockPath := strings.TrimSpace(lockOverride)
 	if lockPath == "" {
-		defaultLock, err := daemon.DefaultLockPath()
-		if err != nil {
-			return fmt.Errorf("resolve lock path: %w", err)
+		if rootOpts.socketExplicit() {
+			// A custom socket must carry its own lock; sharing the default
+			// lock across different sockets lets an unrelated daemon block
+			// this one's startup (and vice versa).
+			lockPath = daemon.LockPathForSocket(sockPath)
+		} else {
+			defaultLock, err := daemon.DefaultLockPath()
+			if err != nil {
+				return fmt.Errorf("resolve lock path: %w", err)
+			}
+			lockPath = defaultLock
 		}
-		lockPath = defaultLock
 	}
 
 	srv, err := daemon.New(daemon.Config{
@@ -158,6 +165,9 @@ func runDaemonStop(cmd *cobra.Command, rootOpts *rootOptions) error {
 	if err := c.Shutdown(cmd.Context()); err != nil {
 		return fmt.Errorf("stop daemon: %w", err)
 	}
+	if err := waitForDaemonLockRelease(cmd.Context(), sockPath); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", err)
+	}
 	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Daemon stopped.")
 	return nil
 }
@@ -204,8 +214,17 @@ func hasActiveSessions(sessions []api.Session) bool {
 	return false
 }
 
-// restartDaemon asks a healthy daemon to shut down gracefully and waits for
-// it to stop answering health checks so the caller can spawn a replacement.
+// waitForDaemonLockRelease blocks until the lock paired with socketPath is free
+// (the previous daemon finished teardown) or the bounded timeout elapses. A
+// timeout is non-fatal: the spawned daemon's own retry window may still recover
+// the handoff.
+func waitForDaemonLockRelease(ctx context.Context, socketPath string) error {
+	return daemon.WaitForSocketLockRelease(ctx, socketPath)
+}
+
+// restartDaemon asks a healthy daemon to shut down gracefully and waits for it to
+// stop answering health checks *and* release brain.lock so the caller can spawn a
+// replacement that acquires the lock on its first attempt.
 func restartDaemon(ctx context.Context, c *client.Client) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -222,7 +241,7 @@ func restartDaemon(ctx context.Context, c *client.Client) error {
 			return fmt.Errorf("timed out waiting for outdated daemon to exit: %w", waitCtx.Err())
 		case <-ticker.C:
 			if !isDaemonHealthy(waitCtx, c) {
-				return nil
+				return waitForDaemonLockRelease(ctx, c.SocketPath())
 			}
 		}
 	}
@@ -278,23 +297,23 @@ func ConnectOrStart(ctx context.Context, socketPath string, spawnArgs ...string)
 		}
 	}
 
-	if err := spawnDetachedDaemon(socketPath, spawnArgs); err != nil {
+	spawned, err := spawnDetachedDaemon(socketPath, spawnArgs)
+	if err != nil {
 		return nil, notices, err
 	}
 
-	ticker := time.NewTicker(40 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, notices, fmt.Errorf("timed out waiting for daemon at %q: %w", socketPath, ctx.Err())
-		case <-ticker.C:
-			if isDaemonHealthy(ctx, c) {
-				return c, notices, nil
-			}
-		}
+	if err := waitForDaemonReady(ctx, c, socketPath, spawned); err != nil {
+		return nil, notices, err
 	}
+	return c, notices, nil
+}
+
+// waitForDaemonReady polls health checks for a freshly spawned daemon until it
+// answers, the spawned child process exits, or the bounded startup timeout
+// elapses. The shared wait reports failures with a pointer to the daemon logs.
+func waitForDaemonReady(ctx context.Context, c *client.Client, socketPath string, spawned *daemon.SpawnedDaemon) error {
+	_, err := daemon.WaitForSocketHealthy(ctx, socketPath, spawned, daemon.SpawnWaitTimeout, c.Health)
+	return err
 }
 
 // daemonVersionSkewed reports whether a healthy daemon's build version
@@ -328,6 +347,6 @@ func isDaemonHealthy(ctx context.Context, c *client.Client) bool {
 	return err == nil
 }
 
-func spawnDetachedDaemon(socketPath string, spawnArgs []string) error {
+func spawnDetachedDaemon(socketPath string, spawnArgs []string) (*daemon.SpawnedDaemon, error) {
 	return daemon.SpawnDetached(socketPath, spawnArgs...)
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/sys"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
@@ -348,6 +349,108 @@ func TestLockfileSingleInstanceProtection(t *testing.T) {
 		t.Fatalf("srv2.Start after srv1 closed: %v", err)
 	}
 	_ = srv2.Close(context.Background())
+}
+
+func TestLockPathForSocket(t *testing.T) {
+	tests := []struct {
+		socket string
+		want   string
+	}{
+		{"/run/tasksmith/brain.sock", "/run/tasksmith/brain.lock"},
+		{"relative/brain.sock", "relative/brain.lock"},
+		{"/run/tasksmith/custom.sock", "/run/tasksmith/custom.lock"},
+		{"/run/tasksmith/odd", "/run/tasksmith/odd.lock"},
+	}
+	for _, tt := range tests {
+		if got := LockPathForSocket(tt.socket); got != tt.want {
+			t.Errorf("LockPathForSocket(%q) = %q, want %q", tt.socket, got, tt.want)
+		}
+	}
+}
+
+// TestStartRetriesLockDuringTeardown simulates the version-upgrade handoff: the
+// previous daemon already closed its socket but still holds brain.lock while it
+// finishes teardown. A replacement daemon must wait briefly for the lock and
+// then start cleanly instead of exiting with ErrAlreadyRunning.
+func TestStartRetriesLockDuringTeardown(t *testing.T) {
+	runDir := shortTempDir(t)
+	sock := filepath.Join(runDir, "handoff.sock")
+	lockPath := filepath.Join(runDir, "handoff.lock")
+
+	staleLock, err := sys.AcquireLock(lockPath)
+	if err != nil {
+		t.Fatalf("AcquireLock (simulated outgoing daemon): %v", err)
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = sys.ReleaseLock(staleLock)
+	}()
+
+	srv, err := New(Config{
+		SocketPath:  sock,
+		LockPath:    lockPath,
+		GatewayPool: newFakeGatewayPool(nil),
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	start := time.Now()
+	if err := srv.Start(context.Background()); err != nil {
+		t.Fatalf("Start during teardown handoff: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 200*time.Millisecond {
+		t.Errorf("Start returned after %v, expected it to wait for the lock handoff", elapsed)
+	}
+	_ = srv.Close(context.Background())
+}
+
+// TestStartFailsFastWhenSocketAlive verifies that when a daemon is both holding
+// the lock and serving the socket, a second Start fails immediately with
+// ErrAlreadyRunning annotated with the holder pid instead of burning the retry window.
+func TestStartFailsFastWhenSocketAlive(t *testing.T) {
+	runDir := shortTempDir(t)
+	sock := filepath.Join(runDir, "alive.sock")
+	lockPath := filepath.Join(runDir, "alive.lock")
+
+	held, err := sys.AcquireLock(lockPath)
+	if err != nil {
+		t.Fatalf("AcquireLock: %v", err)
+	}
+	defer func() {
+		_ = sys.ReleaseLock(held)
+	}()
+
+	ln, err := sys.ListenUnix(context.Background(), sock)
+	if err != nil {
+		t.Fatalf("ListenUnix: %v", err)
+	}
+	defer func() {
+		_ = ln.Close()
+	}()
+
+	srv, err := New(Config{
+		SocketPath:  sock,
+		LockPath:    lockPath,
+		GatewayPool: newFakeGatewayPool(nil),
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	start := time.Now()
+	err = srv.Start(context.Background())
+	if !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("Start error = %v, want %v", err, ErrAlreadyRunning)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("Start took %v with a live socket holder, want fast failure", elapsed)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("held by pid=%d", os.Getpid())) {
+		t.Errorf("Start error = %q, want it to name the holder pid", err)
+	}
 }
 
 func TestHealthAndSessionCRUD(t *testing.T) {

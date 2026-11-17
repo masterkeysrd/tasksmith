@@ -40,6 +40,11 @@ func (o *rootOptions) resolveSocket() (string, error) {
 	return sock, nil
 }
 
+// socketExplicit reports whether the --socket flag overrode the default path.
+func (o *rootOptions) socketExplicit() bool {
+	return strings.TrimSpace(o.socket) != ""
+}
+
 // NewRootCmd constructs the root `tasksmith` Cobra command and attaches all
 // subcommands (`repl`, `daemon`).
 func NewRootCmd() *cobra.Command {

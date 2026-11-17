@@ -58,6 +58,17 @@ func DefaultLockPath() (string, error) {
 	return xdg.SocketPath("brain.lock")
 }
 
+// LockPathForSocket returns the lockfile path paired with a socket path: the
+// same directory and base name with a ".lock" extension. A socket that does not
+// end in ".sock" gets ".lock" appended.
+func LockPathForSocket(socketPath string) string {
+	base := filepath.Clean(strings.TrimSpace(socketPath))
+	if before, ok := strings.CutSuffix(base, ".sock"); ok {
+		return before + ".lock"
+	}
+	return base + ".lock"
+}
+
 // Config holds the mandatory configuration parameters for starting a [Daemon].
 type Config struct {
 	SocketPath  string
@@ -208,6 +219,66 @@ func (d *Daemon) SocketPath() string {
 	return d.cfg.SocketPath
 }
 
+// lockProbeTimeout bounds the liveness probe against an existing socket when
+// the daemon lock is already held.
+const lockProbeTimeout = 300 * time.Millisecond
+
+// lockRetryTimeout and lockRetryInterval bound the graceful lock retry performed
+// when a previous daemon is still tearing down (socket closed, lock not yet released).
+const (
+	lockRetryTimeout  = 3 * time.Second
+	lockRetryInterval = 100 * time.Millisecond
+)
+
+// socketAlive reports whether a daemon is still accepting connections on the
+// configured socket path.
+func (d *Daemon) socketAlive() bool {
+	conn, err := net.DialTimeout("unix", d.cfg.SocketPath, lockProbeTimeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// acquireLock acquires the daemon lock with a graceful handoff window. When the
+// lock is held but no daemon answers on the socket, the previous instance is most
+// likely still finishing teardown (which releases the lock last), so acquisition
+// is retried briefly before failing with ErrAlreadyRunning including the holder pid.
+func (d *Daemon) acquireLock(ctx context.Context) (*os.File, error) {
+	lockFile, err := sys.AcquireLock(d.cfg.LockPath)
+	if err == nil {
+		return lockFile, nil
+	}
+	if !errors.Is(err, sys.ErrLocked) {
+		return nil, fmt.Errorf("%w: %v", ErrAlreadyRunning, err)
+	}
+	if d.socketAlive() {
+		return nil, alreadyRunningErr(d.cfg.LockPath)
+	}
+
+	d.logger.Warn("daemon lock held by a process that is not serving; retrying briefly",
+		log.String("lock", d.cfg.LockPath),
+		log.String("socket", d.cfg.SocketPath))
+
+	lockFile, err = sys.AcquireLockWithRetry(ctx, d.cfg.LockPath, lockRetryTimeout, lockRetryInterval)
+	if err != nil {
+		if errors.Is(err, sys.ErrLocked) {
+			return nil, alreadyRunningErr(d.cfg.LockPath)
+		}
+		return nil, err
+	}
+	return lockFile, nil
+}
+
+// alreadyRunningErr builds ErrAlreadyRunning annotated with the recorded holder pid.
+func alreadyRunningErr(lockPath string) error {
+	if pid, ok := sys.LockHolderPID(lockPath); ok {
+		return fmt.Errorf("%w (held by pid=%d)", ErrAlreadyRunning, pid)
+	}
+	return ErrAlreadyRunning
+}
+
 // Start acquires the non-blocking exclusive flock on [Config.LockPath], binds
 // the Unix domain socket at [Config.SocketPath], and begins serving HTTP+SSE
 // requests in a background goroutine.
@@ -225,12 +296,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return nil
 	}
 
-	lockFile, err := sys.AcquireLock(d.cfg.LockPath)
+	lockFile, err := d.acquireLock(ctx)
 	if err != nil {
-		if errors.Is(err, sys.ErrLocked) {
-			return ErrAlreadyRunning
-		}
-		return fmt.Errorf("%w: %v", ErrAlreadyRunning, err)
+		return err
 	}
 
 	ln, err := sys.ListenUnix(ctx, d.cfg.SocketPath)

@@ -84,3 +84,10 @@ The daemon owns a global SQLite database at `~/.local/share/tasksmith/daemon.db`
 The daemon provides detailed diagnostics without polluting user terminal outputs:
 - Diagnostic events, HTTP request logs, and subsystem errors are written as structured JSON Lines records to `~/.local/state/tasksmith/logs/daemon.jsonl`.
 - Session turn failures and LLM error messages are enriched with vendor diagnostics for rapid troubleshooting.
+
+### 7. Single-Instance Lifecycle & Startup Handoff
+Exactly one daemon serves a given socket, enforced by an exclusive `flock` on a lockfile paired with the socket (default `$XDG_RUNTIME_DIR/tasksmith/brain.lock`; a custom `--socket` path gets the same base name with a `.lock` extension). The holder records its PID in the lockfile so a rejected second startup can report `already running (held by pid=…)`.
+
+Teardown closes the HTTP socket first and releases the lock last, after workspace runtimes, MCP child processes, and the database close. Clients treat health failing alone as *not yet stopped*: `daemon stop`, version-skew restarts, and REPL `/daemon` restarts wait for the lock to be released before respawning. A replacement daemon that still finds the lock held while nothing answers on the socket retries acquisition briefly (a few seconds) before failing, which makes an upgrade or restart immediately after `daemon stop` a clean handoff instead of a silent startup exit.
+
+Client-side spawn waits are bounded (with a short startup timeout, plus early detection when the spawned child process exits before serving), and a detached daemon's stderr is captured in the daemon log directory so failed startups leave a diagnosable trace instead of vanishing.

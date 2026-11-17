@@ -1472,41 +1472,51 @@ func StartDaemon(ctx context.Context) (*api.HealthResponse, error) {
 
 	SetDaemonStatus(DaemonRestarting)
 
-	var spawnErr error
-	if starter != nil {
-		spawnErr = starter(ctx, c.SocketPath())
-	} else {
-		spawnErr = daemon.SpawnDetached(c.SocketPath())
-	}
+	spawned, spawnErr := spawnDaemon(c, starter, ctx)
 	if spawnErr != nil {
 		SetDaemonStatus(DaemonDisconnected)
 		return nil, fmt.Errorf("spawn daemon: %w", spawnErr)
 	}
 
-	pollCtx := ctx
-	var cancelPoll context.CancelFunc
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		pollCtx, cancelPoll = context.WithTimeout(ctx, 5*time.Second)
-		defer cancelPoll()
+	h, err := awaitSpawnedDaemon(ctx, c, spawned, 5*time.Second)
+	if err != nil {
+		SetDaemonStatus(DaemonDisconnected)
+		return nil, err
 	}
+	resyncDaemonState(ctx, c)
+	SetDaemonStatus(DaemonConnected)
+	return h, nil
+}
 
-	ticker := time.NewTicker(40 * time.Millisecond)
-	defer ticker.Stop()
+// spawnDaemon starts a daemon through the injected starter when present,
+// otherwise by spawning the current executable detached.
+func spawnDaemon(c *client.Client, starter func(context.Context, string) error, ctx context.Context) (*daemon.SpawnedDaemon, error) {
+	if starter != nil {
+		return nil, starter(ctx, c.SocketPath())
+	}
+	return daemon.SpawnDetached(c.SocketPath())
+}
 
-	for {
-		select {
-		case <-pollCtx.Done():
-			SetDaemonStatus(DaemonDisconnected)
-			return nil, fmt.Errorf("timed out waiting for daemon to start: %w", pollCtx.Err())
-		case <-ticker.C:
-			h, err := c.Health(pollCtx)
-			if err == nil {
-				resyncDaemonState(pollCtx, c)
-				SetDaemonStatus(DaemonConnected)
-				return h, nil
-			}
+// awaitSpawnedDaemon waits for a freshly spawned daemon to answer health checks,
+// bounded so a hung or dead child fails with a diagnostic instead of blocking
+// the REPL. A caller-provided deadline on ctx takes precedence over timeout.
+func awaitSpawnedDaemon(ctx context.Context, c *client.Client, spawned *daemon.SpawnedDaemon, timeout time.Duration) (*api.HealthResponse, error) {
+	waitTimeout := timeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < waitTimeout {
+			waitTimeout = remaining
 		}
 	}
+	return daemon.WaitForSocketHealthy(ctx, c.SocketPath(), spawned, waitTimeout, c.Health)
+}
+
+// waitForDaemonLockRelease blocks until the lock paired with the client's socket
+// is free. A stopping daemon closes its socket long before teardown finishes
+// (workspaces, MCP children, and the lock are released last), so health failing
+// alone does not mean a respawn can acquire the lock yet. A timeout is non-fatal:
+// the spawned daemon retries lock acquisition itself for a short window.
+func waitForDaemonLockRelease(ctx context.Context, c *client.Client) {
+	_ = daemon.WaitForSocketLockRelease(ctx, c.SocketPath())
 }
 
 // StopDaemon gracefully stops the running Brain Daemon.
@@ -1535,6 +1545,8 @@ loop:
 		case <-ticker.C:
 		}
 	}
+
+	waitForDaemonLockRelease(ctx, c)
 
 	CancelTurn()
 	SetDaemonStatus(DaemonDisconnected)
@@ -1570,43 +1582,23 @@ func RestartDaemon(ctx context.Context) (*api.HealthResponse, error) {
 		}
 		ticker.Stop()
 		cancel()
+		waitForDaemonLockRelease(ctx, c)
 	}
 
-	var spawnErr error
-	if starter != nil {
-		spawnErr = starter(ctx, c.SocketPath())
-	} else {
-		spawnErr = daemon.SpawnDetached(c.SocketPath())
-	}
+	spawned, spawnErr := spawnDaemon(c, starter, ctx)
 	if spawnErr != nil {
 		SetDaemonStatus(DaemonDisconnected)
 		return nil, fmt.Errorf("spawn daemon: %w", spawnErr)
 	}
 
-	pollCtx := ctx
-	var cancelPoll context.CancelFunc
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		pollCtx, cancelPoll = context.WithTimeout(ctx, 10*time.Second)
-		defer cancelPoll()
+	h, err := awaitSpawnedDaemon(ctx, c, spawned, 10*time.Second)
+	if err != nil {
+		SetDaemonStatus(DaemonDisconnected)
+		return nil, err
 	}
-
-	ticker := time.NewTicker(40 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-pollCtx.Done():
-			SetDaemonStatus(DaemonDisconnected)
-			return nil, fmt.Errorf("timed out waiting for daemon to restart: %w", pollCtx.Err())
-		case <-ticker.C:
-			h, err := c.Health(pollCtx)
-			if err == nil {
-				resyncDaemonState(pollCtx, c)
-				SetDaemonStatus(DaemonConnected)
-				return h, nil
-			}
-		}
-	}
+	resyncDaemonState(ctx, c)
+	SetDaemonStatus(DaemonConnected)
+	return h, nil
 }
 
 // DefaultAgent returns the default agent configured at startup.
