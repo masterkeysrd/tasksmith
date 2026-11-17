@@ -386,3 +386,48 @@ When an agent delegates work using `invoke_agent`, TaskSmith spawns an asynchron
   - Press `Ctrl+G` to open the waiting subagent's live view inside `<Slot />` to inspect full details, choose a broader permission scope, or answer a questionnaire.
 - **Subagents Browser (`/subagents`)**: Run `/subagents` (or `/subagent`) to list active child subagents (or press `a` to toggle completed/idle subagents), inspect their live conversation (`Enter`), or terminate a running subagent (`x`).
 - **Live Navigable Subagent Viewer**: Selecting a subagent opens its live streaming chat view inside `<Slot />`, complete with inline permission/question prompts and keyboard scrolling (`↑`/`↓` or `j`/`k` or `Ctrl+P`/`Ctrl+N`, `PgUp`/`PgDn` or `Ctrl+U`/`Ctrl+D` or `Ctrl+B`/`Ctrl+F`, `g`/`G` for top/bottom, `x` to kill, and `Esc` to return).
+
+## Headless Execution & CI
+
+Headless runs use the same daemon, sessions, permissions, and sandbox as the TUI — only the interface changes. `tasksmith exec "prompt"` (or the root shorthand `tasksmith -p "prompt"`) starts the daemon when none is reachable, runs one turn, prints the assistant's reply, and exits with a status code scripts can branch on. The exhaustive flag, frame, and exit-code tables live in the [Headless Execution Reference](../reference/exec.md).
+
+### One-Shot Prompts
+
+```bash
+tasksmith -p "Summarize what this project does in two sentences"
+
+# Piped stdin becomes context for the prompt (or the prompt itself when omitted):
+git diff | tasksmith -p "Review this diff for bugs and security issues"
+```
+
+In scripts, prefer `--output-format json` to get a single machine-readable envelope with the session id, final status, assistant text, usage, and file changes:
+
+```bash
+result=$(tasksmith -p --output-format json "Fix the typo in README.md")
+status=$(echo "$result" | jq -r .status)   # completed | needs_input | canceled | failed
+```
+
+Exit codes let CI distinguish outcomes without parsing output: `0` success, `1` error, `2` usage error, `4` needs input (a permission or question came up and nothing could answer it), `5` canceled. A run that hits `--mode ask` and exits `4` should be rerun with `--input-format jsonl` so the script can answer requests programmatically.
+
+Useful automation flags: `--session <id>` resumes an existing session, `--ephemeral` deletes the session when the run ends, and `--max-turns N` caps how many turns one invocation may take.
+
+### Bidirectional Sessions (`--input-format jsonl`)
+
+For long-lived scripted sessions — chat bridges, IDE backends, CI pipelines that must approve tool calls — run `tasksmith exec --input-format jsonl --output-format jsonl`. Stdin becomes a stream of newline-delimited JSON control frames (`send`, `permission`, `question`, `config`, `cancel`, `close`), and stdout emits a `{"type":"session"}` header frame, every daemon event verbatim, and a terminal `{"type":"result"}` frame. This is the only mode in which a script can answer a permission prompt mid-run:
+
+```bash
+tasksmith exec --input-format jsonl --output-format jsonl <<'FRAMES' | jq -r 'select(.type == "chunk") | .payload.chunk.content[]? | select(.type == "text") | .text'
+{"type":"send","content":"Refactor the parser and run the tests"}
+{"type":"close"}
+FRAMES
+```
+
+Because events arrive as the same `api.Event` schema the TUI consumes, any process can render progress, watch for `permission_requested`, and reply with a `permission` frame carrying the request id and decision. See the [stdin control frames](../reference/exec.md#3-input-rules) table for payload shapes.
+
+### Slash Commands & Shell Input Without the TUI
+
+Inside headless runs (including mid-session `send` frames), `/model`, `/models`, `/mode`, `/agent`, `/agents`, `/usage`, `/compact`, `/exit`, and `/help` work locally without starting a turn; workspace commands, skills, `!` shell input, and `mcp:<server>:<prompt>` references go through the daemon. An unrecognized bare `/name` fails fast with `unknown slash command` instead of being sent to the model. See [Slash Commands Without the TUI](../reference/exec.md#6-slash-commands-without-the-tui).
+
+### Embedding (Go SDK)
+
+The public `client` package speaks the daemon's HTTP + SSE API directly — `client.ConnectOrStart` connects or spawns a healthy detached daemon, and session/stream calls mirror what the CLI does. Embedders can either drive the client API or run `tasksmith exec --output-format jsonl` as a subprocess and parse frames with `api.NewExecFrameReader`.

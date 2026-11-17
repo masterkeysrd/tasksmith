@@ -148,6 +148,7 @@ export default defineConfig({
           text: 'Reference Specifications',
           items: [
             { text: 'CLI Command Reference', link: '/reference/cli' },
+            { text: 'Headless Execution Reference', link: '/reference/exec' },
             { text: 'Built-in Tool Reference', link: '/reference/tools' },
             { text: 'Resource Manifests', link: '/reference/manifests' },
             { text: 'Providers Overview & Schema', link: '/reference/providers' },

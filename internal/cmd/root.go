@@ -46,18 +46,26 @@ func (o *rootOptions) socketExplicit() bool {
 }
 
 // NewRootCmd constructs the root `tasksmith` Cobra command and attaches all
-// subcommands (`repl`, `daemon`).
+// subcommands (`repl`, `exec`, `daemon`).
 func NewRootCmd() *cobra.Command {
 	rootOpts := &rootOptions{}
 	replOpts := &replOptions{}
+	printMode := &printOptions{}
 
 	cmd := &cobra.Command{
-		Use:           "tasksmith",
+		Use:           "tasksmith [prompt...]",
 		Short:         "TaskSmith AI coding assistant and background Brain Daemon",
 		Version:       version.Get(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Args:          cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if printMode.active {
+				return printMode.runExec(cmd, rootOpts, replOpts, args)
+			}
+			if len(args) > 0 {
+				return fmt.Errorf("unknown command %q for %q\nRun `tasksmith --help` for usage", args[0], cmd.CommandPath())
+			}
 			return runREPL(cmd, rootOpts, replOpts)
 		},
 	}
@@ -66,9 +74,11 @@ func NewRootCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&rootOpts.socket, "socket", "", "Daemon Unix domain socket path")
 
 	bindREPLFlags(cmd, replOpts)
+	printMode.bind(cmd)
 
 	cmd.AddCommand(
 		newREPLCmd(rootOpts),
+		newExecCmd(rootOpts),
 		newDaemonCmd(rootOpts),
 		newVersionCmd(rootOpts),
 		newSandboxRelayCmd(),

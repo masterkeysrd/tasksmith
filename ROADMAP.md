@@ -22,7 +22,7 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - [x] **Subagent model tiers & discovery**: governed `@fast`, `@balanced`, `@smart`, `@flagship`, and `@inherit` routing enforced against `spec.models` globs, plus `manage_agents` model search
 - [x] **CI/CD & `main` cutover**: GitHub Actions verification, CodeQL, docs deployment, and GoReleaser workflows alongside promotion of the `v2` architecture to `main`
 - [ ] **Unified session modes & planning**: decoupled permission gates and behavioral postures (`default`, `accept_edits`, `plan`, `ask`, `auto`), mode-change pending approval unblocking, safe `<session-dir>/plans/` storage, `enter_plan_mode` / `exit_plan_mode`, and `/plan`
-- [ ] **Headless, bidirectional stdio, & SDK execution**: one-shot and bidirectional streaming `tasksmith exec` / `-p` modes (`text`, `json`, and 1:1 `api/` `jsonl` over `stdin`/`stdout`) plus Go `client` SDK lifecycle helpers for CI, pipelines, and programmatic integrations
+- [x] **Headless, bidirectional stdio, & SDK execution**: one-shot and bidirectional streaming `tasksmith exec` / `-p` modes (`text`, `json`, and 1:1 `api/` `jsonl` over `stdin`/`stdout`) plus Go `client` SDK lifecycle helpers for CI, pipelines, and programmatic integrations
 - [ ] **Agent Client Protocol (`tasksmith acp`)**: JSON-RPC 2.0 stdio adapter over the shared local daemon for Zed, JetBrains, and Neovim with live TUI session sharing, tool diffs, and interactive permission prompts
 - [ ] **Quick session resume & forking**: `-c` / `--continue` flag for resuming the latest workspace session and `/fork` conversation branching
 - [ ] **Multimodal input**: image and PDF ingestion in `view`, `@` media attachments, and clipboard image paste in the composer

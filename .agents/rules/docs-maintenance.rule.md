@@ -18,6 +18,7 @@ spec:
       - "api/**"
       - "internal/cmd/**"
       - "internal/cli/**"
+      - "internal/exec/**"
       - "internal/daemon/tools/builtin/**"
       - "internal/daemon/workspace/**"
       - "internal/daemon/gateway/**"

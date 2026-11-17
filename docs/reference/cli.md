@@ -14,11 +14,19 @@ Invoking `tasksmith` without a subcommand automatically starts the interactive t
 tasksmith [flags]
 ```
 
+With `-p` / `--print`, the root command runs a single headless turn instead of the REPL — identical to `tasksmith exec`:
+
+```bash
+tasksmith -p "summarize this repo"
+git diff | tasksmith -p "review this diff"
+```
+
 ### Subcommands
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
 | **`repl`** | `tasksmith repl [flags]` | Starts the interactive terminal REPL (identical to invoking `tasksmith` directly). |
+| **`exec`** | `tasksmith exec [flags] [prompt...]` | Runs a single headless task against the Brain daemon and exits. Prompt text comes from arguments and/or piped stdin; `--input-format jsonl` drives a bidirectional NDJSON session. See the [Headless Execution Reference](./exec.md). |
 | **`daemon serve`** | `tasksmith daemon serve [flags]` | Runs the Brain daemon server in the foreground. |
 | **`daemon start`** | `tasksmith daemon start` | Spawns and detaches the Brain daemon process in the background. |
 | **`daemon stop`** | `tasksmith daemon stop` | Gracefully terminates a running Brain daemon via SIGTERM / shutdown API. |
@@ -47,6 +55,10 @@ The following flags are accepted by `tasksmith` and `tasksmith repl` only — `t
 | `--model <id>` | | Provider default | Upstream model identifier (e.g., `openai/gpt-5.5` or `ollama/qwen3.8`). |
 | `--title <title>` | | *(none)* | Optional human-readable title assigned to a newly created session. |
 | `--sandbox <mode>` | | `native` when available | Sandbox isolation backend for sessions this client creates: `native` (OS kernel sandboxes) or `local` (in-process confinement). The mode is resolved per session at creation — one daemon can serve native and local sessions side by side — and cannot be changed afterwards (resuming an existing session with a differing request surfaces a warning instead). `native` requests degrade to `local` with a warning when a host probe shows kernel sandboxing is unusable (`sandbox-exec`/`bwrap` missing, restricted containers, nested sandboxes). |
+
+### Headless Execution Flags (`exec` / `--print`)
+
+Headless execution has its own reference page: [Headless Execution Reference](./exec.md) — flags, input/output framing, the bidirectional NDJSON control-frame protocol, daemon events, slash commands without the TUI, exit codes, and SDK embedding. The `exec` subcommand row appears in the Subcommands table above, and the REPL session flags apply to `exec` with the same meaning.
 
 ### Daemon Flags
 
@@ -93,6 +105,10 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/init`** | | *(none)* | Invokes the built-in `system:init` command to inspect codebase conventions and interactively generate or update `AGENTS.md`. |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
+
+### Headless Slash Commands (`exec`)
+
+`tasksmith exec` (and `-p`) resolves a small UI-free command set locally and forwards everything else to the daemon, exactly as the REPL does. The full table and forwarding rules live in the [Headless Execution Reference — Slash Commands Without the TUI](./exec.md#6-slash-commands-without-the-tui).
 
 ### Model Picker (`/model`)
 

@@ -285,6 +285,15 @@ func TestBuiltinSandboxPermissionReferences(t *testing.T) {
 			t.Fatalf("tasksmith-customizations reference must stay client-agnostic; found %s", replOnly)
 		}
 	}
+	headlessRef, err := os.ReadFile(filepath.Join(builtinDir, "skills", "cli-customizations", "references", "headless-exec.md"))
+	if err != nil {
+		t.Fatalf("synced cli-customizations headless-exec reference missing: %v", err)
+	}
+	for _, want := range []string{"--input-format", "--output-format", "needs_input", "ConnectOrStart"} {
+		if !strings.Contains(string(headlessRef), want) {
+			t.Fatalf("headless-exec reference lacks %q guidance", want)
+		}
+	}
 
 	sk, ok := cat.GetSkill("tasksmith-customizations")
 	if !ok {
@@ -322,6 +331,9 @@ func TestBuiltinSandboxPermissionReferences(t *testing.T) {
 		})
 		if err != nil || !strings.Contains(fbText, "references/sandbox-and-permissions.md") {
 			t.Fatalf("fallback render for %s: %v", name, err)
+		}
+		if name == "cli-customizations" && !strings.Contains(fbText, "references/headless-exec.md") {
+			t.Fatalf("fallback render for %s lacks headless-exec reference", name)
 		}
 	}
 }
