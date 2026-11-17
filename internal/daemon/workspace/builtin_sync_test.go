@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -211,12 +212,23 @@ func TestBuiltinInitCommandResolves(t *testing.T) {
 	if !skillFound {
 		t.Fatal("init command does not carry the tasksmith-customizations skill")
 	}
+	hasLS := slices.Contains(cmd.Def.Spec.Tools, "ls")
+	if !hasLS {
+		t.Fatalf("init command tools = %v, want ls included", cmd.Def.Spec.Tools)
+	}
+	if !strings.Contains(cmd.Def.Spec.Instructions, "empty or contains only bare configuration") {
+		t.Fatal("init command missing empty/config-only pre-flight guard")
+	}
 	builtinDir, err := EnsureBuiltinDir()
 	if err != nil {
 		t.Fatalf("EnsureBuiltinDir: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(builtinDir, "skills", "tasksmith-customizations", "references", "agents-md.md")); err != nil {
+	agentsMDRef, err := os.ReadFile(filepath.Join(builtinDir, "skills", "tasksmith-customizations", "references", "agents-md.md"))
+	if err != nil {
 		t.Fatalf("agents-md reference missing: %v", err)
+	}
+	if !strings.Contains(string(agentsMDRef), "Progressive Disclosure") {
+		t.Fatal("agents-md reference missing progressive disclosure guidance")
 	}
 }
 

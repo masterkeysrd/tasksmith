@@ -1,60 +1,60 @@
 # Authoring AGENTS.md Guidelines
 
-`AGENTS.md` is the primary contextual specification file for coding agents working in a repository or subproject. It informs agents about project structure, build/test toolchains, coding conventions, architectural invariants, and project-specific rules.
+`AGENTS.md` is the always-on project context file for coding agents working in a repository or mapped subproject. Because its rendered body enters prompt context on **every turn**, high signal density and progressive disclosure are essential.
 
 ---
 
-## 1. Structure of `AGENTS.md`
+## 1. Core Principles
 
-A well-structured `AGENTS.md` file contains the following core sections:
+### 1.1 High Signal, Zero Obvious Filler
+LLM agents explore codebases dynamically with `ls`, `glob`, `grep`, and `view`. Mentioning obvious facts they pick up from reading a file or two (exhaustive directory trees, restating dependency manifests, or generic advice like "write clean, modular code") is actively detrimental: it burns context budget and dilutes attention away from real constraints.
 
-### 1.1 Project Overview & Architecture
-- Brief statement of the project purpose, architecture, and design patterns.
-- High-level component interactions, core subsystems, and key directories.
+Focus primarily on **non-obvious knowledge that prevents trial-and-error discovery**:
+- Exact build, test, codegen, and lint invocations — especially required flags, environment variables, build tags, or how to run a single targeted test quickly.
+- How subsystems fit together: entry points, package boundaries, ownership, and end-to-end control/data flow across files.
+- Implicit conventions, error-handling idioms, concurrency/locking invariants, and testing patterns not self-evident from a single file.
+- Sharp gotchas: generated files (`DO NOT EDIT` + the generator command), migrations, fixture quirks, sandbox/security boundaries, or doc-sync rules.
 
-### 1.2 Build, Test, & Lint Commands
-Crisp tables or lists of commands agents must run to verify their changes:
-- Build command (e.g. `go build ./...`, `npm run build`, `cargo build`).
-- Unit test command (e.g. `go test ./...`, `pytest`, `npm test`).
-- Targeted / fast test runner options.
-- Linter / typecheck commands (e.g. `golangci-lint run`, `npm run lint`, `tsc --noEmit`).
+### 1.2 Progressive Disclosure Across Layers
+Do not treat `AGENTS.md` as a dump for every specialized runbook in the repository:
+- **Keep in `AGENTS.md`**: Universal commands, architecture map, cross-cutting conventions, and repository-wide invariants needed on most tasks.
+- **Link instead of duplicating**: Reference deeper existing repository docs (`docs/architecture/...`, `CONTRIBUTING.md`) via relative Markdown links so agents read them only when working in that area.
+- **Split narrow guardrails into `.agents/rules/*.rule.md`**: Path- or tool-specific rules (e.g., `**/*.sql`, `docs/**/*.md`, `internal/api/**`) belong in conditional `Rule` manifests (`triggers.globs` / `triggers.tools`) so they auto-inject only when matching files or tools are touched; see `rules.md`.
+- **Split multi-step playbooks into `.agents/skills/<name>/SKILL.md`**: Release checklists, migration playbooks, or domain workflows with supporting scripts/references belong in on-demand `Skill` resources; see `skills.md`.
 
-### 1.3 Code Style & Engineering Conventions
-- Language-specific formatting and idioms.
-- Error handling patterns, naming rules, and logging conventions.
-- Package layout or module organization standards.
-
-### 1.4 Critical Rules & Invariants
-- Zero machine-local paths: never commit `/Users/...`, `/home/...`, or system-specific paths.
-- Security constraints: never write credentials, tokens, or plaintext secrets into code or manifests.
-- Documentation synchronization: rules for updating docs when modifying CLI flags, schemas, or public APIs.
+### 1.3 Strict Observation-Only Fidelity
+- **Never invent commands, flags, patterns, or conventions.** Verify every command against actual `Makefile`, `package.json`, `go.mod`, `Cargo.toml`, `pyproject.toml`, taskfiles, or CI workflows, and verify architectural claims against real source files.
+- If a category (e.g., deployment or codegen) does not exist in the repository, omit it completely rather than writing placeholders.
+- **Portability**: Never write machine-local absolute home paths or file-scheme URIs; use repository-relative paths/links and portable variables (`~`, `$XDG_CONFIG_HOME`).
 
 ---
 
-## 2. `/init` Execution Behavior
+## 2. Recommended Content & Structure
 
-When invoked via `/init`, the agent must adhere to the following rules:
+Adapt section headings to what actually exists in the codebase rather than forcing empty boilerplate sections:
 
-### 2.1 Inspection
-1. Scan project roots using `glob` and `view`:
-   - Inspect build files (`go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml`, `Makefile`, `CMakeLists.txt`).
-   - Inspect CI workflows (`.github/workflows/*.yaml`).
-   - Inspect existing `README.md` or design documents for high-level architecture.
-2. If ambiguous options exist (for example, whether to use `make test` vs `go test ./...`), ask the user using the `ask_question` tool instead of guessing.
+- **Architecture & Data/Control Flow**: Concise map of core subsystems, entry points, state/storage boundaries, and how requests, events, or data move across packages.
+- **Essential Commands**: Verified commands for build, full tests, single-package/single-test execution, code generation, linting, and typechecking, noting non-obvious flags or prerequisites.
+- **Conventions & Patterns**: Project-specific naming, error wrapping, logging, configuration, API/schema evolution, and testing idioms observed in representative source and test files.
+- **Gotchas & Critical Invariants**: Generated files, ordering/concurrency hazards, security/credential rules, portability rules, and documentation-sync requirements.
 
-### 2.2 Create vs. Update
-- **If `AGENTS.md` does not exist**:
-  - Author a clean, organized `AGENTS.md` file from scratch based on observed files and facts.
-- **If `AGENTS.md` already exists**:
-  - Read existing `AGENTS.md` before making any edits.
-  - Merge newly detected commands or facts into existing sections.
-  - **Preserve all existing human-authored rules, custom instructions, and notes.** Never overwrite or discard custom user rules.
+---
 
-### 2.3 Monorepos
-- If the workspace defines multiple subprojects in `WORKSPACE.md` (`spec.projects`), ask the user using `ask_question` whether they want to generate/update:
-  1. The root repository `AGENTS.md`.
-  2. A subproject-specific `<project>/AGENTS.md`.
-  3. Both.
+## 3. Discovery & Initialization Workflow
 
-### 2.4 Restricted Mode
-- If running in a restricted workspace, `/init` is fully allowed: the agent uses read-only tools (`view`, `glob`, `grep`), and proposes a confirmed write to `AGENTS.md` via `write` or `edit`.
+When creating or updating `AGENTS.md` (including via `init`):
+
+1. **Empty / Config-Only Guard**:
+   - Check directory contents with `ls` / `glob` first. If the directory is empty or contains only bare config files with no source code yet, stop without creating `AGENTS.md` and ask the user to add source code first.
+2. **Harvest Existing Agent & Editor Context**:
+   - Check for existing instruction files (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.md`, `.cursor/rules/*.mdc`, `.cursorrules`, `.github/copilot-instructions.md`, `.windsurfrules`, `.agents/rules/*.rule.md`), reading only those that exist.
+   - Incorporate relevant repo-wide rules; if existing editor rules carry narrow file globs, consider suggesting conditional `.agents/rules/*.rule.md` equivalents via `ask_question`.
+3. **Inspect Configs, CI, & Representative Source Code**:
+   - Read build/package manifests, task runners, linter configs, and CI workflows (`.github/workflows/`) to confirm what CI actually enforces.
+   - Read representative entry points, core implementation files, and test files — never rely on config files and `README.md` alone, since READMEs may be aspirational or stale.
+4. **Create vs. Update**:
+   - **New `AGENTS.md`**: Write clear, grounded Markdown sections covering everything non-obvious an agent needs to work effectively.
+   - **Existing `AGENTS.md`**: Read it thoroughly first, update stale/missing technical facts, and **strictly preserve all human-authored rules, constraints, and custom notes**.
+5. **Monorepos & Restricted Workspaces**:
+   - When `WORKSPACE.md` defines multiple `spec.projects` (or distinct subproject roots exist), use `ask_question` to confirm whether to author root `AGENTS.md`, subproject `<project>/AGENTS.md`, or both.
+   - In restricted workspaces, inspect with read-only tools (`ls`, `glob`, `grep`, `view`) and propose the `AGENTS.md` change via `write` or `edit` for user confirmation.

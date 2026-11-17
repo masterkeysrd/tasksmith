@@ -439,7 +439,7 @@ Every parameter declared in `spec.arguments` supports:
 
 TaskSmith embeds system-tier command manifests directly within the binary. These commands are universally available across all workspaces unless shadowed by a higher-priority definition:
 
-- **`system:init` (`/init`)**: Built-in command that inspects the workspace codebase structure (languages, frameworks, build systems, test runners, and style rules) and interactively generates or updates `AGENTS.md`. Employs `inline` context, activates the `tasksmith-customizations` skill, and requests safe read/inspection tools (`view`, `glob`, `grep`), interactive input (`ask_question`), and file modification tools (`write`, `edit`).
+- **`system:init` (`/init`)**: Built-in command that inspects the workspace codebase (directory layout, existing agent/editor rule files, build/CI configs, and representative source/test files) and interactively generates or updates `AGENTS.md`. Employs `inline` context, activates the `tasksmith-customizations` skill, and requests safe read/inspection tools (`ls`, `view`, `glob`, `grep`), interactive input (`ask_question`), and file modification tools (`write`, `edit`).
 
 ---
 

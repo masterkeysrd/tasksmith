@@ -38,6 +38,18 @@ Tier order decides which definition wins; it does not decide where a new resourc
 
 Never move a credential out of another tool's store, such as a CLI keyring, into a manifest, `.env`, or any other plaintext file without explicit approval. Reference it through a `spec.auth` expression (`${env:<VAR>}` or `${file:<PATH>}`) and let the user supply the value.
 
+## Progressive disclosure
+
+Every token in always-on context is paid on every turn and competes for model attention. Design workspace customizations so information enters context only at the granularity a task actually needs:
+
+| Layer | Context cost | What belongs here |
+| --- | --- | --- |
+| `AGENTS.md`, `WORKSPACE.md` body, `triggers.always: true` rules | Paid on **every turn** | Repository-wide commands (especially non-obvious flags/codegen), cross-package architecture & data/control flow, implicit conventions, and unbreakable invariants. Omit surface details obvious from `ls` or reading one file. |
+| Conditional rules (`rules/*.rule.md` with `globs`, `tools`, `keywords`, `useWhen`) | Loaded **only when matched** | Path-, language-, or tool-specific guardrails (e.g. SQL migrations, `docs/**/*.md` portability, `api/**` codegen). Prefer conditional triggers over growing `AGENTS.md` or `triggers.always`. |
+| Skills (`skills/<name>/SKILL.md` + `references/`, `scripts/`) | Metadata only until `load_skill` / `/name` | Specialized domain workflows and runbooks. Keep `SKILL.md` as a concise workflow map and split deep schemas, tables, and examples into `references/*.md` read on demand. |
+
+When authoring or refactoring instructions, link to existing repository docs with relative Markdown links instead of duplicating prose, and ground every documented command or convention in verified repository files rather than assumptions.
+
 ## Resource references
 
 | Resource | Reference | Common location beneath a resource directory |

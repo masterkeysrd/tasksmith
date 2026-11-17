@@ -10,6 +10,13 @@ The main agent receives metadata for its resolved skills. `useWhen` and `keyword
 
 A user can also invoke a skill with `/name` and arguments. A matching Command is resolved first, so it takes precedence over a Skill with the same slash name. The rendered skill instructions are then included in the user message. Slash invocation uses workspace lookup, whereas `load_skill` checks the agent's resolved skill set.
 
+## Structuring skills for progressive disclosure
+
+Skills give workspaces a two-stage progressive-disclosure mechanism:
+
+1. **Before invocation**: Only `metadata.name`, `metadata.description`, `spec.useWhen`, `spec.keywords`, and argument metadata appear in `<available_skills>`. Write `description` and `useWhen` as crisp trigger conditions so the model knows *when* to call `load_skill` without needing the body up front.
+2. **After invocation**: Keep `SKILL.md` itself focused on core mental models, decision trees, and workflow steps. When a skill covers multiple subtopics, large schemas, or lengthy examples, place them in sibling `references/*.md` files (or helper scripts under `scripts/`) and link them in a compact table inside `SKILL.md` so the agent reads only the specific reference file its current task needs.
+
 ## Definition
 
 A Skill has YAML frontmatter and a Markdown body. The body becomes `instructions` automatically and is rendered when invoked. A `spec` block is optional: a skill can consist of metadata and instructions alone.

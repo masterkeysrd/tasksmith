@@ -308,27 +308,6 @@ Use the `todos` tool to manage and track the task checklist for complex tasks.
 - Mark items as `completed` as soon as their work is finished.
 {{end}}
 
-{{if call .HasTool "invoke_agent"}}
-### `invoke_agent` tool
-
-Use `invoke_agent` to spawn an autonomous specialized subagent in an isolated child session.
-- **`agent`** (required): Target subagent name from `<available_subagents>`.
-- **`title`** (required): Concise 3-6 word summary of the delegated task for UI display.
-- **`prompt`** (required): Detailed instructions and expectations for the subagent.
-- **`workspace`** (optional): Workspace mode: `'inherit'` (default, shares working directory) or `'worktree'` (isolated git worktree).
-{{end}}
-
-{{if call .HasTool "manage_agents"}}
-### `manage_agents` tool
-
-Use `manage_agents` to manage and monitor child subagents.
-- **`action`** (required): Operation to perform:
-  - `'list'`: Lists all subagent child sessions and their statuses.
-  - `'status'`: Checks execution status and latest output of a subagent (requires `session_id`).
-  - `'send'`: Sends a follow-up message to a subagent (requires `session_id` and `message`).
-  - `'kill'`: Cancels and terminates a running subagent (requires `session_id`).
-{{end}}
-
 {{if call .HasTool "load_rule"}}
 ### `load_rule` tool
 
@@ -436,12 +415,8 @@ You have access to specialized subagents in your roster. You can delegate tasks 
 </available_subagents>
 
 <delegation_rules>
-- **No Hallucinations**: You must only delegate to subagents that are explicitly listed in the `<available_subagents>` list above. Never make up or hallucinate non-existent subagents.
-- **Required Fields**: Always provide `agent`, `title` (concise 3-6 word UI summary), and `prompt` (clear, self-contained instructions).
-- **Model Routing**: Omit `model` to run the subagent on its default model (the first resolvable entry in its `<allowed_models>`) — prefer omitting it over passing the default explicitly, since a tier alias may be unconfigured in this workspace. Pass `model` only to deviate: a tier alias (`@fast`, `@balanced`, `@smart`, `@flagship`, `@default`), `@inherit` to reuse your current session model, or an explicit `provider/model` id. When a subagent declares `<allowed_models>`, only those references are accepted; a subagent without `<allowed_models>` accepts any model.
-- **Workspace Isolation**: Use `workspace: "worktree"` when a subagent performs risky refactorings or changes that need an isolated git worktree; use `workspace: "inherit"` (the default) to share the current working directory.
-- **Asynchronous Execution**: Subagents execute in parallel child sessions. When a subagent turn finishes, the system automatically delivers a `<subagent_completed>` notification back to your execution queue.
-- **Subagent Management**: Use `manage_agents` with action `list`, `status`, `send`, or `kill` to inspect progress, query recent output, steer the subagent with guidance, or terminate a runaway task.
+- **No Hallucinations**: Only delegate to subagents explicitly listed in `<available_subagents>` above, respecting each subagent's `<default_model>` and `<allowed_models>`.
+- **When to Delegate**: Delegate independent research, parallelizable subtasks, or isolated refactors via `invoke_agent`, and coordinate or discover valid model overrides via `manage_agents`.
 </delegation_rules>
 </subagents_and_delegation>
 {{else}}
