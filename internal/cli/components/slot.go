@@ -63,6 +63,20 @@ var Slot = trail.SimpleFC("Slot", func() trail.Node {
 	case store.SlotKindAutocomplete:
 		// Placeholder until Autocomplete component is added.
 		child = nil
+	case store.SlotKindModelSwitch:
+		if req, ok := active.Data.(store.ModelSwitchRequest); ok {
+			child = ModelSwitchPrompt(ModelSwitchPromptProps{
+				Request: req,
+				OnForce: func() {
+					store.RemoveSlot(active.ID)
+					store.ForceSetModel(req.Model)
+				},
+				OnCancel: func() {
+					store.RemoveSlot(active.ID)
+					store.AppendCommandOutput("/model "+req.Model, "Canceled model switch")
+				},
+			})
+		}
 	default:
 		return nil
 	}

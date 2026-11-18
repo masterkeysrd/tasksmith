@@ -32,6 +32,7 @@ const (
 	PartThought MessagePartType = "thought"
 	PartText    MessagePartType = "text"
 	PartTool    MessagePartType = "tool"
+	PartMedia   MessagePartType = "media"
 )
 
 // MessagePart is a tagged union. Only the field identified by Type is set.
@@ -41,6 +42,12 @@ type MessagePart struct {
 	Thought *ThoughtPart
 	Text    *TextPart
 	Tool    *ToolPart
+	Media   *MediaPart
+}
+
+type MediaPart struct {
+	BlockType api.BlockType
+	Media     api.Media
 }
 
 type ThoughtPart struct {
@@ -1574,6 +1581,17 @@ func (acc *conversationAccumulator) projectLocked() (history []Message, streamMs
 					if call.ID != "" {
 						tools[call.ID] = part.Tool
 					}
+				case api.BlockImage, api.BlockDocument, api.BlockAudio:
+					if block.Media == nil || len(message.Attachments) > 0 {
+						continue
+					}
+					part.Type, part.Media = PartMedia, &MediaPart{
+						BlockType: block.Type,
+						Media:     *block.Media,
+					}
+				}
+				if part.Type == "" {
+					continue
 				}
 				message.Parts = append(message.Parts, part)
 			}
@@ -1664,6 +1682,11 @@ func validateConversationBlock(block api.Block, partial bool) error {
 	switch block.Type {
 	case api.BlockText, api.BlockReasoning:
 		return nil
+	case api.BlockImage, api.BlockDocument, api.BlockAudio:
+		if block.Media == nil {
+			return fmt.Errorf("conversation: %s block requires media descriptor", block.Type)
+		}
+		return nil
 	case api.BlockToolCall:
 		if block.ToolCall == nil || !partial && block.ToolCall.ID == "" {
 			return errors.New("conversation: tool block requires a call and a final call ID")
@@ -1727,6 +1750,10 @@ func cloneConversationMessage(message api.Message) api.Message {
 			cloned := *call
 			cloned.Args = maps.Clone(call.Args)
 			message.Content[i].ToolCall = &cloned
+		}
+		if media := message.Content[i].Media; media != nil {
+			cloned := *media
+			message.Content[i].Media = &cloned
 		}
 	}
 	return message

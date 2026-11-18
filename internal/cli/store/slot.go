@@ -16,12 +16,20 @@ const (
 	SlotKindQuestion     SlotKind = "question"
 	SlotKindPicker       SlotKind = "picker"
 	SlotKindAutocomplete SlotKind = "autocomplete"
+	SlotKindModelSwitch  SlotKind = "model_switch"
 )
+
+// ModelSwitchRequest describes a pending confirmation prompt when switching
+// models would drop active-session modalities.
+type ModelSwitchRequest struct {
+	Model             string
+	MissingModalities []string
+}
 
 // HidesComposer reports whether this slot kind should hide the Composer while active.
 func (k SlotKind) HidesComposer() bool {
 	switch k {
-	case SlotKindPermission, SlotKindQuestion, SlotKindPicker:
+	case SlotKindPermission, SlotKindQuestion, SlotKindPicker, SlotKindModelSwitch:
 		return true
 	default:
 		return false

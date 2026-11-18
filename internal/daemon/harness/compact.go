@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/tokenizer"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -89,6 +90,16 @@ func estimateBlockTokens(b message.Block) int {
 	case *message.ToolCall:
 		data, _ := json.Marshal(blk.Args)
 		return estimateTokens(blk.Name) + estimateTokens(string(data))
+	case *message.ImageBlock:
+		return 1024
+	case *message.DocumentBlock:
+		desc, _, _ := media.DescriptorFromBlock(blk)
+		if desc.ByteSize > 0 {
+			return min(16384, max(1024, int(desc.ByteSize/256)))
+		}
+		return 2048
+	case *message.AudioBlock:
+		return 1024
 	default:
 		return estimateTokens(fmt.Sprint(blk))
 	}
@@ -404,10 +415,12 @@ var summarizeTemplate = template.Must(template.New("summarize").Parse(summarizeP
 // CompactionNode performs in-chat conversation summarization and state replacement.
 type CompactionNode struct {
 	model        *llm.Model
+	modelInfo    models.Model
 	tools        tools.Container
 	systemPrompt string
 	limits       models.Limits
 	static       StaticContext
+	media        *media.Store
 	logger       log.Interface
 }
 
@@ -415,10 +428,12 @@ var _ Node = (*CompactionNode)(nil)
 
 func (n *CompactionNode) Configure(opts NodeOptions) {
 	n.model = opts.Model
+	n.modelInfo = opts.ModelInfo
 	n.tools = opts.Tools
 	n.systemPrompt = strings.TrimSpace(opts.SystemPrompt)
 	n.limits = opts.Limits
 	n.static = opts.Static
+	n.media = opts.Media
 }
 
 // NewCompactionNode constructs a new CompactionNode bound to dependencies.
@@ -470,10 +485,12 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		model = model.BindToolDefs(defs...)
 	}
 
-	resp, err := model.Invoke(scope.With(ctx, scope.Scope{
+	compactCtxScope := scope.With(ctx, scope.Scope{
 		TurnID:  state.LastUserMessageID(),
 		Purpose: string(metrics.PurposeCompaction),
-	}), messages)
+	})
+	messages = hydrateMessagesForLLM(n.media, n.modelInfo, messages)
+	resp, err := model.Invoke(compactCtxScope, messages)
 	if err != nil {
 		return nil, fmt.Errorf("harness: invoke compaction llm: %w", err)
 	}

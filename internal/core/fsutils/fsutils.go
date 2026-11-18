@@ -3,6 +3,8 @@ package fsutils
 import (
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,4 +130,83 @@ func ResolveDeepestExisting(p string) string {
 			return filepath.Clean(filepath.Join(append([]string{resolved}, rest...)...))
 		}
 	}
+}
+
+// WriteFileAtomic writes data to dstPath atomically via a sibling temporary file
+// and rename, setting file permissions to perm. The parent directory must exist.
+func WriteFileAtomic(dstPath string, data []byte, perm fs.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dstPath), ".tmp-write-*")
+	if err != nil {
+		return fmt.Errorf("fsutils: create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("fsutils: write temp file: %w", err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		return fmt.Errorf("fsutils: chmod temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("fsutils: close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, dstPath); err != nil {
+		return fmt.Errorf("fsutils: rename temp file: %w", err)
+	}
+	cleanup = false
+	return nil
+}
+
+// CopyFile copies srcPath to dstPath atomically via a sibling temporary file
+// and rename, setting destination permissions to perm.
+func CopyFile(srcPath, dstPath string, perm fs.FileMode) error {
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = in.Close()
+	}()
+
+	tmp, err := os.CreateTemp(filepath.Dir(dstPath), ".tmp-copy-*")
+	if err != nil {
+		return fmt.Errorf("fsutils: create temp copy: %w", err)
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := io.Copy(tmp, in); err != nil {
+		return fmt.Errorf("fsutils: copy data: %w", err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		return fmt.Errorf("fsutils: chmod temp copy: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("fsutils: close temp copy: %w", err)
+	}
+	if err := os.Rename(tmpName, dstPath); err != nil {
+		return fmt.Errorf("fsutils: rename temp copy: %w", err)
+	}
+	cleanup = false
+	return nil
+}
+
+// LinkOrCopy hardlinks srcPath to dstPath in O(1), falling back to [CopyFile]
+// when hardlinking fails (such as across filesystems).
+func LinkOrCopy(srcPath, dstPath string, perm fs.FileMode) error {
+	if err := os.Link(srcPath, dstPath); err == nil {
+		return nil
+	}
+	return CopyFile(srcPath, dstPath, perm)
 }

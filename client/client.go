@@ -57,6 +57,16 @@ func IsNeedSync(err error) bool {
 	return false
 }
 
+// IsCapabilityMismatch reports whether err is a structured capability-mismatch
+// error returned when switching models drops active session modalities.
+func IsCapabilityMismatch(err error) (*api.APIError, bool) {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr != nil && apiErr.Code == api.ErrCodeCapabilityMismatch {
+		return apiErr, true
+	}
+	return nil, false
+}
+
 // NewCursor returns a fresh canonical UUIDv7 string cursor for event streaming.
 func NewCursor() string {
 	return uuid.Must(uuid.NewV7()).String()
@@ -776,6 +786,54 @@ func (c *Client) Send(ctx context.Context, sessionID string, req api.SendRequest
 	return c.doJSON(ctx, http.MethodPost, path, nil, req, nil)
 }
 
+// UploadMedia stores raw media bytes in the session's content-addressed
+// <session-dir>/media/<sha256> store and returns a lightweight descriptor.
+func (c *Client) UploadMedia(ctx context.Context, sessionID string, data []byte, mimeType, filename string) (*api.Media, error) {
+	path, err := c.sessionEndpoint(sessionID, "/media")
+	if err != nil {
+		return nil, err
+	}
+	u := baseURL + path
+	q := url.Values{}
+	if strings.TrimSpace(filename) != "" {
+		q.Set("filename", strings.TrimSpace(filename))
+	}
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("client: build request POST %s: %w", path, err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if c.cwd != "" {
+		req.Header.Set(api.HeaderCWD, c.cwd)
+	}
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = "application/octet-stream"
+	}
+	req.Header.Set("Content-Type", mimeType)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, decodeErrorResponse(resp)
+	}
+
+	var out api.Media
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("client: decode response POST %s: %w", path, err)
+	}
+	return &out, nil
+}
+
 // Cancel aborts an in-progress conversational turn on a session.
 func (c *Client) Cancel(ctx context.Context, sessionID string) error {
 	path, err := c.sessionEndpoint(sessionID, "/cancel")
@@ -1186,9 +1244,11 @@ func decodeErrorResponse(resp *http.Response) error {
 	var errResp api.ErrorResponse
 	if len(raw) > 0 && json.Unmarshal(raw, &errResp) == nil && (errResp.Code != "" || errResp.Message != "") {
 		return &api.APIError{
-			StatusCode: resp.StatusCode,
-			Code:       errResp.Code,
-			Message:    errResp.Message,
+			StatusCode:        resp.StatusCode,
+			Code:              errResp.Code,
+			Message:           errResp.Message,
+			Model:             errResp.Model,
+			MissingModalities: errResp.MissingModalities,
 		}
 	}
 

@@ -31,6 +31,7 @@ those files before quoting any flag, frame field, or exit code.
 | `--title` | string | new session title (names the fork with `--fork`) |
 | `--max-turns` | integer | client-side cap; 0 = unlimited |
 | `--ephemeral` | bool | delete the session when the run ends |
+| `--force` | bool | force a resumed session's `--model` switch even when it drops active modalities |
 
 The root command's `-p`/`--print` shorthand reuses the REPL's flags plus
 `--input-format`, `--output-format`, `--mode`, `--max-turns`, and `--ephemeral`; it does
@@ -79,7 +80,7 @@ With `--output-format jsonl`, stdout carries frames only; diagnostics go to stde
 
 ## Slash commands without the TUI
 
-`exec` dispatches these locally: `/model [id]`, `/models`, `/mode [mode]`,
+`exec` dispatches these locally: `/model [--force] [id]`, `/models`, `/mode [mode]`,
 `/agent [name]`, `/agents`, `/effort [level|default]`, `/thinking [on|off|adaptive|default]`,
 `/budget [tokens|default]`, `/usage`, `/compact [focus]`, `/fork [title]`, `/exit` (`/quit`),
 `/help`. `/fork` branches the current session and rebinds the run to the fork (rejected while

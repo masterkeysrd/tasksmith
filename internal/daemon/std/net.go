@@ -15,6 +15,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/core/hash"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 )
@@ -160,7 +161,7 @@ func (s *Std) Download(ctx context.Context, req DownloadRequest) (*DownloadResul
 	case err == nil:
 		exists = true
 		diskBytes = readBytes
-		diskHash = sha256Hex(diskBytes)
+		diskHash = hash.SHA256Hex(diskBytes)
 		if !req.Force {
 			if err := s.verifyCAS(normPath, diskHash, req.ExpectedHash); err != nil {
 				return nil, err
@@ -240,7 +241,7 @@ func (s *Std) Download(ctx context.Context, req DownloadRequest) (*DownloadResul
 		return nil, err
 	}
 
-	afterHash := sha256Hex(bodyBytes)
+	afterHash := hash.SHA256Hex(bodyBytes)
 	isBin := isBinaryContent(bodyBytes) || (exists && isBinaryContent(diskBytes))
 
 	var add, del int

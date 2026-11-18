@@ -152,3 +152,40 @@ func TestResolveDeepestExisting(t *testing.T) {
 		t.Errorf("deep missing chain = %q, want %q", got, filepath.Join(realBase, "nope", "still-nope"))
 	}
 }
+
+func TestWriteFileAtomicCopyFileAndLinkOrCopy(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src.bin")
+	payload := []byte("hello atomic world")
+
+	if err := WriteFileAtomic(src, payload, 0o644); err != nil {
+		t.Fatalf("WriteFileAtomic: %v", err)
+	}
+	got, err := os.ReadFile(src)
+	if err != nil || string(got) != string(payload) {
+		t.Fatalf("ReadFile(src) = (%q, %v)", got, err)
+	}
+
+	copied := filepath.Join(dir, "copied.bin")
+	if err := CopyFile(src, copied, 0o644); err != nil {
+		t.Fatalf("CopyFile: %v", err)
+	}
+	gotCopy, err := os.ReadFile(copied)
+	if err != nil || string(gotCopy) != string(payload) {
+		t.Fatalf("ReadFile(copied) = (%q, %v)", gotCopy, err)
+	}
+	srcInfo, _ := os.Stat(src)
+	copyInfo, _ := os.Stat(copied)
+	if os.SameFile(srcInfo, copyInfo) {
+		t.Fatal("CopyFile should produce an independent file, not a hardlink")
+	}
+
+	linked := filepath.Join(dir, "linked.bin")
+	if err := LinkOrCopy(src, linked, 0o644); err != nil {
+		t.Fatalf("LinkOrCopy: %v", err)
+	}
+	linkInfo, _ := os.Stat(linked)
+	if !os.SameFile(srcInfo, linkInfo) {
+		t.Fatal("LinkOrCopy should hardlink when on same filesystem")
+	}
+}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
@@ -496,6 +497,32 @@ func (s State) RecordSuggestedRules(names ...string) State {
 func (s State) HasPendingToolCalls() bool {
 	_, _, unfulfilled, _ := s.ActiveToolCalls()
 	return len(unfulfilled) > 0
+}
+
+// ActiveModalities returns the sorted, deduplicated set of non-text input
+// modalities ("image", "pdf", "audio") currently present in State.Messages
+// (post-compaction live context).
+func (s State) ActiveModalities() []media.Modality {
+	seen := make(map[media.Modality]struct{}, 3)
+	for _, msg := range s.Messages {
+		if msg == nil {
+			continue
+		}
+		for _, blk := range msg.GetContent() {
+			if mod, ok := media.ModalityOfBlock(blk); ok {
+				seen[mod] = struct{}{}
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]media.Modality, 0, len(seen))
+	for mod := range seen {
+		out = append(out, mod)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ActiveToolCalls locates the latest [*message.Assistant] message with tool calls

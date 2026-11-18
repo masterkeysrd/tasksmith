@@ -90,12 +90,39 @@ func validateRequest(prof models.Model, req *llm.Request) error {
 			if modality != "" && prof.Modalities.Input != nil && !slices.Contains(prof.Modalities.Input, string(modality)) {
 				return unsupported(string(modality)+" input", "choose a compatible model or remove the input")
 			}
-			if msg.Role() != message.RoleUser || !adapterPreservesMedia(prof.ProviderType, block, data, url, mime) {
+			switch msg.Role() {
+			case message.RoleUser:
+				if !adapterPreservesMedia(prof.ProviderType, block, data, url, mime) {
+					return fmt.Errorf("%w: provider %q cannot safely send message %d block %d (%T); choose a compatible provider or remove the input", ErrUnsupportedCapability, prof.ProviderType, i, j, block)
+				}
+			case message.RoleTool:
+				if (len(data) == 0 && url == "") || !adapterPreservesToolMedia(prof.ProviderType, block, mime) {
+					return fmt.Errorf("%w: provider %q cannot safely send message %d block %d (%T); choose a compatible provider or remove the input", ErrUnsupportedCapability, prof.ProviderType, i, j, block)
+				}
+			default:
 				return fmt.Errorf("%w: provider %q cannot safely send message %d block %d (%T); choose a compatible provider or remove the input", ErrUnsupportedCapability, prof.ProviderType, i, j, block)
 			}
 		}
 	}
 	return nil
+}
+
+func adapterPreservesToolMedia(provider string, block message.Block, mime string) bool {
+	switch provider {
+	case "genai", "google-genai", "gemini":
+		return true
+	case "ollama":
+		_, ok := block.(*message.ImageBlock)
+		return ok
+	case "anthropic":
+		switch block.(type) {
+		case *message.ImageBlock:
+			return true
+		case *message.DocumentBlock:
+			return mime == "application/pdf"
+		}
+	}
+	return false
 }
 
 func adapterPreservesMedia(provider string, block message.Block, data []byte, url, mime string) bool {

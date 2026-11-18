@@ -348,20 +348,21 @@ func prepareResponses(input Input, state State) (graph.Update[State], error) {
 func (h *harness) prepareMessage(ctx context.Context, msg message.Message, state State) (graph.Update[State], message.Message, []RuleLoaded, error) {
 	in := message.CloneMessage(msg)
 	in, newTools := state.DeduplicateToolBlocks(in)
-	var inputMsg message.Message
 	_, _, unfulfilled, _ := state.ActiveToolCalls()
-	if len(unfulfilled) == 0 {
-		if strings.TrimSpace(in.GetID()) == "" {
-			in.SetID(uuid.NewString())
-		}
-		inputMsg = message.CloneMessage(in)
-	}
 
 	nextState := state.RecordLoadedTools(newTools...)
 	var reminder *message.User
 	var loadedRules []RuleLoaded
 	if h.attachments != nil {
 		nextState, reminder, loadedRules = h.attachments.ResolveUserMessage(ctx, in, nextState)
+	}
+
+	var inputMsg message.Message
+	if len(unfulfilled) == 0 {
+		if strings.TrimSpace(in.GetID()) == "" {
+			in.SetID(uuid.NewString())
+		}
+		inputMsg = message.CloneMessage(in)
 	}
 
 	return graph.Update[State](func(s State) State {

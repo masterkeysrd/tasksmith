@@ -93,6 +93,9 @@ type Options struct {
 	MaxTurns int
 	// Ephemeral deletes the session after the run settles.
 	Ephemeral bool
+	// Force allows a resumed session's --model change even if it drops input
+	// modalities present in active post-compaction context.
+	Force bool
 	// Title seeds the title of a newly created session.
 	Title string
 	// Config overlays the created/resumed session (agent, model, mode, sandbox).

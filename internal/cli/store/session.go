@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/mentions"
+	"github.com/masterkeysrd/tasksmith/internal/core/hash"
 )
 
 // SessionState holds the active session and its configuration, permission mode,
@@ -33,6 +34,7 @@ type SessionState struct {
 	// workspace default), so this is what identifies the active model when
 	// Config.Model is empty or an alias.
 	ModelID   string
+	Model     *api.Model
 	Thinking  string
 	Tasks     *[]api.Task
 	Subagents *[]api.Session
@@ -523,6 +525,24 @@ func SendWithUserText(text, userText string, attachments ...api.Attachment) {
 			globalConversation.setPendingUserAttachments(msgID, finalAttachments)
 		}
 
+		for i := range finalAttachments {
+			att := &finalAttachments[i]
+			if att.Kind != api.AttachmentMedia {
+				continue
+			}
+			staged, ok := takeStagedMedia(att.Target)
+			if !ok {
+				continue
+			}
+			uploaded, uerr := c.UploadMedia(ctx, sess.ID, staged.Data, staged.MIMEType, staged.DisplayName)
+			if uerr != nil {
+				globalConversation.cancelPendingUser(msgID, uerr)
+				return
+			}
+			att.Target = uploaded.SHA256
+			att.Media = uploaded
+		}
+
 		err = c.Send(ctx, sess.ID, api.SendRequest{
 			ID:          msgID,
 			Content:     text,
@@ -787,6 +807,7 @@ func SetSession(sess *api.Session) {
 		s.ModelQuotaBilled = quotaBilled
 		s.Session = sess
 		if sess != nil {
+			s.Model = sess.Model
 			s.ModelID = modelIdentifier(sess.Model)
 			s.ModelLabel, s.Thinking = modelDisplay(sess.Model, sess.Config.Thinking)
 			s.SandboxMode = sess.SandboxMode
@@ -1771,8 +1792,82 @@ func ForkSession(sessionID, title string) {
 	}()
 }
 
+type stagedMediaItem struct {
+	Data        []byte
+	MIMEType    string
+	DisplayName string
+}
+
+var stagedMedia = make(map[string]stagedMediaItem)
+
+// StageClipboardMedia buffers pasted media bytes in memory until the turn is
+// submitted (avoiding orphaned session creation or disk writes on canceled
+// drafts) and returns the corresponding Attachment descriptor.
+func StageClipboardMedia(ref string, data []byte, mimeType, displayName string) api.Attachment {
+	sha := hash.SHA256Hex(data)
+
+	sessMu.Lock()
+	stagedMedia[sha] = stagedMediaItem{
+		Data:        slices.Clone(data),
+		MIMEType:    mimeType,
+		DisplayName: displayName,
+	}
+	sessMu.Unlock()
+
+	return api.Attachment{
+		Kind:   api.AttachmentMedia,
+		Ref:    ref,
+		Target: sha,
+		Media: &api.Media{
+			SHA256:      sha,
+			MIMEType:    mimeType,
+			ByteSize:    int64(len(data)),
+			DisplayName: displayName,
+		},
+	}
+}
+
+func takeStagedMedia(sha string) (stagedMediaItem, bool) {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	item, ok := stagedMedia[sha]
+	if ok {
+		delete(stagedMedia, sha)
+	}
+	return item, ok
+}
+
+// ActiveModelSupports reports whether the active (or draft) session model
+// supports the requested input modality ("image", "pdf", "audio"), returning the
+// model ID for notices when explicitly unsupported. Models with unknown
+// modalities (nil InputModalities) report supported=true.
+func ActiveModelSupports(mod string) (modelID string, supported bool) {
+	st := GetSession()
+	m := st.Model
+	if st.Session != nil && st.Session.Model != nil {
+		m = st.Session.Model
+	}
+	if m == nil {
+		return st.ActiveModelID(), true
+	}
+	if m.Capabilities.InputModalities != nil && !slices.Contains(m.Capabilities.InputModalities, mod) {
+		return m.ID, false
+	}
+	return m.ID, true
+}
+
 // SetModel updates the model for the session, either via daemon API or in draft config.
 func SetModel(modelID string) {
+	setModel(modelID, false)
+}
+
+// ForceSetModel updates the model for the session, omitting any unsupported
+// historical media descriptors on future turns when switching drops modalities.
+func ForceSetModel(modelID string) {
+	setModel(modelID, true)
+}
+
+func setModel(modelID string, force bool) {
 	st := GetSession()
 	sessMu.Lock()
 	c := activeClient
@@ -1789,8 +1884,19 @@ func SetModel(modelID string) {
 			}
 			updated, err := c.UpdateSession(ctx, st.Session.ID, api.UpdateSessionRequest{
 				Config: api.SessionConfig{Model: modelID},
+				Force:  force,
 			})
 			if err != nil {
+				if apiErr, ok := client.IsCapabilityMismatch(err); ok {
+					EnqueueSlot(SlotItem{
+						Kind: SlotKindModelSwitch,
+						Data: ModelSwitchRequest{
+							Model:             cmp.Or(apiErr.Model, modelID),
+							MissingModalities: slices.Clone(apiErr.MissingModalities),
+						},
+					})
+					return
+				}
 				AppendError("Error", err.Error())
 				return
 			}
@@ -1862,6 +1968,7 @@ func SetAgent(agentName string) {
 // ResetSession resets the session state to its initial default mode and cancels any active watchers.
 func ResetSession() {
 	sessMu.Lock()
+	clear(stagedMedia)
 	cancelModeDebounceLocked()
 	if activeCancel != nil {
 		activeCancel()
@@ -1961,6 +2068,7 @@ func updateDraftModel(ctx context.Context, c *client.Client, cfg api.SessionConf
 				s.Quota = nil
 			}
 			s.ModelQuotaBilled = quotaBilled
+			s.Model = model
 			s.ModelID = modelIdentifier(model)
 			s.ModelLabel, s.Thinking = label, thinking
 			s.Context = api.ContextState{}

@@ -35,6 +35,7 @@ git diff | tasksmith -p "Review this diff for bugs"
 | `--mode <mode>` | | `default` | Permission mode: `default`, `accept_edits`, `plan`, `ask`, `auto`. |
 | `--max-turns <n>` | | `0` | Stop after this many completed turns (`0` = unlimited). Enforced client-side; most useful in bidirectional runs. |
 | `--ephemeral` | | `off` | Delete the session once the run settles. Ideal for throwaway CI runs. |
+| `--force` | | `off` | Force a resumed session's `--model` switch even if it drops input modalities active in live context. |
 
 ### Shared Session Flags
 
@@ -164,7 +165,7 @@ Other REPL-oriented events (`task_updated`, `todos_updated`, `queue_updated`, `c
 
 | Command | Arguments | Description |
 | :--- | :--- | :--- |
-| `/model` | `[model_id]` | Shows the active model, or switches (id or alias; unknown ids rejected without a turn). |
+| `/model` | `[--force] [model_id]` | Shows the active model, or switches (id or alias; unknown ids rejected without a turn). Fails on `capability_mismatch` unless `--force` is passed when switching drops active-context modalities. |
 | `/models` | — | Lists chat-capable models, marking the active one. |
 | `/mode` | `[mode]` | Shows or sets the permission mode. |
 | `/agent` | `[name]` | Shows or sets the session agent. |

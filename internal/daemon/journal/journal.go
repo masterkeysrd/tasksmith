@@ -2,9 +2,7 @@ package journal
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/core/hash"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
@@ -306,10 +305,10 @@ func (j *sqliteJournal) RecordChange(ctx context.Context, change *std.FileChange
 	}
 
 	if change.BeforeContent != nil && change.BeforeHash == "" {
-		change.BeforeHash = sha256Hex(change.BeforeContent)
+		change.BeforeHash = hash.SHA256Hex(change.BeforeContent)
 	}
 	if change.AfterContent != nil && change.AfterHash == "" {
-		change.AfterHash = sha256Hex(change.AfterContent)
+		change.AfterHash = hash.SHA256Hex(change.AfterContent)
 	}
 
 	if change.BeforeHash != "" && change.BeforeContent != nil {
@@ -588,7 +587,7 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 	}
 	var currentHash string
 	if currentExists {
-		currentHash = sha256Hex(currentBytes)
+		currentHash = hash.SHA256Hex(currentBytes)
 	}
 
 	// Determine the last state produced by the agent
@@ -650,7 +649,7 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 		mergedText += "\n"
 	}
 	mergedBytes := []byte(mergedText)
-	mergedHash := sha256Hex(mergedBytes)
+	mergedHash := hash.SHA256Hex(mergedBytes)
 
 	if err := writeSandboxFile(ctx, fsys, normPath, mergedBytes); err != nil {
 		return err
@@ -695,7 +694,7 @@ func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, no
 	}
 	var currentHash string
 	if currentExists {
-		currentHash = sha256Hex(currentBytes)
+		currentHash = hash.SHA256Hex(currentBytes)
 	}
 
 	if targetHash == "" {
@@ -826,11 +825,6 @@ func normalizeTrackPath(path string) string {
 		return "."
 	}
 	return clean
-}
-
-func sha256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
 }
 
 func splitTrackerLines(s string) []string {

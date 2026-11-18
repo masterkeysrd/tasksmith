@@ -439,6 +439,10 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 			_ = child.Close()
 			return err
 		}
+		if err := child.mediaStore.LinkAllFrom(s.mediaDir()); err != nil {
+			_ = child.Close()
+			return err
+		}
 	}
 
 	// Rebuild the command message's tool blocks against the child's own tool

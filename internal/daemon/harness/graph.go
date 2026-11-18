@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
@@ -36,6 +37,12 @@ type NodeOptions struct {
 	// Attachments, when non-nil, resolves all user-message attachments (files,
 	// directories, rules, skills, MCP resources) and rule triggers into <system_reminders>.
 	Attachments *AttachmentResolver
+	// Media, when non-nil, provides the session's content-addressed media store
+	// for hydrating media descriptors before invoking the LLM.
+	Media *media.Store
+	// ModelInfo carries the resolved model's modality and provider metadata so
+	// the harness can hydrate or degrade media blocks before calling the model.
+	ModelInfo models.Model
 }
 
 // Validate checks that required model and tools container dependencies are present.
@@ -316,10 +323,12 @@ func (n *CommandNode) Execute(ctx context.Context, state State) (graph.Command[S
 // It implements [github.com/masterkeysrd/loom/graph.Node].
 type AgentNode struct {
 	model        *llm.Model
+	modelInfo    models.Model
 	tools        tools.Container
 	systemPrompt string
 	limits       models.Limits
 	static       StaticContext
+	media        *media.Store
 	logger       log.Interface
 }
 
@@ -327,10 +336,12 @@ var _ Node = (*AgentNode)(nil)
 
 func (n *AgentNode) Configure(opts NodeOptions) {
 	n.model = opts.Model
+	n.modelInfo = opts.ModelInfo
 	n.tools = opts.Tools
 	n.systemPrompt = strings.TrimSpace(opts.SystemPrompt)
 	n.limits = opts.Limits
 	n.static = opts.Static
+	n.media = opts.Media
 }
 
 // NewAgentNode constructs a new [AgentNode] bound to the resolved LLM model,
@@ -364,6 +375,7 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 		MessageID: msgID,
 		Purpose:   string(metrics.PurposeChat),
 	})
+	llmMessages = hydrateMessagesForLLM(n.media, n.modelInfo, llmMessages)
 	resp, err := boundModel.Invoke(callCtx, llmMessages)
 	if err != nil {
 		return nil, fmt.Errorf("harness: invoke llm: %w", err)
@@ -449,19 +461,22 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 			cloned.SetID(uuid.NewString())
 		}
 		tempState = tempState.RecordLoadedTools(msgNewTools...)
-		emit(ctx, cloned)
-		drained = append(drained, cloned)
 
 		if n.attachments != nil {
 			var reminder *message.User
 			var loaded []RuleLoaded
 			tempState, reminder, loaded = n.attachments.ResolveUserMessage(ctx, cloned, tempState)
+			emit(ctx, cloned)
+			drained = append(drained, cloned)
 			if reminder != nil {
 				drained = append(drained, reminder)
 			}
 			for _, ev := range loaded {
 				emit(ctx, ev)
 			}
+		} else {
+			emit(ctx, cloned)
+			drained = append(drained, cloned)
 		}
 	}
 

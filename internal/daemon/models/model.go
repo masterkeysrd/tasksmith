@@ -49,6 +49,17 @@ func (m Model) SupportsCompletion() bool {
 	return m.Capabilities.SupportsCompletion()
 }
 
+// SupportsInputModality reports whether the model accepts the given input
+// modality ("text", "image", "pdf", "audio", ...). When Modalities.Input is
+// nil (unknown), it defaults to true so custom models without declared profiles
+// are not blocked.
+func (m Model) SupportsInputModality(mod string) bool {
+	if mod == "" || m.Modalities.Input == nil {
+		return true
+	}
+	return slices.Contains(m.Modalities.Input, mod)
+}
+
 // Clone returns a deep copy of m.
 func (m Model) Clone() Model {
 	m.Capabilities.Completion = ptr.Clone(m.Capabilities.Completion)

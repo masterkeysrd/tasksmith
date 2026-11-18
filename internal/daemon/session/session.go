@@ -23,6 +23,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
@@ -338,6 +339,7 @@ type Session struct {
 	Harness     harness.Harness   `json:"-"`
 	Std         *std.Std          `json:"-"`
 	FileIndex   *std.FileIndex    `json:"-"`
+	mediaStore  *media.Store
 	attachments *harness.AttachmentResolver
 	spiller     tools.Spiller `json:"-"`
 	harnessErr  error
@@ -405,6 +407,7 @@ func (s *Session) Clone() *Session {
 		Tasks:       s.Tasks,
 		Harness:     s.Harness,
 		Std:         s.Std,
+		mediaStore:  s.mediaStore,
 		spiller:     s.spiller,
 		workspace:   s.workspace,
 		gateway:     s.gateway,
@@ -633,6 +636,12 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	}
 	s.Journal = jr
 
+	ms, err := media.NewStore(s.mediaDir())
+	if err != nil {
+		return fmt.Errorf("session: initialize media store: %w", err)
+	}
+	s.mediaStore = ms
+
 	// The effective posture resolves project-relative rules and the built-in
 	// floor against this session's own work directory (a subagent's worktree
 	// root, not just the main checkout), and is computed once for both the
@@ -730,15 +739,17 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	s.pushRuntimePolicy()
 
 	attResolver, err := harness.NewAttachmentResolver(harness.AttachmentResolverConfig{
-		AgentName:   s.Config.Agent,
-		Workspace:   s.workspace,
-		Tools:       s.Tools,
-		Std:         s.Std,
-		Sandbox:     s.Sandbox,
-		Permissions: s.PermManager,
-		WorkDir:     s.WorkDir,
-		MCPCaller:   s.mcpCaller,
-		Logger:      s.logger,
+		AgentName:        s.Config.Agent,
+		Workspace:        s.workspace,
+		Tools:            s.Tools,
+		Std:              s.Std,
+		Sandbox:          s.Sandbox,
+		Permissions:      s.PermManager,
+		WorkDir:          s.WorkDir,
+		MCPCaller:        s.mcpCaller,
+		MediaStore:       s.mediaStore,
+		SupportsModality: s.supportsMediaModality,
+		Logger:           s.logger,
 	})
 	if err != nil {
 		return fmt.Errorf("session: initialize attachment resolver: %w", err)
@@ -924,6 +935,25 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 		if err := validateThinking(cat, models.ID(newConfig.Model), newConfig.Thinking); errors.Is(err, models.ErrInvalidConfig) {
 			newConfig.Thinking = nil
 			thinkingCleared = true
+		}
+	}
+	if newConfig.Model != "" && newConfig.Model != oldConfig.Model && !req.Force && cat != nil {
+		if targetModel, ok := cat.Get(models.ID(newConfig.Model)); ok {
+			if st, err := s.Harness.LoadState(ctx); err == nil {
+				var missing []string
+				for _, mod := range st.ActiveModalities() {
+					if !targetModel.SupportsInputModality(string(mod)) {
+						missing = append(missing, string(mod))
+					}
+				}
+				if len(missing) > 0 {
+					s.Unlock()
+					return &CapabilityMismatchError{
+						Model:             newConfig.Model,
+						MissingModalities: missing,
+					}
+				}
+			}
 		}
 	}
 	if req.Config.Thinking != nil {
@@ -1226,16 +1256,18 @@ func (s *Session) configureHarness(ctx context.Context) error {
 	}
 
 	attachmentResolver, err := harness.NewAttachmentResolver(harness.AttachmentResolverConfig{
-		AgentName:   agentName,
-		Workspace:   s.workspace,
-		Tools:       container,
-		Rules:       ruleMatcher,
-		Std:         s.Std,
-		Sandbox:     s.Sandbox,
-		Permissions: s.PermManager,
-		WorkDir:     s.WorkDir,
-		MCPCaller:   s.mcpCaller,
-		Logger:      s.logger,
+		AgentName:        agentName,
+		Workspace:        s.workspace,
+		Tools:            container,
+		Rules:            ruleMatcher,
+		Std:              s.Std,
+		Sandbox:          s.Sandbox,
+		Permissions:      s.PermManager,
+		WorkDir:          s.WorkDir,
+		MCPCaller:        s.mcpCaller,
+		MediaStore:       s.mediaStore,
+		SupportsModality: s.supportsMediaModality,
+		Logger:           s.logger,
 	})
 	if err != nil {
 		s.Lock()
@@ -1246,12 +1278,14 @@ func (s *Session) configureHarness(ctx context.Context) error {
 
 	opts := harness.NodeOptions{
 		Model:        llmModel,
+		ModelInfo:    model,
 		Tools:        container,
 		SystemPrompt: systemPrompt,
 		Limits:       limits,
 		Static:       staticCtx,
 		Rules:        ruleMatcher,
 		Attachments:  attachmentResolver,
+		Media:        s.mediaStore,
 	}
 	err = s.Harness.Configure(opts)
 
@@ -1266,6 +1300,59 @@ func (s *Session) configureHarness(ctx context.Context) error {
 
 func (s *Session) outputsDir() string {
 	return filepath.Join(s.Root, "outputs")
+}
+
+func (s *Session) mediaDir() string {
+	return filepath.Join(s.Root, "media")
+}
+
+func (s *Session) supportsMediaModality(mod media.Modality) (string, bool) {
+	model, _, ok := s.ResolvedModel()
+	if !ok {
+		s.Lock()
+		id := s.Config.Model
+		s.Unlock()
+		return id, true
+	}
+	return string(model.ID), model.SupportsInputModality(string(mod))
+}
+
+// UploadMedia validates and stores raw media bytes into <session-dir>/media/<sha256>
+// and returns the lightweight descriptor for subsequent Send requests.
+func (s *Session) UploadMedia(ctx context.Context, mimeType, filename string, data []byte) (*api.Media, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("%w: media payload must not be empty", ErrInvalidConfig)
+	}
+
+	info, ok := media.Detect(filename, data)
+	if !ok {
+		if mod, mok := media.ModalityForMIME(mimeType); mok {
+			info = media.Info{Modality: mod, MIMEType: media.CanonicalMIME(mimeType)}
+			ok = true
+		}
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: unsupported media format", ErrInvalidConfig)
+	}
+	if err := media.CheckSize(info.Modality, int64(len(data))); err != nil {
+		return nil, err
+	}
+
+	sha, size, err := s.mediaStore.Put(ctx, data)
+	if err != nil {
+		return nil, err
+	}
+
+	displayName := filepath.Base(strings.TrimSpace(filename))
+	if displayName == "" || displayName == "." || displayName == string(filepath.Separator) {
+		displayName = "attachment"
+	}
+	return &api.Media{
+		SHA256:      sha,
+		MIMEType:    info.MIMEType,
+		ByteSize:    size,
+		DisplayName: displayName,
+	}, nil
 }
 
 // ensureSystemToolsAllowed returns a deep copy of policies with the given system
@@ -1379,21 +1466,23 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	}
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:             s.Std,
-		Sandbox:         s.Sandbox,
-		SandboxSettings: s.sandboxCfg,
-		Guard:           guardInst,
-		Tasks:           s.Tasks,
-		Workspace:       s.workspace,
-		AllowedTools:    allowedToolNames,
-		DeferredTools:   deferredToolNames,
-		Skills:          skills,
-		Rules:           rules,
-		Subagents:       subagents,
-		Agents:          s,
-		AgentName:       agentName,
-		Agent:           activeAgent,
-		MCPCaller:       mcpCaller,
+		Std:              s.Std,
+		Sandbox:          s.Sandbox,
+		SandboxSettings:  s.sandboxCfg,
+		Guard:            guardInst,
+		Tasks:            s.Tasks,
+		Workspace:        s.workspace,
+		AllowedTools:     allowedToolNames,
+		DeferredTools:    deferredToolNames,
+		Skills:           skills,
+		Rules:            rules,
+		Subagents:        subagents,
+		Agents:           s,
+		AgentName:        agentName,
+		Agent:            activeAgent,
+		MCPCaller:        mcpCaller,
+		MediaStore:       s.mediaStore,
+		SupportsModality: s.supportsMediaModality,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: initialize builtin tools: %w", err)

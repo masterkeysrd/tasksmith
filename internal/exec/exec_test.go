@@ -321,3 +321,113 @@ func TestCmdForkRunningSessionSurfacesConflict(t *testing.T) {
 		t.Fatal("cmdFork on a running source session should fail")
 	}
 }
+
+func TestCmdModelCapabilityMismatchRequiresForce(t *testing.T) {
+	var sawForce []bool
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodPatch && req.URL.Path == "/v1/sessions/s1" {
+			var body api.UpdateSessionRequest
+			_ = json.NewDecoder(req.Body).Decode(&body)
+			sawForce = append(sawForce, body.Force)
+			if !body.Force {
+				raw, _ := json.Marshal(api.ErrorResponse{
+					Code:              api.ErrCodeCapabilityMismatch,
+					Message:           `model "local/text" does not support image used in this session`,
+					Model:             "local/text",
+					MissingModalities: []string{"image"},
+				})
+				return &http.Response{
+					StatusCode: http.StatusConflict,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewReader(raw)),
+				}, nil
+			}
+			raw, _ := json.Marshal(api.Session{
+				ID:     "s1",
+				Config: api.SessionConfig{Model: "local/text"},
+				Model:  &api.Model{ID: "local/text", Name: "Text"},
+			})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(raw)),
+			}, nil
+		}
+		return execTransport{}.RoundTrip(req)
+	})
+
+	var out bytes.Buffer
+	r := newExecRun(t, &Options{Stdout: &out, Stderr: &bytes.Buffer{}}, rt)
+	r.sess = &api.Session{ID: "s1", Status: api.StatusIdle, Config: api.SessionConfig{Model: "anthropic/claude"}}
+
+	if handled, err := r.localCommand("/model local/text"); !handled || err == nil {
+		t.Fatalf("expected /model without --force to fail, got handled=%v err=%v", handled, err)
+	} else if !strings.Contains(err.Error(), "/model --force local/text") {
+		t.Fatalf("expected --force hint in error, got %v", err)
+	}
+
+	if handled, err := r.localCommand("/model --force local/text"); !handled || err != nil {
+		t.Fatalf("expected /model --force to succeed, got handled=%v err=%v", handled, err)
+	}
+	if len(sawForce) != 2 || sawForce[0] || !sawForce[1] {
+		t.Fatalf("sawForce = %v, want [false true]", sawForce)
+	}
+}
+
+func TestResolveSessionModelCapabilityMismatchHintAndForce(t *testing.T) {
+	var sawForce []bool
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodPatch && req.URL.Path == "/v1/sessions/latest-1" {
+			var body api.UpdateSessionRequest
+			_ = json.NewDecoder(req.Body).Decode(&body)
+			sawForce = append(sawForce, body.Force)
+			if !body.Force {
+				raw, _ := json.Marshal(api.ErrorResponse{
+					Code:              api.ErrCodeCapabilityMismatch,
+					Message:           `model "local/text" does not support image used in this session`,
+					Model:             "local/text",
+					MissingModalities: []string{"image"},
+				})
+				return &http.Response{
+					StatusCode: http.StatusConflict,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewReader(raw)),
+				}, nil
+			}
+			raw, _ := json.Marshal(api.Session{
+				ID:     "latest-1",
+				Config: api.SessionConfig{Model: "local/text"},
+				Model:  &api.Model{ID: "local/text", Name: "Text"},
+			})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(raw)),
+			}, nil
+		}
+		return execTransport{
+			latestBody: `{"id":"latest-1","status":"idle","config":{"mode":"default","model":"anthropic/claude"}}`,
+		}.RoundTrip(req)
+	})
+
+	r := newExecRun(t, &Options{
+		Continue: true,
+		Config:   api.SessionConfig{Model: "local/text"},
+	}, rt)
+	err := r.resolveSession()
+	if err == nil || !strings.Contains(err.Error(), "pass --force") {
+		t.Fatalf("resolveSession without Force = %v, want --force hint", err)
+	}
+
+	rForce := newExecRun(t, &Options{
+		Continue: true,
+		Force:    true,
+		Config:   api.SessionConfig{Model: "local/text"},
+	}, rt)
+	if err := rForce.resolveSession(); err != nil {
+		t.Fatalf("resolveSession with Force: %v", err)
+	}
+	if len(sawForce) != 2 || sawForce[0] || !sawForce[1] {
+		t.Fatalf("sawForce = %v, want [false true]", sawForce)
+	}
+}

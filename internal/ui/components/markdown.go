@@ -434,6 +434,9 @@ func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachm
 			Style: style.S().Foreground(iconColor),
 		}, icon.Network)
 		labelText = node.Label
+	case "media":
+		iconNode = icon.FileIcon(icon.FileIconProps{Path: cmp.Or(node.Target, "image.png")})
+		labelText = node.Label
 	}
 
 	_ = iconColor // used for icon coloring above

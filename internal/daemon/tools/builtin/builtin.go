@@ -8,6 +8,7 @@ import (
 
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -62,6 +63,12 @@ type Config struct {
 	// nil, that tool is not constructed: with no runtime attached there is nothing
 	// for it to read, and offering it would only invite failed calls.
 	MCPCaller tools.MCPCaller
+	// MediaStore snapshots viewed media files into <session-dir>/media/<sha256>
+	// so historical tool turns stay immutable and lightweight.
+	MediaStore *media.Store
+	// SupportsModality reports whether the active session model supports mod,
+	// returning its model ID for diagnostic messages when unsupported.
+	SupportsModality func(mod media.Modality) (modelID string, supported bool)
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -107,7 +114,13 @@ func New(cfg Config) ([]tools.Tool, error) {
 		factory func(meta tools.Metadata) tools.Tool
 	}{
 		{ToolView, func(m tools.Metadata) tools.Tool {
-			return tools.NewHandler(ToolView, m, &viewTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})
+			return tools.NewHandler(ToolView, m, &viewTool{
+				std:              cfg.Std,
+				sandbox:          cfg.Sandbox,
+				guard:            cfg.Guard,
+				mediaStore:       cfg.MediaStore,
+				supportsModality: cfg.SupportsModality,
+			})
 		}},
 		{ToolLS, func(m tools.Metadata) tools.Tool {
 			return tools.NewHandler(ToolLS, m, &lsTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})

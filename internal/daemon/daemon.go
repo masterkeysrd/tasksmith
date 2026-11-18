@@ -1702,6 +1702,20 @@ func (d *Daemon) Send(ctx context.Context, rawWS, id string, req api.SendRequest
 	return nil
 }
 
+func (d *Daemon) UploadMedia(ctx context.Context, rawWS, id, mimeType, filename string, data []byte) (*api.Media, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	sess, err := rt.GetSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return sess.UploadMedia(ctx, mimeType, filename, data)
+}
+
 func (d *Daemon) Cancel(ctx context.Context, rawWS, id string) error {
 	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {

@@ -20,7 +20,10 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	"github.com/masterkeysrd/tasksmith/internal/ui/clipboard"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -271,6 +274,9 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 	attachments, setAttachments := kitex.UseState([]api.Attachment(nil))
 	bashMode, setBashMode := kitex.UseState(false)
 	history := usePromptHistory()
+	nextImageNum := kitex.UseRef(1)
+	attachmentsRef := kitex.UseRef[[]api.Attachment](nil)
+	attachmentsRef.Current = attachments()
 
 	disabled := props.Disabled || hide
 	browsing := history.Browsing()
@@ -579,17 +585,78 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		}
 	}
 
+	handlePaste := func(e event.Event) {
+		ce, ok := e.(*event.ClipboardEvent)
+		if !ok || disabled || bashMode() || len(ce.Items) == 0 {
+			return
+		}
+		candidates := clipboard.ResolvePastedImages(ce.Items, ce.Text())
+		if len(candidates) == 0 {
+			return
+		}
+		e.PreventDefault()
+		e.StopPropagation()
+
+		var valid []clipboard.ImageCandidate
+		for _, cand := range candidates {
+			if cand.TooLarge > 0 {
+				store.AppendNotice(fmt.Sprintf("Clipboard image (%s) exceeds the %s limit.", format.Bytes(cand.TooLarge), format.Bytes(clipboard.MaxImageBytes)))
+				continue
+			}
+			valid = append(valid, cand)
+		}
+		if len(valid) == 0 {
+			return
+		}
+		if modelID, supported := store.ActiveModelSupports("image"); !supported {
+			store.AppendNotice(fmt.Sprintf("Model %s does not support image input; clipboard image was not attached.", modelID))
+			return
+		}
+
+		nextAtts := slices.Clone(attachmentsRef.Current)
+		var refs strings.Builder
+		for _, cand := range valid {
+			imgIdx := nextImageNum.Current
+			nextImageNum.Current++
+			ref := fmt.Sprintf("[Image #%d]", imgIdx)
+			displayName := cand.DisplayName
+			if displayName == "" {
+				displayName = fmt.Sprintf("image-%d%s", imgIdx, clipboard.ExtForImageMIME(cand.MIMEType))
+			}
+			nextAtts = append(nextAtts, store.StageClipboardMedia(ref, cand.Data, cand.MIMEType, displayName))
+			refs.WriteString(ref)
+			refs.WriteByte(' ')
+		}
+		attachmentsRef.Current = nextAtts
+		setAttachments(nextAtts)
+
+		live := readDraft()
+		start, end := live.Cursor, live.Cursor
+		if input, ok := inputRef.Current.(*element.TextAreaElement); ok && input.SelectedText() != "" {
+			start, end = input.SelectionRange()
+		}
+		insert := refs.String()
+		replaceDraft(DraftEdit{
+			Value:  live.Value[:start] + insert + live.Value[end:],
+			Cursor: start + len(insert),
+		})
+	}
+
 	keyHandler := kitex.UseRef[event.Listener](nil)
 	keyHandler.Current = handleKeyDown
+	pasteHandler := kitex.UseRef[event.Listener](nil)
+	pasteHandler.Current = handlePaste
 	kitex.UseEffectCleanup(func() func() {
 		if input := inputRef.Current; input != nil {
 			selection := input.AddEventListener(event.EventSelectionChange, func(event.Event) { syncDraft() })
 			keys := input.AddEventListener(event.EventKeyDown, func(e event.Event) { keyHandler.Current(e) }, event.Capture())
+			paste := input.AddEventListener(event.EventPaste, func(e event.Event) { pasteHandler.Current(e) }, event.Capture())
 			mouse := input.AddEventListener(event.EventMouseDown, func(event.Event) { kitex.PostMacro(syncDraft) })
 			drag := input.AddEventListener(event.EventDrag, func(event.Event) { kitex.PostMacro(syncDraft) })
 			return func() {
 				selection.Cancel()
 				keys.Cancel()
+				paste.Cancel()
 				mouse.Cancel()
 				drag.Cancel()
 			}
@@ -627,6 +694,14 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		outerStyle = outerStyle.Display(style.DisplayNone)
 	}
 
+	var stagedMediaPills []api.Attachment
+	draftVal := draft().Value
+	for _, att := range attachments() {
+		if att.Kind == api.AttachmentMedia && att.Ref != "" && strings.Contains(draftVal, att.Ref) {
+			stagedMediaPills = append(stagedMediaPills, att)
+		}
+	}
+
 	return trail.Box(trail.BoxProps{
 		Style: outerStyle,
 	},
@@ -649,6 +724,41 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				OnChange: func(event.Event) { syncDraft() },
 			}),
 		),
+		kitex.If(len(stagedMediaPills) > 0, func() trail.Node {
+			var pillNodes []trail.Node
+			for _, att := range stagedMediaPills {
+				label := strings.Trim(att.Ref, "[]")
+				if att.Media != nil && att.Media.ByteSize > 0 {
+					label = fmt.Sprintf("%s · %s", label, format.Bytes(att.Media.ByteSize))
+				}
+				name := "image.png"
+				if att.Media != nil && att.Media.DisplayName != "" {
+					name = att.Media.DisplayName
+				}
+				pillNodes = append(pillNodes, trail.Box(trail.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Background(scheme.Color.Surface.Elevated).
+						PaddingHorizontal(1).
+						Gap(1),
+				},
+					icon.FileIcon(icon.FileIconProps{Path: name}),
+					trail.Span(trail.SpanProps{
+						Style: style.S().Foreground(scheme.Color.Text.Primary).Bold(true),
+					}, trail.Text(label)),
+				))
+			}
+			return trail.Box(trail.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					FlexWrap(style.FlexWrapOn).
+					Gap(1).
+					MarginTop(0),
+			}, pillNodes...)
+		}),
 		kitex.If(browsing, func() trail.Node {
 			label := fmt.Sprintf(" history (%d/%d) ", history.HistoryIdx+1, len(history.History))
 			width := winSize.Width

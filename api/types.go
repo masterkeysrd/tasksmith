@@ -45,16 +45,18 @@ const (
 	AttachmentMCP    AttachmentKind = "mcp"
 	AttachmentSymbol AttachmentKind = "symbol"
 	AttachmentSkill  AttachmentKind = "skill"
+	AttachmentMedia  AttachmentKind = "media"
 )
 
 // Attachment binds an inline reference token in a user message to its canonical workspace target.
 type Attachment struct {
 	Kind            AttachmentKind `json:"kind"`
-	Ref             string         `json:"ref,omitempty"`              // Token in user text, e.g. "@composer.go", "@rule:go-verification-gate", "@mcp:notes:notes://spec-1"
-	Target          string         `json:"target"`                     // Canonical workspace-relative path (trailing "/" for dirs), rule name, "<server>:<uri>", etc.
+	Ref             string         `json:"ref,omitempty"`              // Token in user text, e.g. "@composer.go", "@rule:go-verification-gate", "@mcp:notes:notes://spec-1", "[Image #1]"
+	Target          string         `json:"target"`                     // Canonical workspace-relative path (trailing "/" for dirs), rule name, "<server>:<uri>", or media sha256
 	StartLine       int            `json:"start_line,omitempty"`       // Optional 1-based start line for file/symbol slices
 	EndLine         int            `json:"end_line,omitempty"`         // Optional 1-based end line for file/symbol slices
 	AllowProhibited bool           `json:"allow_prohibited,omitempty"` // True when an interactive user explicitly confirmed a prohibited MCP resource once
+	Media           *Media         `json:"media,omitempty"`            // Lightweight descriptor for AttachmentMedia payloads
 }
 
 // ListFilesRequest configures a workspace file search or listing.
@@ -432,17 +434,25 @@ type HealthResponse struct {
 	Workspaces []string  `json:"workspaces,omitempty"`
 }
 
+// ErrCodeCapabilityMismatch is returned when switching a session's model drops
+// one or more input modalities present in active context without Force set.
+const ErrCodeCapabilityMismatch = "capability_mismatch"
+
 // ErrorResponse is the JSON wire envelope returned on non-2xx HTTP responses.
 type ErrorResponse struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code              string   `json:"code"`
+	Message           string   `json:"message"`
+	Model             string   `json:"model,omitempty"`
+	MissingModalities []string `json:"missing_modalities,omitempty"`
 }
 
 // APIError represents a structured HTTP error returned by the Brain Daemon.
 type APIError struct {
-	StatusCode int    `json:"status_code"`
-	Code       string `json:"code"`
-	Message    string `json:"message"`
+	StatusCode        int      `json:"status_code"`
+	Code              string   `json:"code"`
+	Message           string   `json:"message"`
+	Model             string   `json:"model,omitempty"`
+	MissingModalities []string `json:"missing_modalities,omitempty"`
 }
 
 // Error implements the standard error interface.
@@ -832,6 +842,7 @@ type SessionPreview struct {
 type UpdateSessionRequest struct {
 	Title  string        `json:"title,omitempty"`
 	Config SessionConfig `json:"config"`
+	Force  bool          `json:"force,omitempty"`
 }
 
 // ForkSessionRequest holds optional parameters for forking a session. An empty
@@ -857,6 +868,29 @@ const (
 	BlockText      BlockType = "text"
 	BlockReasoning BlockType = "reasoning"
 	BlockToolCall  BlockType = "tool_call"
+	BlockImage     BlockType = "image"
+	BlockDocument  BlockType = "document"
+	BlockAudio     BlockType = "audio"
+)
+
+// Media describes a content-addressed media payload stored under
+// <session-dir>/media/<sha256>. Raw binary or base64 bytes are never persisted
+// in checkpoints, timelines, or event frames.
+type Media struct {
+	SHA256      string `json:"sha256"`
+	MIMEType    string `json:"mime_type"`
+	ByteSize    int64  `json:"byte_size"`
+	DisplayName string `json:"display_name,omitempty"`
+	Pages       string `json:"pages,omitempty"`
+}
+
+// Extras keys persisted inside loom media block Extras maps so checkpoints and
+// timelines never store raw binary or base64 payloads.
+const (
+	MediaExtraSHA256      = "tasksmith.media.sha256"
+	MediaExtraByteSize    = "tasksmith.media.byte_size"
+	MediaExtraDisplayName = "tasksmith.media.display_name"
+	MediaExtraPages       = "tasksmith.media.pages"
 )
 
 // ToolCall represents a structured tool invocation block within an assistant message.
@@ -872,6 +906,7 @@ type Block struct {
 	Text      string    `json:"text,omitempty"`
 	Signature string    `json:"signature,omitempty"`
 	ToolCall  *ToolCall `json:"tool_call,omitempty"`
+	Media     *Media    `json:"media,omitempty"`
 }
 
 // Message represents a persisted turn in a session's UI conversation history.

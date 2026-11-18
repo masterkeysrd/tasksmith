@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 )
 
 // Sentinel errors returned by the std package.
@@ -47,22 +48,38 @@ type ViewRequest struct {
 	Path string `json:"path"`
 
 	// Offset is the 1-based line number from which to start reading. Defaults to 1.
+	// Ignored for images, PDFs, and audio.
 	Offset int `json:"offset,omitempty"`
 
 	// Limit is the maximum number of lines to return. Defaults to DefaultViewLimit (2000).
+	// Ignored for images, PDFs, and audio.
 	Limit int `json:"limit,omitempty"`
+
+	// Pages specifies an optional page range for PDF files (e.g. "1-10" or "3").
+	// Ignored for text, image, and audio files.
+	Pages string `json:"pages,omitempty"`
+}
+
+// ViewMedia holds metadata and raw bytes for a supported multimodal file read via [Std.View].
+type ViewMedia struct {
+	Modality media.Modality `json:"modality"`
+	MIMEType string         `json:"mime_type"`
+	ByteSize int64          `json:"byte_size"`
+	Pages    string         `json:"pages,omitempty"`
+	Data     []byte         `json:"-"`
 }
 
 // ViewResult contains the sliced file content and metadata returned by [Std.View].
 type ViewResult struct {
-	Path       string `json:"path"`
-	Content    string `json:"content"`
-	Numbered   string `json:"numbered"`
-	StartLine  int    `json:"start_line"`
-	EndLine    int    `json:"end_line"`
-	TotalLines int    `json:"total_lines"`
-	Truncated  bool   `json:"truncated"`
-	Hash       string `json:"hash"`
+	Path       string     `json:"path"`
+	Content    string     `json:"content"`
+	Numbered   string     `json:"numbered"`
+	StartLine  int        `json:"start_line"`
+	EndLine    int        `json:"end_line"`
+	TotalLines int        `json:"total_lines"`
+	Truncated  bool       `json:"truncated"`
+	Hash       string     `json:"hash"`
+	Media      *ViewMedia `json:"media,omitempty"`
 }
 
 // ListRequest configures a directory listing operation via [Std.List].

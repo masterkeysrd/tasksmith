@@ -11,6 +11,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
@@ -109,6 +110,17 @@ func WriteError(w http.ResponseWriter, err error) {
 		return
 	}
 
+	var capErr *session.CapabilityMismatchError
+	if errors.As(err, &capErr) && capErr != nil {
+		WriteJSON(w, http.StatusConflict, api.ErrorResponse{
+			Code:              api.ErrCodeCapabilityMismatch,
+			Message:           capErr.Error(),
+			Model:             capErr.Model,
+			MissingModalities: capErr.MissingModalities,
+		})
+		return
+	}
+
 	status, code := classifyError(err)
 	WriteJSON(w, status, api.ErrorResponse{
 		Code:    code,
@@ -139,6 +151,9 @@ func classifyError(err error) (int, string) {
 		errors.Is(err, broker.ErrNotRegistered),
 		errors.Is(err, broker.ErrInvalidCursor),
 		errors.Is(err, metrics.ErrInvalidQuery),
+		errors.Is(err, media.ErrTooLarge),
+		errors.Is(err, media.ErrUnsupportedType),
+		errors.Is(err, media.ErrInvalidPages),
 		strings.Contains(err.Error(), "workspace parameter is required"),
 		strings.Contains(err.Error(), "message content must not be empty"):
 		return http.StatusBadRequest, "bad_request"

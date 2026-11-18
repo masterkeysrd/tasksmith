@@ -99,7 +99,16 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 		blocks = append(blocks, &message.TextBlock{Text: req.Content})
 	}
 	for i, b := range req.Blocks {
-		if b.Type != api.BlockText {
+		switch b.Type {
+		case api.BlockText:
+		case api.BlockImage, api.BlockDocument, api.BlockAudio:
+			if b.Media == nil {
+				return fmt.Errorf("%w: invalid or unsupported block %d of type %q", ErrInvalidConfig, i, b.Type)
+			}
+			if s.mediaStore != nil && !s.mediaStore.Exists(b.Media.SHA256) {
+				return fmt.Errorf("%w: block %d media blob %s not found in session store", ErrInvalidConfig, i, b.Media.SHA256)
+			}
+		default:
 			return fmt.Errorf("%w: block %d of type %q is not supported in user messages", ErrInvalidConfig, i, b.Type)
 		}
 		converted, ok := FromAPIBlock(b)

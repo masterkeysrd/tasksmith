@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -328,7 +329,19 @@ var ViewToolWidget = trail.FC("ViewToolWidget", func(props ViewToolWidgetProps) 
 	}
 
 	var suffix string
-	if output.StartLine > 0 && output.EndLine > 0 && output.TotalLines > 0 && (output.StartLine > 1 || output.EndLine < output.TotalLines) {
+	if output.MimeType != "" {
+		parts := []string{output.MimeType}
+		if output.ByteSize > 0 {
+			parts = append(parts, format.Bytes(output.ByteSize))
+		}
+		if output.Pages != "" {
+			parts = append(parts, "pages "+output.Pages)
+		}
+		if output.Omitted {
+			parts = append(parts, "omitted")
+		}
+		suffix = " (" + strings.Join(parts, ", ") + ")"
+	} else if output.StartLine > 0 && output.EndLine > 0 && output.TotalLines > 0 && (output.StartLine > 1 || output.EndLine < output.TotalLines) {
 		suffix = fmt.Sprintf(" (lines %d-%d of %d)", output.StartLine, output.EndLine, output.TotalLines)
 	} else if input.Offset > 0 && input.Limit > 0 {
 		suffix = fmt.Sprintf(" (lines %d-%d)", input.Offset, input.Offset+input.Limit-1)
@@ -348,7 +361,18 @@ var ViewToolWidget = trail.FC("ViewToolWidget", func(props ViewToolWidgetProps) 
 		headerNodes = append(headerNodes, stateSuffix)
 	}
 
-	return wrapToolWidget(headerNodes, toolErrorSubline(tool, scheme))
+	subline := toolErrorSubline(tool, scheme)
+	if subline == nil && output.Omitted && output.Content != "" {
+		subline = trail.Span(trail.SpanProps{
+			Style: style.S().
+				Flex(0, 0).
+				WhiteSpace(style.WhiteSpacePre).
+				Overflow(style.OverflowHidden).
+				TextOverflow(style.TextOverflowEllipsis).
+				Foreground(scheme.Color.Text.Warning),
+		}, trail.Text("  ⎿  "+output.Content))
+	}
+	return wrapToolWidget(headerNodes, subline)
 })
 
 func ViewToolRenderer(tool store.ToolPart) trail.Node {

@@ -3,8 +3,6 @@ package std
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -207,11 +205,6 @@ func (s *Std) normalizePath(rawPath string) string {
 		return filepath.ToSlash(filepath.Clean(expanded))
 	}
 	return filepath.ToSlash(filepath.Clean(filepath.Join(s.sandbox.Platform().WorkDir, expanded)))
-}
-
-func sha256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
 }
 
 func isBinaryContent(data []byte) bool {

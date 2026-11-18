@@ -322,6 +322,10 @@ func (m *mockBackend) Send(ctx context.Context, workspace, id string, req api.Se
 	return m.sendErr
 }
 
+func (m *mockBackend) UploadMedia(ctx context.Context, workspace, id, mimeType, filename string, data []byte) (*api.Media, error) {
+	return &api.Media{}, nil
+}
+
 func (m *mockBackend) Cancel(ctx context.Context, workspace, id string) error {
 	return m.cancelErr
 }

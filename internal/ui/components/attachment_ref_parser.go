@@ -46,10 +46,30 @@ type attachmentRefParser struct {
 	attachments map[string]api.Attachment
 }
 
-func (p *attachmentRefParser) Trigger() []byte { return []byte{'@'} }
+func (p *attachmentRefParser) Trigger() []byte { return []byte{'@', '['} }
 
 func (p *attachmentRefParser) Parse(_ ast.Node, block text.Reader, _ parser.Context) ast.Node {
 	line, _ := block.PeekLine()
+	if len(line) > 0 && line[0] == '[' {
+		end := scanBracketRefEnd(line)
+		if end <= 0 {
+			return nil
+		}
+		rawToken := string(line[:end])
+		if att, ok := p.attachments[rawToken]; ok && att.Kind == api.AttachmentMedia {
+			block.Advance(end)
+			target := "image.png"
+			if att.Media != nil && att.Media.DisplayName != "" {
+				target = att.Media.DisplayName
+			}
+			return &AttachmentRefNode{
+				RefType: "media",
+				Label:   strings.Trim(rawToken, "[]"),
+				Target:  target,
+			}
+		}
+		return nil
+	}
 	end := scanInlineRefEnd(line)
 	rawToken := string(line[:end])
 
@@ -120,6 +140,21 @@ func (p *attachmentRefParser) lookup(rawToken, trimmed string) (api.Attachment, 
 		}
 	}
 	return api.Attachment{}, 0, false
+}
+
+func scanBracketRefEnd(line []byte) int {
+	if len(line) < 3 || line[0] != '[' {
+		return 0
+	}
+	for i := 1; i < len(line); i++ {
+		if line[i] == '\n' || line[i] == '\r' {
+			return 0
+		}
+		if line[i] == ']' {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 func scanInlineRefEnd(line []byte) int {

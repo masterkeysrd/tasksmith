@@ -30,6 +30,7 @@ type execOptions struct {
 	title        string
 	maxTurns     int
 	ephemeral    bool
+	force        bool
 }
 
 func bindExecFlags(cmd *cobra.Command, opts *execOptions) {
@@ -46,6 +47,7 @@ func bindExecFlags(cmd *cobra.Command, opts *execOptions) {
 	cmd.Flags().StringVar(&opts.title, "title", "", "Session title when creating a new session")
 	cmd.Flags().IntVar(&opts.maxTurns, "max-turns", 0, "Stop the run after this many completed turns (0 = no limit)")
 	cmd.Flags().BoolVar(&opts.ephemeral, "ephemeral", false, "Delete the session after the run settles")
+	cmd.Flags().BoolVar(&opts.force, "force", false, "Force model switch even if the target model drops input modalities active in the resumed session")
 }
 
 func (o *execOptions) toRunOptions(rootOpts *rootOptions, cmd *cobra.Command) (exec.Options, error) {
@@ -96,6 +98,7 @@ func (o *execOptions) toRunOptions(rootOpts *rootOptions, cmd *cobra.Command) (e
 		Title:        strings.TrimSpace(o.title),
 		MaxTurns:     o.maxTurns,
 		Ephemeral:    o.ephemeral,
+		Force:        o.force,
 		Config: api.SessionConfig{
 			Agent:    strings.TrimSpace(o.agent),
 			Model:    strings.TrimSpace(o.model),

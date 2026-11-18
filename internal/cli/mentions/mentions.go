@@ -21,13 +21,34 @@ type ScannedToken struct {
 }
 
 // Resolve extracts structured attachments from user text in a single pass.
-// It matches tracked bindings (supporting added or edited #L line ranges), resolves
-// explicit @mcp:, @file:, @rule:, and @skill: prefixes, and—when lookupFile is non-nil—resolves
+// It matches tracked bindings (supporting added or edited #L line ranges and
+// tracked inline media pills such as "[Image #1]"), resolves explicit @mcp:,
+// @file:, @rule:, and @skill: prefixes, and—when lookupFile is non-nil—resolves
 // any remaining unbound @<candidate> tokens against the workspace file index.
 func Resolve(text string, tracked []api.Attachment, lookupFile func(candidate string) (target string, ok bool)) []api.Attachment {
+	var attachments []api.Attachment
+	seen := make(map[string]struct{})
+	add := func(att api.Attachment) {
+		key := fmt.Sprintf("%s:%s:%d:%d", att.Kind, att.Target, att.StartLine, att.EndLine)
+		if att.Kind == api.AttachmentMedia && att.Ref != "" {
+			key = fmt.Sprintf("%s:%s", att.Kind, att.Ref)
+		}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		attachments = append(attachments, att)
+	}
+
+	for _, att := range tracked {
+		if att.Kind == api.AttachmentMedia && att.Ref != "" && strings.Contains(text, att.Ref) {
+			add(att)
+		}
+	}
+
 	tokens := ScanTokens(text)
 	if len(tokens) == 0 {
-		return nil
+		return attachments
 	}
 
 	byFullRef := make(map[string]api.Attachment, len(tracked))
@@ -43,18 +64,7 @@ func Resolve(text string, tracked []api.Attachment, lookupFile func(candidate st
 		}
 	}
 
-	var attachments []api.Attachment
-	seen := make(map[string]struct{})
 	var lookupCache map[string]string
-
-	add := func(att api.Attachment) {
-		key := fmt.Sprintf("%s:%s:%d:%d", att.Kind, att.Target, att.StartLine, att.EndLine)
-		if _, dup := seen[key]; dup {
-			return
-		}
-		seen[key] = struct{}{}
-		attachments = append(attachments, att)
-	}
 
 	for _, tok := range tokens {
 		if after, ok := strings.CutPrefix(tok.FullToken, "@mcp:"); ok {

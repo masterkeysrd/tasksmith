@@ -361,18 +361,24 @@ type ToolSearchOutput struct {
 // ViewInput defines the input parameters for the view tool.
 type ViewInput struct {
 	Path   string `json:"path" jsonschema:"File path relative to the workspace root or an absolute path inside the workspace."`
-	Limit  int    `json:"limit,omitempty" jsonschema:"Maximum number of lines to return."`
-	Offset int    `json:"offset,omitempty" jsonschema:"1-based line number from which to start reading."`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Maximum number of lines to return. Ignored for images, PDFs, and audio."`
+	Offset int    `json:"offset,omitempty" jsonschema:"1-based line number from which to start reading. Ignored for images, PDFs, and audio."`
+	Pages  string `json:"pages,omitempty" jsonschema:"Optional page range for PDF files (e.g., \"1-10\" or \"3\"). Ignored for text, image, and audio files."`
 }
 
 // ViewOutput defines the structured output of the view tool.
 type ViewOutput struct {
 	Path       string `json:"path" jsonschema:"Normalized workspace-relative file path."`
-	Content    string `json:"content" jsonschema:"Line-numbered text content of the selected line range."`
+	Content    string `json:"content" jsonschema:"Line-numbered text content of the selected line range, or compact metadata for media files."`
 	StartLine  int    `json:"start_line" jsonschema:"1-based first line number returned."`
 	EndLine    int    `json:"end_line" jsonschema:"1-based last line number returned."`
 	TotalLines int    `json:"total_lines" jsonschema:"Total number of lines in the file."`
 	Hash       string `json:"hash" jsonschema:"SHA-256 hex digest of the full file on disk."`
+	ByteSize   int64  `json:"byte_size,omitempty" jsonschema:"Byte size of the viewed media payload."`
+	MimeType   string `json:"mime_type,omitempty" jsonschema:"MIME type when the viewed file is supported multimodal media."`
+	Modality   string `json:"modality,omitempty" jsonschema:"Media modality (\"image\", \"pdf\", or \"audio\") when viewing multimodal files."`
+	Omitted    bool   `json:"omitted,omitempty" jsonschema:"True if media content was omitted because the active model lacks support for its modality."`
+	Pages      string `json:"pages,omitempty" jsonschema:"Normalized page range for viewed PDF files."`
 	Truncated  bool   `json:"truncated,omitempty" jsonschema:"Whether additional lines remain after end_line."`
 }
 

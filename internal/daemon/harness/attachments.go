@@ -10,8 +10,10 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/hash"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -22,16 +24,18 @@ import (
 
 // AttachmentResolverConfig configures a unified [AttachmentResolver] for user messages.
 type AttachmentResolverConfig struct {
-	AgentName   string
-	Workspace   *workspace.Workspace
-	Tools       tools.Container
-	Rules       *RuleMatcher
-	Std         *std.Std
-	Sandbox     sandbox.Sandbox
-	Permissions permissions.SessionManager
-	WorkDir     string
-	MCPCaller   func() tools.MCPCaller
-	Logger      log.Interface
+	AgentName        string
+	Workspace        *workspace.Workspace
+	Tools            tools.Container
+	Rules            *RuleMatcher
+	Std              *std.Std
+	Sandbox          sandbox.Sandbox
+	Permissions      permissions.SessionManager
+	WorkDir          string
+	MCPCaller        func() tools.MCPCaller
+	MediaStore       *media.Store
+	SupportsModality func(media.Modality) (modelID string, supported bool)
+	Logger           log.Interface
 }
 
 // Validate ensures all required dependencies are present.
@@ -55,16 +59,18 @@ func (c AttachmentResolverConfig) Validate() error {
 // (files, directories, rules, skills, MCP resources) alongside conditional rule
 // suggestions into a single <system_reminders> block.
 type AttachmentResolver struct {
-	agentName string
-	workspace *workspace.Workspace
-	tools     tools.Container
-	rules     *RuleMatcher
-	std       *std.Std
-	sandbox   sandbox.Sandbox
-	perms     permissions.SessionManager
-	workDir   string
-	mcpCaller func() tools.MCPCaller
-	logger    log.Interface
+	agentName        string
+	workspace        *workspace.Workspace
+	tools            tools.Container
+	rules            *RuleMatcher
+	std              *std.Std
+	sandbox          sandbox.Sandbox
+	perms            permissions.SessionManager
+	workDir          string
+	mcpCaller        func() tools.MCPCaller
+	mediaStore       *media.Store
+	supportsModality func(media.Modality) (string, bool)
+	logger           log.Interface
 }
 
 // NewAttachmentResolver validates cfg and constructs a unified [AttachmentResolver].
@@ -73,16 +79,18 @@ func NewAttachmentResolver(cfg AttachmentResolverConfig) (*AttachmentResolver, e
 		return nil, err
 	}
 	return &AttachmentResolver{
-		agentName: cfg.AgentName,
-		workspace: cfg.Workspace,
-		tools:     cfg.Tools,
-		rules:     cfg.Rules,
-		std:       cfg.Std,
-		sandbox:   cfg.Sandbox,
-		perms:     cfg.Permissions,
-		workDir:   cmp.Or(strings.TrimSpace(cfg.WorkDir), cfg.Workspace.RootDir()),
-		mcpCaller: cfg.MCPCaller,
-		logger:    cmp.Or[log.Interface](cfg.Logger, log.Default()),
+		agentName:        cfg.AgentName,
+		workspace:        cfg.Workspace,
+		tools:            cfg.Tools,
+		rules:            cfg.Rules,
+		std:              cfg.Std,
+		sandbox:          cfg.Sandbox,
+		perms:            cfg.Permissions,
+		workDir:          cmp.Or(strings.TrimSpace(cfg.WorkDir), cfg.Workspace.RootDir()),
+		mcpCaller:        cfg.MCPCaller,
+		mediaStore:       cfg.MediaStore,
+		supportsModality: cfg.SupportsModality,
+		logger:           cmp.Or[log.Interface](cfg.Logger, log.Default()),
 	}, nil
 }
 
@@ -163,6 +171,34 @@ func (r *AttachmentResolver) Validate(ctx context.Context, atts []api.Attachment
 
 		case api.AttachmentRule, api.AttachmentSkill:
 
+		case api.AttachmentMedia:
+			if att.Media == nil {
+				return nil, fmt.Errorf("%w: invalid media attachment %d: media descriptor is required", ErrInvalidConfig, i)
+			}
+			sha := strings.TrimSpace(att.Media.SHA256)
+			if !hash.IsValidSHA256(sha) {
+				return nil, fmt.Errorf("%w: invalid media attachment %d: invalid sha256 %q", ErrInvalidConfig, i, att.Media.SHA256)
+			}
+			mime := media.CanonicalMIME(att.Media.MIMEType)
+			mod, ok := media.ModalityForMIME(mime)
+			if !ok {
+				return nil, fmt.Errorf("%w: invalid media attachment %d: unsupported mime type %q", ErrInvalidConfig, i, att.Media.MIMEType)
+			}
+			if err := media.CheckSize(mod, att.Media.ByteSize); err != nil {
+				return nil, fmt.Errorf("%w: invalid media attachment %d: %v", ErrInvalidConfig, i, err)
+			}
+			if r.mediaStore != nil && !r.mediaStore.Exists(sha) {
+				return nil, fmt.Errorf("%w: invalid media attachment %d: media blob %s not found in session store", ErrInvalidConfig, i, sha)
+			}
+			norm.Target = sha
+			norm.Media = &api.Media{
+				SHA256:      sha,
+				MIMEType:    mime,
+				ByteSize:    att.Media.ByteSize,
+				DisplayName: strings.TrimSpace(att.Media.DisplayName),
+				Pages:       strings.TrimSpace(att.Media.Pages),
+			}
+
 		default:
 			return nil, fmt.Errorf("%w: invalid attachment %d: unknown kind %q", ErrInvalidConfig, i, att.Kind)
 		}
@@ -214,8 +250,16 @@ func (r *AttachmentResolver) ResolveUserMessage(ctx context.Context, msg message
 	}
 
 	if len(atts) > 0 {
-		sections = append(sections, r.resolveFileBlocks(ctx, atts)...)
+		fileSections, fileMediaBlocks := r.resolveFileAndMediaBlocks(ctx, atts)
+		sections = append(sections, fileSections...)
+		if len(fileMediaBlocks) > 0 {
+			user.Content = append(user.Content, fileMediaBlocks...)
+		}
 		sections = append(sections, r.resolveMCPBlocks(ctx, atts)...)
+	}
+
+	if mediaNotes := r.filterUserMediaBlocks(user); len(mediaNotes) > 0 {
+		sections = append(sections, mediaNotes...)
 	}
 
 	if len(sections) == 0 {

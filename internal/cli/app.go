@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/clipboard"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/extras/wind"
@@ -29,8 +30,15 @@ func isCtrlC(k event.KeyEvent) bool {
 
 var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 	app := trail.UseApp()
+	doc := kitex.UseDocument()
 	ctrlCPending := store.UseApp(func(s store.AppState) bool { return s.CtrlCPending })
 	exitRequested := store.UseApp(func(s store.AppState) bool { return s.ExitRequested })
+
+	kitex.UseEffect(func() {
+		if d := doc(); d != nil {
+			d.SetClipboardProvider(clipboard.New())
+		}
+	}, []any{})
 
 	kitex.UseLayoutEffect(func() {
 		if exitRequested && app != nil {

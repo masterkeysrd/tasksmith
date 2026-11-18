@@ -112,6 +112,10 @@ func (s *Session) Fork(ctx context.Context, title string) (*Session, error) {
 		cleanupFailedFork(ctx, child)
 		return nil, err
 	}
+	if err := child.mediaStore.LinkAllFrom(s.mediaDir()); err != nil {
+		cleanupFailedFork(ctx, child)
+		return nil, err
+	}
 	copyBase := time.Now().UTC()
 	copied, err := copyForkTimeline(ctx, sourceTimeline, child.Timeline, copyBase)
 	if err != nil {

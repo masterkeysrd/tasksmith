@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/hash"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -1030,7 +1031,7 @@ func TestExpectedHashCASAndUUIDv7(t *testing.T) {
 	if err := os.WriteFile(diskFile, initialBytes, 0o644); err != nil {
 		t.Fatalf("os.WriteFile: %v", err)
 	}
-	initialHash := sha256Hex(initialBytes)
+	initialHash := hash.SHA256Hex(initialBytes)
 
 	// Mismatched ExpectedHash -> ErrFileModified on Write, Edit, Remove
 	if _, err := s.Write(ctx, WriteRequest{

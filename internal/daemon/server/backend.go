@@ -79,6 +79,7 @@ type SessionBackend interface {
 	DeleteSession(ctx context.Context, workspace, id string) error
 	Timeline(ctx context.Context, workspace, id string) ([]api.TimelineEntry, error)
 	Send(ctx context.Context, workspace, id string, req api.SendRequest) error
+	UploadMedia(ctx context.Context, workspace, id, mimeType, filename string, data []byte) (*api.Media, error)
 	Cancel(ctx context.Context, workspace, id string) error
 
 	Changes(ctx context.Context, workspace, id string) ([]api.FileChange, error)

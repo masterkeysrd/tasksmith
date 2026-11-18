@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 )
 
 type systemRouter struct {
@@ -702,6 +705,7 @@ func (s *sessionRouter) initRoutes() {
 		DeleteRoute("/v1/sessions/{id}", s.deleteSession),
 		GetRoute("/v1/sessions/{id}/timeline", s.getTimeline),
 		PostRoute("/v1/sessions/{id}/send", s.postSend),
+		PostRoute("/v1/sessions/{id}/media", s.postMedia),
 		PostRoute("/v1/sessions/{id}/cancel", s.postCancel),
 		GetRoute("/v1/sessions/{id}/changes", s.getChanges),
 		GetRoute("/v1/sessions/{id}/diff", s.getDiff),
@@ -840,6 +844,34 @@ func (s *sessionRouter) postSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *sessionRouter) postMedia(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if r.Body == nil {
+		WriteBadRequest(w, "empty request body")
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, media.MaxUploadBytes+1))
+	if err != nil {
+		WriteBadRequest(w, err.Error())
+		return
+	}
+	if int64(len(data)) > media.MaxUploadBytes {
+		WriteJSON(w, http.StatusRequestEntityTooLarge, api.ErrorResponse{
+			Code:    "payload_too_large",
+			Message: fmt.Sprintf("media payload exceeds maximum %s upload limit", format.Bytes(media.MaxUploadBytes)),
+		})
+		return
+	}
+	mimeType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	filename := strings.TrimSpace(r.URL.Query().Get("filename"))
+	desc, err := s.b.UploadMedia(r.Context(), RequestWorkspace(r), id, mimeType, filename, data)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	WriteJSON(w, http.StatusCreated, desc)
 }
 
 func (s *sessionRouter) postCancel(w http.ResponseWriter, r *http.Request) {

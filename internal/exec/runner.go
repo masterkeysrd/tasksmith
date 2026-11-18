@@ -198,8 +198,14 @@ func (r *run) resolveSession() error {
 		if hasMutableConfig(r.opts.Config) {
 			cfg := r.opts.Config
 			cfg.Sandbox = ""
-			updated, err := r.c.UpdateSession(r.ctx, id, api.UpdateSessionRequest{Config: cfg})
+			updated, err := r.c.UpdateSession(r.ctx, id, api.UpdateSessionRequest{
+				Config: cfg,
+				Force:  r.opts.Force,
+			})
 			if err != nil {
+				if apiErr, ok := client.IsCapabilityMismatch(err); ok {
+					return fmt.Errorf("apply session config: %s; pass --force to omit unsupported attachments on future turns", apiErr.Message)
+				}
 				return fmt.Errorf("apply session config: %w", err)
 			}
 			sess = updated

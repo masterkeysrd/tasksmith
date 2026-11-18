@@ -9,9 +9,11 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 )
 
 func resolveReadTarget(sb sandbox.Sandbox, g *shellguard.Guard, rawPath string) (string, api.SafetyLevel, error) {
@@ -23,9 +25,11 @@ func resolveReadTarget(sb sandbox.Sandbox, g *shellguard.Guard, rawPath string) 
 }
 
 type viewTool struct {
-	std     *std.Std
-	sandbox sandbox.Sandbox
-	guard   *shellguard.Guard
+	std              *std.Std
+	sandbox          sandbox.Sandbox
+	guard            *shellguard.Guard
+	mediaStore       *media.Store
+	supportsModality func(media.Modality) (string, bool)
 }
 
 func (t *viewTool) Prepare(_ context.Context, in api.ViewInput) (*tools.Plan, error) {
@@ -52,9 +56,45 @@ func (t *viewTool) Execute(ctx context.Context, in api.ViewInput) (api.ViewOutpu
 		Path:   in.Path,
 		Offset: in.Offset,
 		Limit:  in.Limit,
+		Pages:  in.Pages,
 	})
 	if err != nil {
 		return api.ViewOutput{}, err
+	}
+	if res.Media != nil {
+		if t.supportsModality != nil {
+			if modelID, supported := t.supportsModality(res.Media.Modality); !supported {
+				msg := fmt.Sprintf("Cannot view %s (%s, %s): active model %q does not support %s input.",
+					res.Path, res.Media.MIMEType, format.Bytes(res.Media.ByteSize), modelID, res.Media.Modality)
+				return api.ViewOutput{
+					Path:     res.Path,
+					Content:  msg,
+					Hash:     res.Hash,
+					MimeType: res.Media.MIMEType,
+					ByteSize: res.Media.ByteSize,
+					Modality: string(res.Media.Modality),
+					Pages:    res.Media.Pages,
+					Omitted:  true,
+				}, nil
+			}
+		}
+		hash := res.Hash
+		if t.mediaStore != nil {
+			storedHash, _, err := t.mediaStore.Put(ctx, res.Media.Data)
+			if err != nil {
+				return api.ViewOutput{}, err
+			}
+			hash = storedHash
+		}
+		return api.ViewOutput{
+			Path:     res.Path,
+			Content:  media.FormatViewSummary(res.Path, res.Media.MIMEType, res.Media.ByteSize, res.Media.Pages),
+			Hash:     hash,
+			MimeType: res.Media.MIMEType,
+			ByteSize: res.Media.ByteSize,
+			Modality: string(res.Media.Modality),
+			Pages:    res.Media.Pages,
+		}, nil
 	}
 	return api.ViewOutput{
 		Path:       res.Path,

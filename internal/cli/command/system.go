@@ -39,7 +39,7 @@ func (r *Registry) registerSystemCommands() {
 	})
 	r.Register(Command{
 		Name:        "model",
-		Usage:       "/model [model_id]",
+		Usage:       "/model [--force] [model_id]",
 		Description: "Select or switch the active model",
 		Handler:     handleModel,
 		Complete:    completeModels,
@@ -193,8 +193,27 @@ func handleMode(args []string) error {
 }
 
 func handleModel(args []string) error {
-	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		store.SetModel(strings.TrimSpace(args[0]))
+	var force bool
+	var modelID string
+	for _, a := range args {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if a == "--force" || a == "-f" {
+			force = true
+			continue
+		}
+		if modelID == "" {
+			modelID = a
+		}
+	}
+	if modelID != "" {
+		if force {
+			store.ForceSetModel(modelID)
+		} else {
+			store.SetModel(modelID)
+		}
 		return nil
 	}
 

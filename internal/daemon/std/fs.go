@@ -17,9 +17,11 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/hash"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/ripgrep"
 	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 )
 
 // View reads a text file from the sandbox filesystem, records its SHA-256
@@ -39,15 +41,31 @@ func (s *Std) View(ctx context.Context, req ViewRequest) (*ViewResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if isBinaryContent(data) {
+
+	mediaInfo, isMedia := media.Detect(normPath, data)
+	var pages string
+	if isMedia {
+		if err := media.CheckSize(mediaInfo.Modality, int64(len(data))); err != nil {
+			return nil, err
+		}
+		if mediaInfo.Modality == media.ModalityPDF {
+			pages, err = media.ParsePages(req.Pages)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+			}
+		}
+	} else if isBinaryContent(data) {
 		return nil, fmt.Errorf("%w: %s", ErrBinaryFile, normPath)
 	}
 
-	hash := sha256Hex(data)
+	hash := hash.SHA256Hex(data)
 
 	if prevHash, ok := s.tracker.LastHash(normPath); ok && prevHash != "" && prevHash != hash {
 		if prevContent, hasPriorChange := s.tracker.LastContent(normPath); hasPriorChange {
-			add, del := diff.Stats(string(prevContent), string(data))
+			var add, del int
+			if !isMedia {
+				add, del = diff.Stats(string(prevContent), string(data))
+			}
 			change := FileChange{
 				FileChange: api.FileChange{
 					Path:       normPath,
@@ -62,6 +80,7 @@ func (s *Std) View(ctx context.Context, req ViewRequest) (*ViewResult, error) {
 				},
 				BeforeContent: prevContent,
 				AfterContent:  data,
+				IsBinary:      isMedia,
 			}
 			if err := s.tracker.RecordChange(ctx, &change); err != nil {
 				return nil, err
@@ -71,6 +90,20 @@ func (s *Std) View(ctx context.Context, req ViewRequest) (*ViewResult, error) {
 
 	if err := s.tracker.RecordRead(ctx, normPath, hash); err != nil {
 		return nil, err
+	}
+
+	if isMedia {
+		return &ViewResult{
+			Path: normPath,
+			Hash: hash,
+			Media: &ViewMedia{
+				Modality: mediaInfo.Modality,
+				MIMEType: mediaInfo.MIMEType,
+				ByteSize: int64(len(data)),
+				Pages:    pages,
+				Data:     data,
+			},
+		}, nil
 	}
 
 	lines := splitTextLines(string(data))
@@ -624,7 +657,7 @@ func (s *Std) Write(ctx context.Context, req WriteRequest) (*WriteResult, error)
 	case err == nil:
 		exists = true
 		diskBytes = readBytes
-		diskHash = sha256Hex(diskBytes)
+		diskHash = hash.SHA256Hex(diskBytes)
 		if !req.Force {
 			if err := s.verifyCAS(normPath, diskHash, req.ExpectedHash); err != nil {
 				return nil, err
@@ -644,7 +677,7 @@ func (s *Std) Write(ctx context.Context, req WriteRequest) (*WriteResult, error)
 	}
 
 	afterBytes := []byte(req.Content)
-	afterHash := sha256Hex(afterBytes)
+	afterHash := hash.SHA256Hex(afterBytes)
 
 	beforeStr := string(diskBytes)
 	unifiedDiff := diff.FormatUnified("a/"+normPath, "b/"+normPath, beforeStr, req.Content)
@@ -728,7 +761,7 @@ func (s *Std) Edit(ctx context.Context, req EditRequest) (*EditResult, error) {
 		return nil, fmt.Errorf("%w: %s", ErrBinaryFile, normPath)
 	}
 
-	diskHash := sha256Hex(diskBytes)
+	diskHash := hash.SHA256Hex(diskBytes)
 	if !req.Force {
 		if err := s.verifyCAS(normPath, diskHash, req.ExpectedHash); err != nil {
 			return nil, err
@@ -757,7 +790,7 @@ func (s *Std) Edit(ctx context.Context, req EditRequest) (*EditResult, error) {
 	}
 
 	afterBytes := []byte(afterStr)
-	afterHash := sha256Hex(afterBytes)
+	afterHash := hash.SHA256Hex(afterBytes)
 	unifiedDiff := diff.FormatUnified("a/"+normPath, "b/"+normPath, beforeStr, afterStr)
 	add, del := diff.Stats(beforeStr, afterStr)
 
@@ -825,7 +858,7 @@ func (s *Std) Remove(ctx context.Context, req RemoveRequest) (*RemoveResult, err
 		return nil, err
 	}
 
-	diskHash := sha256Hex(diskBytes)
+	diskHash := hash.SHA256Hex(diskBytes)
 	if !req.Force {
 		if err := s.verifyCAS(normPath, diskHash, req.ExpectedHash); err != nil {
 			return nil, err
@@ -930,7 +963,7 @@ func (s *Std) SyncExternalChanges(ctx context.Context) ([]FileChange, error) {
 			return changes, err
 		}
 
-		diskHash := sha256Hex(diskBytes)
+		diskHash := hash.SHA256Hex(diskBytes)
 		if diskHash != lastHash {
 			isBin := isBinaryContent(prevContent) || isBinaryContent(diskBytes)
 			var add, del int

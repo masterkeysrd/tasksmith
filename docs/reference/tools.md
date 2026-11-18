@@ -60,7 +60,7 @@ Every built-in tool defines safety properties in its manifest:
 
 ### `view`
 
-Reads text content from a file inside the workspace. Supports pagination via line limits and offsets.
+Reads text or supported multimodal content from a file inside the workspace. Supports line-range pagination (`offset`, `limit`) for text files (including `.svg`) and optional `pages` ranges for PDFs. Supported images (`image/png`, `image/jpeg`, `image/webp`, `image/gif`), PDFs (`application/pdf`), and audio (`audio/wav`, `audio/mpeg`, `audio/mp4`, `audio/ogg`, `audio/flac`) are snapshotted into `<session-dir>/media/<sha256>` and recorded in the file tracker for Read-Before-Overwrite CAS. If the active model lacks support for the file's modality, `view` returns a non-fatal notice (`omitted: true`) without injecting an unsupported media block.
 
 - **Annotations**: `isReadOnly: true`, `isIdempotent: true`, `isDangerous: false`, `isOpenWorld: false`
 - **User Hint**: `"Read file: %s"`
@@ -70,19 +70,25 @@ Reads text content from a file inside the workspace. Supports pagination via lin
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `path` | string | **Yes** | File path relative to workspace root or absolute path inside the workspace. |
-| `limit` | integer | No | Maximum number of lines to return. |
-| `offset` | integer | No | 1-based line number from which to start reading (default: 1). |
+| `limit` | integer | No | Maximum number of lines to return. Ignored for images, PDFs, and audio. |
+| `offset` | integer | No | 1-based line number from which to start reading (default: 1). Ignored for images, PDFs, and audio. |
+| `pages` | string | No | Optional page range for PDF files (e.g., `"1-10"` or `"3"`). Ignored for text, image, and audio files. |
 
 #### Output Fields
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `path` | string | Normalized workspace-relative file path. |
-| `content` | string | Line-numbered text content of the selected line range. |
+| `content` | string | Line-numbered text content of the selected line range, or compact metadata for media files. |
 | `start_line` | integer | 1-based first line number returned. |
 | `end_line` | integer | 1-based last line number returned. |
 | `total_lines` | integer | Total line count of the file on disk. |
 | `hash` | string | SHA-256 hex digest of the full file on disk. |
+| `mime_type` | string | MIME type when the viewed file is supported multimodal media. |
+| `byte_size` | integer (int64) | Byte size of the viewed media payload. |
+| `modality` | string | Media modality (`"image"`, `"pdf"`, or `"audio"`) when viewing multimodal files. |
+| `pages` | string | Normalized page range for viewed PDF files. |
+| `omitted` | boolean | `true` if media content was omitted because the active model lacks support for its modality. |
 | `truncated` | boolean | `true` if additional lines remain after `end_line`. |
 
 ```json

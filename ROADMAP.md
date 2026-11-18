@@ -25,7 +25,7 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - [x] **Headless, bidirectional stdio, & SDK execution**: one-shot and bidirectional streaming `tasksmith exec` / `-p` modes (`text`, `json`, and 1:1 `api/` `jsonl` over `stdin`/`stdout`) plus Go `client` SDK lifecycle helpers for CI, pipelines, and programmatic integrations
 - [ ] **Agent Client Protocol (`tasksmith acp`)**: JSON-RPC 2.0 stdio adapter over the shared local daemon for Zed, JetBrains, and Neovim with live TUI session sharing, tool diffs, and interactive permission prompts
 - [x] **Quick session resume & forking**: `-c` / `--continue` flag for resuming the latest workspace session and `/fork` conversation branching
-- [ ] **Multimodal input**: image and PDF ingestion in `view`, `@` media attachments, and clipboard image paste in the composer
+- [x] **Multimodal input**: content-addressed `<session-dir>/media/` storage with late gateway hydration, image/PDF/audio ingestion in `view` (with PDF `pages`), `@` media mentions, clipboard paste, and model-switch capability confirmation
 - [ ] **Built-in `web_search` & CLI `auth`**: host-mediated web search tool and `tasksmith auth login|status|logout` subcommands
 - [ ] **WARP-managed `/providers` & deterministic `spec.enabled` policies**: interactive `/providers` browser, inline `F2` alias editor, and manifest-driven `spec.enabled` / `WORKSPACE.md` exclusions for providers, tools, and MCP servers
 - [ ] **Claude Code & GitHub Copilot providers**: subscription-backed `claudecode` and `github-copilot` LLM gateway providers (via `loom`) with OAuth sign-in, built-in presets, `@fast`/`@balanced`/`@smart`/`@flagship` model tiers, and quota tracking
@@ -41,6 +41,7 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - **Plugin lifecycle & lockfile hardening**: `tasksmith plugin` CLI subcommands, interactive `/plugins` browser, and strict `warp.lock` digest verification
 - **Configurable commit & PR attribution**: workspace and global preferences for git trailers
 - **Dynamic capability discovery**: host and sandbox tool probes (`git`, `rg`, `gh`) exposed to WARP prompt and tool templates
+- **Memory footprint & idle eviction**: cold-session `ListSessions` projection, idle session unloading, sandbox/worktree-isolated lazy file indexing, and CLI scrollback memory trimming
 
 ---
 

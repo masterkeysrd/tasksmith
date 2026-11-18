@@ -9,6 +9,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -147,6 +149,35 @@ func messageParts(message store.Message) []trail.Node {
 			node = MessageThought(MessageThoughtProps{Text: part.Thought.Text, Streaming: part.Thought.Streaming})
 		case store.PartTool:
 			node = MessageTool(MessageToolProps{Tool: *part.Tool})
+		case store.PartMedia:
+			if part.Media == nil {
+				continue
+			}
+			label := part.Media.Media.DisplayName
+			if label == "" {
+				label = string(part.Media.BlockType)
+			}
+			if part.Media.Media.MIMEType != "" {
+				meta := part.Media.Media.MIMEType
+				if part.Media.Media.ByteSize > 0 {
+					meta += ", " + format.Bytes(part.Media.Media.ByteSize)
+				}
+				label = fmt.Sprintf("%s (%s)", label, meta)
+			}
+			node = trail.Box(trail.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(scheme.Color.Surface.Elevated).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: part.Media.Media.DisplayName}),
+				trail.Span(trail.SpanProps{
+					Style: style.S().Bold(true).Foreground(scheme.Color.Text.Primary),
+				}, trail.Text(label)),
+			)
 		default:
 			node = messageError(fmt.Sprintf("Unable to render message part: unsupported type %q", part.Type))
 		}

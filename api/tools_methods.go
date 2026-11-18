@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/masterkeysrd/loom/message"
 )
@@ -46,6 +47,37 @@ func (o ToolSearchOutput) ToolContent() message.Content {
 	content := make(message.Content, 0, len(o.Tools))
 	for _, name := range o.Tools {
 		content = append(content, &message.ToolReferenceBlock{ToolName: name})
+	}
+	return content
+}
+
+// ToolContent returns the viewed content as a text block plus a lightweight
+// media descriptor block when the file is supported multimodal media (and was
+// not omitted for the active model). Plain text views (MimeType == "") return
+// nil so StructuredContent remains the sole payload without duplicating text.
+func (o ViewOutput) ToolContent() message.Content {
+	if o.MimeType == "" {
+		return nil
+	}
+	content := message.Content{&message.TextBlock{Text: o.Content}}
+	if o.Omitted || o.Hash == "" || o.ByteSize <= 0 {
+		return content
+	}
+	extras := map[string]any{
+		MediaExtraSHA256:      o.Hash,
+		MediaExtraByteSize:    o.ByteSize,
+		MediaExtraDisplayName: filepath.Base(o.Path),
+	}
+	if o.Pages != "" {
+		extras[MediaExtraPages] = o.Pages
+	}
+	switch o.Modality {
+	case "image":
+		content = append(content, &message.ImageBlock{MIMEType: o.MimeType, Extras: extras})
+	case "pdf":
+		content = append(content, &message.DocumentBlock{MIMEType: o.MimeType, Extras: extras})
+	case "audio":
+		content = append(content, &message.AudioBlock{MIMEType: o.MimeType, Extras: extras})
 	}
 	return content
 }

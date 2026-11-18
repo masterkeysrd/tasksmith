@@ -1,11 +1,13 @@
 package exec
 
 import (
+	"cmp"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 )
@@ -103,7 +105,25 @@ func (r *run) cmdExit() error {
 // cmdModel shows or sets the session model, delegating ID and @alias resolution
 // to the daemon so every client accepts the exact same model references.
 func (r *run) cmdModel(args []string) error {
-	if len(args) == 0 {
+	var force bool
+	var id string
+	for _, a := range args {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if a == "--force" || a == "-f" {
+			force = true
+			continue
+		}
+		if id == "" {
+			id = a
+		}
+	}
+	if id == "" {
+		if force {
+			return fmt.Errorf("usage: /model [--force] <model_id>")
+		}
 		label := "(daemon default)"
 		if r.sess.Model != nil {
 			label = modelLabel(r.sess.Model)
@@ -111,11 +131,14 @@ func (r *run) cmdModel(args []string) error {
 		r.reportCommandData("/model", "model: "+label, r.sess.Model, nil)
 		return nil
 	}
-	id := args[0]
 	sess, err := r.c.UpdateSession(r.ctx, r.sess.ID, api.UpdateSessionRequest{
 		Config: api.SessionConfig{Model: id},
+		Force:  force,
 	})
 	if err != nil {
+		if apiErr, ok := client.IsCapabilityMismatch(err); ok {
+			return fmt.Errorf("%s; pass /model --force %s to omit unsupported attachments on future turns", apiErr.Message, cmp.Or(apiErr.Model, id))
+		}
 		return err
 	}
 	if sess != nil {

@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
 
@@ -148,6 +149,16 @@ func FromAPIBlock(b api.Block) (message.Block, bool) {
 			Args: maps.Clone(b.ToolCall.Args),
 		}, true
 
+	case api.BlockImage, api.BlockDocument, api.BlockAudio:
+		if b.Media == nil {
+			return nil, false
+		}
+		blk, err := media.BlockFromDescriptor(*b.Media)
+		if err != nil {
+			return nil, false
+		}
+		return blk, true
+
 	default:
 		return nil, false
 	}
@@ -247,6 +258,27 @@ func ToAPIBlock(b message.Block) (api.Block, bool) {
 				Name: v.Name,
 				Args: args,
 			},
+		}, true
+
+	case *message.ImageBlock, *message.DocumentBlock, *message.AudioBlock:
+		desc, mod, ok := media.DescriptorFromBlock(v)
+		if !ok {
+			return api.Block{}, false
+		}
+		var blockType api.BlockType
+		switch mod {
+		case media.ModalityImage:
+			blockType = api.BlockImage
+		case media.ModalityPDF:
+			blockType = api.BlockDocument
+		case media.ModalityAudio:
+			blockType = api.BlockAudio
+		default:
+			return api.Block{}, false
+		}
+		return api.Block{
+			Type:  blockType,
+			Media: &desc,
 		}, true
 
 	default:

@@ -78,7 +78,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | :--- | :--- | :--- | :--- |
 | **`/help`** | `/h`, `/?` | *(none)* | Opens the interactive slash command browser and help viewer. |
 | **`/mode`** | | `[mode]` (`default`, `accept_edits`, `plan`, `ask`, `auto`) | Inspects current permission mode or switches to the specified mode. |
-| **`/model`** | | `[model_id]` | Switches to `model_id`, or opens the interactive model picker if no argument is provided. See [Model Picker](#model-picker-model). |
+| **`/model`** | | `[--force] [model_id]` | Switches to `model_id`, or opens the interactive model picker if no argument is provided. Prompts for confirmation (or requires `--force`) when switching drops modalities active in the session. See [Model Picker](#model-picker-model). |
 | **`/agent`** | | `[agent_name]` | Displays active agent, switches to `agent_name`, or opens the interactive agent picker if no argument is provided. |
 | **`/effort`** | | `[level\|default]` | Set an allowed model-specific effort or open the picker, which shows available descriptions. |
 | **`/budget`** | | `[tokens\|default]` | Show or set a supported thinking token budget. |
@@ -130,6 +130,7 @@ model the session is actually running is suffixed `current`.
 
 - **Active model before a choice**: a fresh draft session has no model of its own, yet it already resolves to the workspace or agent default. That resolved model is marked `current`, and a session configured with an alias is marked on the model the alias resolves to.
 - **Search**: the filter box matches the label, aliases, id, provider name, and billing cell, so typing an alias name narrows the list to the model it names and typing a provider name isolates one provider's group. `/model` argument autocomplete matches aliases the same way and inserts the canonical model id.
+- **Capability mismatch gate**: if switching to a model drops an input modality (`image`, `pdf`, `audio`) currently present in post-compaction session context, the REPL prompts in `<Slot />` to **Switch anyway** (retrying with `force: true` and omitting incompatible historical media on future turns) or **Cancel**. Passing `/model --force <id>` skips the prompt.
 - **Nothing chat-capable**: the picker closes and reports `No chat-capable models available.`
 
 ### Thinking Controls (`/effort`, `/budget`, `/thinking`)
@@ -181,7 +182,8 @@ Token prefixes typed anywhere in a prompt render as inline pill badges:
 
 | Syntax | Rendering | Functional today |
 | :--- | :--- | :--- |
-| `@<token>` / `@file:<path>` | Pill with file/folder icon | **Yes** — triggers `@` autocomplete, inserts shortest unique workspace suffix (or explicit path), expands file or directory into `<system_reminders>`, supports optional `#L<start>[-L<end>]` line ranges. |
+| `@<token>` / `@file:<path>` | Pill with file/folder icon | **Yes** — triggers `@` autocomplete, inserts shortest unique workspace suffix (or explicit path), expands text files or directories into `<system_reminders>` (with optional `#L<start>[-L<end>]` line ranges), and attaches supported images/PDFs/audio into `<session-dir>/media/<sha256>`. |
+| `[Image #N]` (via `Ctrl+V` / `Alt+V`) | Pill with image icon | **Yes** — pastes an image from the OS clipboard into the composer, staging it as an inline `[Image #N]` pill and uploading it to `<session-dir>/media/<sha256>` on send. |
 | `@rule:<name>` | Pill with shield icon | **Yes** — loads the rule, with `@rule:` autocomplete. |
 | `@sym:<name>` | Pill with symbol-kind icon | Display only. |
 | `@skill:<name>` | Pill with plugin icon | **Yes** — loads the skill into `<system_reminders>` and activates its deferred tools, with `@skill:` autocomplete (skills with arguments can also be invoked as `/skill <args>`). |

@@ -2,6 +2,8 @@ package session
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
@@ -31,7 +33,21 @@ var (
 	ErrSessionRunning       = errors.New("session: session already has an active turn")
 	ErrEmptyMessage         = errors.New("session: message content must not be empty")
 	ErrUnknownCommand       = errors.New("session: unknown slash command")
+	ErrCapabilityMismatch   = errors.New("session: model lacks required session capabilities")
 )
+
+// CapabilityMismatchError reports which active-context modalities would be
+// dropped by switching a session to Model without Force.
+type CapabilityMismatchError struct {
+	Model             string
+	MissingModalities []string
+}
+
+func (e *CapabilityMismatchError) Error() string {
+	return fmt.Sprintf("model %q does not support %s used in this session", e.Model, strings.Join(e.MissingModalities, ", "))
+}
+
+func (e *CapabilityMismatchError) Unwrap() error { return ErrCapabilityMismatch }
 
 type queueItem struct {
 	ID        string
