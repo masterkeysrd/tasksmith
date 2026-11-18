@@ -125,7 +125,7 @@ func waitForQuotaEvents(t *testing.T, pub *testPublisher, sess *Session, want in
 }
 
 func TestPublishQuotaAfterFastCompletedTurn(t *testing.T) {
-	gw, pub, mgr := setupQuotaEnv(t, nil, &api.ModelQuota{Model: "pool/free", Provider: "pool", RemainingFraction: 0.92})
+	gw, pub, mgr := setupQuotaEnv(t, nil, &api.ModelQuota{Model: "pool/free", Provider: "pool", Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.92}}})
 	t.Cleanup(func() { _ = mgr.Close() })
 	sess := quotaBilledSession(t, mgr)
 
@@ -139,7 +139,7 @@ func TestPublishQuotaAfterFastCompletedTurn(t *testing.T) {
 	}
 	waitForQuotaEvents(t, pub, sess, 1, 50*time.Millisecond)
 	ev := quotaEvents(t, pub, sess)[0]
-	if ev.SessionID != sess.ID || ev.Quota.Model != "pool/free" || ev.Quota.RemainingFraction != 0.92 {
+	if ev.SessionID != sess.ID || ev.Quota.Model != "pool/free" || len(ev.Quota.Buckets) != 1 || ev.Quota.Buckets[0].RemainingFraction != 0.92 {
 		t.Fatalf("event = %+v", ev)
 	}
 	if n := gw.quotaCallCount(); n != 1 {
@@ -148,7 +148,7 @@ func TestPublishQuotaAfterFastCompletedTurn(t *testing.T) {
 }
 
 func TestPublishQuotaAfterLongCompletedTurn(t *testing.T) {
-	gw, pub, mgr := setupQuotaEnv(t, nil, &api.ModelQuota{Model: "pool/free", RemainingFraction: 0.5})
+	gw, pub, mgr := setupQuotaEnv(t, nil, &api.ModelQuota{Model: "pool/free", Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.5}}})
 	t.Cleanup(func() { _ = mgr.Close() })
 	sess := quotaBilledSession(t, mgr)
 
@@ -170,7 +170,7 @@ func TestRateLimitedTurnPublishesQuotaOnce(t *testing.T) {
 			return nil, "", errors.New("status 429: rate limit exceeded")
 		},
 	}
-	gw, pub, mgr := setupQuotaEnv(t, prov, &api.ModelQuota{Model: "pool/free", RemainingFraction: 0.03})
+	gw, pub, mgr := setupQuotaEnv(t, prov, &api.ModelQuota{Model: "pool/free", Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.03}}})
 	t.Cleanup(func() { _ = mgr.Close() })
 	gw.mu.Lock()
 	gw.quotaDelay = 80 * time.Millisecond

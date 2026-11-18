@@ -1103,15 +1103,21 @@ func TestQuotaFollowsModel(t *testing.T) {
 	}
 
 	// A reading for another model must not leak into this session's badge.
-	SetQuota(api.ModelQuota{Model: "pool/other", RemainingFraction: 0.5})
+	SetQuota(api.ModelQuota{Model: "pool/other", Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.5}}})
 	if GetQuota() != nil {
 		t.Fatal("foreign-model reading was accepted")
 	}
 
 	reset := time.Now().Add(time.Hour)
-	SetQuota(api.ModelQuota{Model: "pool/a", Provider: "pool", RemainingFraction: 0.94, ResetAt: reset, Account: "dev@example.com"})
+	SetQuota(api.ModelQuota{
+		Model:    "pool/a",
+		Provider: "pool",
+		Account:  "dev@example.com",
+		Buckets:  []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.94, ResetAt: &reset}},
+	})
 	q := GetQuota()
-	if q == nil || q.Provider != "pool" || quotaPercent(q.RemainingFraction) != 94 || !q.ResetAt.Equal(reset) || q.Account != "dev@example.com" {
+	b, ok := q.Bottleneck()
+	if q == nil || !ok || q.Provider != "pool" || quotaPercent(b.RemainingFraction) != 94 || b.ResetAt == nil || !b.ResetAt.Equal(reset) || q.Account != "dev@example.com" {
 		t.Fatalf("quota reading = %+v", q)
 	}
 
@@ -1128,7 +1134,7 @@ func TestQuotaClearedOnActiveSessionModelSwitch(t *testing.T) {
 
 	SetSession(&api.Session{ID: "s1"})
 	SetSessionModelInfo(&api.Model{ID: "pool/a", Name: "A", QuotaBilled: true}, nil)
-	SetQuota(api.ModelQuota{Model: "pool/a", Provider: "pool", RemainingFraction: 0.9})
+	SetQuota(api.ModelQuota{Model: "pool/a", Provider: "pool", Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.9}}})
 
 	// An update for the same session carrying a different quota-billed model
 	// (as /model or SwitchSession delivers via UpdateSession) must drop the
@@ -1142,7 +1148,7 @@ func TestQuotaClearedOnActiveSessionModelSwitch(t *testing.T) {
 	}
 
 	// Re-applying the same model keeps a settled reading.
-	SetQuota(api.ModelQuota{Model: "pool/b", Provider: "pool", RemainingFraction: 0.5})
+	SetQuota(api.ModelQuota{Model: "pool/b", Provider: "pool", Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.5}}})
 	SetSession(&api.Session{ID: "s1", Model: &api.Model{ID: "pool/b", Name: "B", QuotaBilled: true}})
 	if GetQuota() == nil {
 		t.Fatal("re-applying the same model dropped its reading")
@@ -1155,7 +1161,7 @@ func TestDraftSessionClearsQuota(t *testing.T) {
 
 	SetSession(&api.Session{ID: "s1"})
 	SetSessionModelInfo(&api.Model{ID: "pool/a", Name: "A", QuotaBilled: true}, nil)
-	SetQuota(api.ModelQuota{Model: "pool/a", Provider: "pool", RemainingFraction: 0.9})
+	SetQuota(api.ModelQuota{Model: "pool/a", Provider: "pool", Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.9}}})
 
 	NewDraftSession("")
 	if GetSession().ModelQuotaBilled || GetQuota() != nil {

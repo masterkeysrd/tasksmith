@@ -333,9 +333,10 @@ func TestUsageSegmentQuota(t *testing.T) {
 	}
 
 	// With a reading: remaining capacity plus reset countdown, no cost.
+	reset := time.Now().Add(3*time.Hour + 40*time.Minute)
 	store.SetQuota(api.ModelQuota{
-		Model: "pool/gemini", RemainingFraction: 0.94,
-		ResetAt: time.Now().Add(3*time.Hour + 40*time.Minute),
+		Model:   "pool/gemini",
+		Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.94, ResetAt: &reset}},
 	})
 	out = renderNode(t, UsageSegment(SegmentProps{}))
 	if strings.Contains(out, "$") {

@@ -78,7 +78,7 @@ type usageFetch struct {
 	loading bool
 	err     string
 	summary *api.UsageSummary
-	quotas  []api.ModelQuota
+	quotas  *api.QuotaSnapshotResponse
 }
 
 // usageViewRows is how many lines of a usage view are visible at once.
@@ -115,7 +115,7 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 			key := currentKey
 			go func() {
 				defer cancel()
-				quotas, err := fetchModelQuotas(ctx, c)
+				quotas, err := fetchQuotaSnapshots(ctx, c)
 				if err != nil {
 					setFetch(usageFetch{key: key, err: err.Error()})
 					return
@@ -315,33 +315,13 @@ func usageTabBar(active usageTab, by api.UsageGroupBy, rng usageRange) string {
 	return bar
 }
 
-// quotaClient lists the models and quotas the Quotas tab needs.
+// quotaClient fetches workspace quota snapshots for the Quotas tab.
 type quotaClient interface {
-	ListModels(ctx context.Context) ([]api.Model, error)
-	GetModelQuota(ctx context.Context, model string) (*api.ModelQuota, error)
+	GetQuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotResponse, error)
 }
 
-// fetchModelQuotas reads the live quota of every quota-billed model. Providers
-// that stop reporting a window for a model (or fail) simply drop out of the
-// listing rather than blocking it.
-func fetchModelQuotas(ctx context.Context, c quotaClient) ([]api.ModelQuota, error) {
-	models, err := c.ListModels(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var out []api.ModelQuota
-	for _, m := range models {
-		if !m.QuotaBilled || !m.Capabilities.SupportsCompletion() {
-			continue
-		}
-		if ctx.Err() != nil {
-			return out, ctx.Err()
-		}
-		q, err := c.GetModelQuota(ctx, m.ID)
-		if err != nil || q == nil {
-			continue
-		}
-		out = append(out, *q)
-	}
-	return out, nil
+// fetchQuotaSnapshots reads the live multi-bucket quota snapshots across all
+// quota-capable providers in the workspace.
+func fetchQuotaSnapshots(ctx context.Context, c quotaClient) (*api.QuotaSnapshotResponse, error) {
+	return c.GetQuotaSnapshots(ctx)
 }

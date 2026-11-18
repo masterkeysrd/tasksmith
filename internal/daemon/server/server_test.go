@@ -21,104 +21,106 @@ import (
 type mockBackend struct {
 	server.Backend
 
-	healthResp        *api.HealthResponse
-	healthErr         error
-	shutdownErr       error
-	connectSub        *broker.Subscriber
-	connectTopics     []string
-	connectErr        error
-	subTopics         []string
-	subErr            error
-	unsubTopics       []string
-	unsubErr          error
-	doneCh            chan struct{}
-	wsResp            *api.Workspace
-	wsErr             error
-	reloadWsCalled    bool
-	reloadWsErr       error
-	agentsResp        []api.Agent
-	agentsErr         error
-	agentResp         *api.Agent
-	agentErr          error
-	commandsResp      []api.Command
-	commandsErr       error
-	commandResp       *api.Command
-	commandErr        error
-	skillsResp        []api.Skill
-	skillsErr         error
-	skillResp         *api.Skill
-	skillErr          error
-	rulesResp         []api.Rule
-	rulesErr          error
-	toolsResp         []api.Tool
-	toolsErr          error
-	toolsAgent        string
-	mcpsResp          []api.MCPServer
-	mcpsErr           error
-	restartMCPServer  api.MCPServer
-	restartMCPErr     error
-	restartMCPName    string
-	authMCPResp       api.MCPAuthResponse
-	authMCPErr        error
-	authMCPName       string
-	authCallbackReq   api.MCPAuthCallbackRequest
-	authCallbackErr   error
-	authCallbackName  string
-	mcpPromptResp     api.MCPPromptResponse
-	mcpPromptErr      error
-	mcpPromptServer   string
-	mcpPromptName     string
-	mcpPromptReq      api.MCPPromptRequest
-	mcpResourceResp   api.MCPResourceResponse
-	mcpResourceErr    error
-	mcpResourceServer string
-	mcpResourceReq    api.MCPResourceRequest
-	allowPolicyServer api.MCPServer
-	allowPolicyErr    error
-	allowPolicyName   string
-	allowPolicyReq    api.MCPAllowPolicyRequest
-	modelsResp        []api.Model
-	modelsErr         error
-	modelResp         *api.Model
-	modelErr          error
-	modelQuotaResp    *api.ModelQuota
-	modelQuotaErr     error
-	permsResp         *api.PermissionsResponse
-	permsErr          error
-	sandboxResp       *api.SandboxResponse
-	sandboxErr        error
-	updateSandboxErr  error
-	updateSandboxReq  api.UpdateSandboxRequest
-	updateSandboxWS   string
-	getSandboxCalled  int
-	createSessResp    *api.Session
-	createSessCreated bool
-	createSessErr     error
-	previewSessResp   *api.SessionPreview
-	previewSessErr    error
-	listSessResp      []api.Session
-	listSessErr       error
-	getSessResp       *api.Session
-	getSessErr        error
-	updateSessResp    *api.Session
-	updateSessErr     error
-	latestSessResp    *api.Session
-	latestSessErr     error
-	forkSessResp      *api.Session
-	forkSessErr       error
-	deleteSessErr     error
-	timelineResp      []api.TimelineEntry
-	timelineErr       error
-	sendErr           error
-	cancelErr         error
-	changesResp       []api.FileChange
-	changesErr        error
-	diffResp          *api.DiffResponse
-	diffErr           error
-	revertErr         error
-	filesResp         []api.WorkspaceFile
-	filesErr          error
-	filesReq          api.ListFilesRequest
+	healthResp         *api.HealthResponse
+	healthErr          error
+	shutdownErr        error
+	connectSub         *broker.Subscriber
+	connectTopics      []string
+	connectErr         error
+	subTopics          []string
+	subErr             error
+	unsubTopics        []string
+	unsubErr           error
+	doneCh             chan struct{}
+	wsResp             *api.Workspace
+	wsErr              error
+	reloadWsCalled     bool
+	reloadWsErr        error
+	agentsResp         []api.Agent
+	agentsErr          error
+	agentResp          *api.Agent
+	agentErr           error
+	commandsResp       []api.Command
+	commandsErr        error
+	commandResp        *api.Command
+	commandErr         error
+	skillsResp         []api.Skill
+	skillsErr          error
+	skillResp          *api.Skill
+	skillErr           error
+	rulesResp          []api.Rule
+	rulesErr           error
+	toolsResp          []api.Tool
+	toolsErr           error
+	toolsAgent         string
+	mcpsResp           []api.MCPServer
+	mcpsErr            error
+	restartMCPServer   api.MCPServer
+	restartMCPErr      error
+	restartMCPName     string
+	authMCPResp        api.MCPAuthResponse
+	authMCPErr         error
+	authMCPName        string
+	authCallbackReq    api.MCPAuthCallbackRequest
+	authCallbackErr    error
+	authCallbackName   string
+	mcpPromptResp      api.MCPPromptResponse
+	mcpPromptErr       error
+	mcpPromptServer    string
+	mcpPromptName      string
+	mcpPromptReq       api.MCPPromptRequest
+	mcpResourceResp    api.MCPResourceResponse
+	mcpResourceErr     error
+	mcpResourceServer  string
+	mcpResourceReq     api.MCPResourceRequest
+	allowPolicyServer  api.MCPServer
+	allowPolicyErr     error
+	allowPolicyName    string
+	allowPolicyReq     api.MCPAllowPolicyRequest
+	modelsResp         []api.Model
+	modelsErr          error
+	modelResp          *api.Model
+	modelErr           error
+	modelQuotaResp     *api.ModelQuota
+	modelQuotaErr      error
+	quotaSnapshotsResp *api.QuotaSnapshotResponse
+	quotaSnapshotsErr  error
+	permsResp          *api.PermissionsResponse
+	permsErr           error
+	sandboxResp        *api.SandboxResponse
+	sandboxErr         error
+	updateSandboxErr   error
+	updateSandboxReq   api.UpdateSandboxRequest
+	updateSandboxWS    string
+	getSandboxCalled   int
+	createSessResp     *api.Session
+	createSessCreated  bool
+	createSessErr      error
+	previewSessResp    *api.SessionPreview
+	previewSessErr     error
+	listSessResp       []api.Session
+	listSessErr        error
+	getSessResp        *api.Session
+	getSessErr         error
+	updateSessResp     *api.Session
+	updateSessErr      error
+	latestSessResp     *api.Session
+	latestSessErr      error
+	forkSessResp       *api.Session
+	forkSessErr        error
+	deleteSessErr      error
+	timelineResp       []api.TimelineEntry
+	timelineErr        error
+	sendErr            error
+	cancelErr          error
+	changesResp        []api.FileChange
+	changesErr         error
+	diffResp           *api.DiffResponse
+	diffErr            error
+	revertErr          error
+	filesResp          []api.WorkspaceFile
+	filesErr           error
+	filesReq           api.ListFilesRequest
 }
 
 func (m *mockBackend) Health(ctx context.Context) (*api.HealthResponse, error) {
@@ -260,6 +262,10 @@ func (m *mockBackend) GetModelQuota(ctx context.Context, workspace, id string) (
 	return m.modelQuotaResp, m.modelQuotaErr
 }
 
+func (m *mockBackend) GetQuotaSnapshots(ctx context.Context, workspace string) (*api.QuotaSnapshotResponse, error) {
+	return m.quotaSnapshotsResp, m.quotaSnapshotsErr
+}
+
 func (m *mockBackend) GetPermissions(ctx context.Context, workspace string) (*api.PermissionsResponse, error) {
 	return m.permsResp, m.permsErr
 }
@@ -364,9 +370,10 @@ func TestQuotaRoute(t *testing.T) {
 
 	t.Run("reports quota", func(t *testing.T) {
 		mock := &mockBackend{modelQuotaResp: &api.ModelQuota{
-			Model:             "antigravity/gemini-pro",
-			RemainingFraction: 0.75,
-			ResetAt:           reset,
+			Model: "antigravity/gemini-pro",
+			Buckets: []api.QuotaBucket{
+				{ID: "5h", RemainingFraction: 0.75, ResetAt: &reset},
+			},
 		}}
 		handler := setupTestServer(mock)
 
@@ -381,8 +388,34 @@ func TestQuotaRoute(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &quota); err != nil {
 			t.Fatalf("unmarshal quota: %v", err)
 		}
-		if quota.RemainingFraction != 0.75 {
-			t.Errorf("RemainingFraction = %v, want 0.75", quota.RemainingFraction)
+		if len(quota.Buckets) != 1 || quota.Buckets[0].RemainingFraction != 0.75 {
+			t.Errorf("Buckets = %+v, want RemainingFraction=0.75", quota.Buckets)
+		}
+	})
+
+	t.Run("reports workspace quota snapshots without model parameter", func(t *testing.T) {
+		mock := &mockBackend{quotaSnapshotsResp: &api.QuotaSnapshotResponse{
+			Providers: []api.ProviderQuotaSnapshot{{
+				Provider: "antigravity",
+				Buckets:  map[string]api.QuotaBucket{"5h": {ID: "5h", RemainingFraction: 0.8}},
+				Models:   map[string][]string{"antigravity/gemini-pro": {"5h"}},
+			}},
+		}}
+		handler := setupTestServer(mock)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/quotas", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("snapshot status = %d, want 200", rec.Code)
+		}
+		var snap api.QuotaSnapshotResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+			t.Fatalf("unmarshal snapshot: %v", err)
+		}
+		if len(snap.Providers) != 1 || snap.Providers[0].Provider != "antigravity" {
+			t.Fatalf("unexpected snapshot: %+v", snap)
 		}
 	})
 
@@ -398,10 +431,10 @@ func TestQuotaRoute(t *testing.T) {
 		}
 	})
 
-	t.Run("missing model parameter", func(t *testing.T) {
+	t.Run("empty model parameter", func(t *testing.T) {
 		handler := setupTestServer(&mockBackend{})
 
-		req := httptest.NewRequest(http.MethodGet, "/v1/quotas", nil)
+		req := httptest.NewRequest(http.MethodGet, "/v1/quotas?model=", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 

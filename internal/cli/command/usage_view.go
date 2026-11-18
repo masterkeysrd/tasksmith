@@ -3,6 +3,7 @@ package command
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -569,133 +570,214 @@ func quotaGaugeStyle(pct int) lineStyle {
 	}
 }
 
-// quotaLines renders the Quotas tab: one bar per quota window, grouped so
-// models sharing the same window (identical reset time and account) appear
-// once under a shared-pool heading. A live reading from quota_updated events
-// overrides the initial fetch for its pool, and the model the active session
-// runs on is marked regardless of whether a reading has arrived yet.
-func quotaLines(quotas []api.ModelQuota, live *api.ModelQuota, activeModelID string, now time.Time) []usageLine {
-	if len(quotas) == 0 {
+// quotaLines renders the Quotas tab from multi-bucket provider snapshots:
+// models referencing the same bucket IDs are grouped into shared pools with one
+// bar, optional unit usage, and reset countdown per bucket. A live reading from
+// quota_updated events overrides the matching buckets for its provider pool, and
+// the model the active session runs on is marked "current".
+func quotaLines(snap *api.QuotaSnapshotResponse, live *api.ModelQuota, activeModelID string, now time.Time) []usageLine {
+	merged := overlayQuotaSnapshot(snap, live)
+	if merged == nil || len(merged.Providers) == 0 {
 		return []usageLine{{Text: "No quota-billed models in this workspace.", Style: lineDim}}
 	}
 
-	sorted := overlayQuota(quotas, live)
-	slices.SortStableFunc(sorted, func(a, b api.ModelQuota) int {
+	providers := slices.Clone(merged.Providers)
+	slices.SortStableFunc(providers, func(a, b api.ProviderQuotaSnapshot) int {
 		if c := strings.Compare(a.Provider, b.Provider); c != 0 {
 			return c
 		}
-		if c := strings.Compare(a.Account, b.Account); c != 0 {
-			return c
-		}
-		if c := a.ResetAt.Compare(b.ResetAt); c != 0 {
-			return c
-		}
-		return strings.Compare(a.Model, b.Model)
+		return strings.Compare(a.Account, b.Account)
 	})
+
+	type bucketGroup struct {
+		bucketIDs []string
+		models    []string
+	}
 
 	var out []usageLine
 	out = append(out, usageLine{Text: "Subscription quota windows", Style: lineHeading})
 
-	previousPool := ""
-	for i, q := range sorted {
-		pct := min(max(int(q.RemainingFraction*100), 0), 100)
-		style := quotaGaugeStyle(pct)
-
-		pool := quotaPoolKey(q)
-		if pool != previousPool {
-			if i > 0 {
-				out = append(out, usageLine{})
-			}
-			out = append(out, usageLine{Text: quotaPoolHeading(q, sorted), Style: lineDim})
-			// A shared pool refills all its models at once, so the countdown
-			// is stated once under its heading instead of after every row.
-			if reset := quotaResetText(q, now); reset != "" {
-				out = append(out, usageLine{Text: " " + strings.Repeat(" ", quotaBarWidth+2) + reset, Style: lineDim})
-			}
-			previousPool = pool
-		}
-
-		line := fmt.Sprintf("  %s %3d%%  %s", quotaBar(pct), pct, q.Model)
-		if activeModelID != "" && q.Model == activeModelID {
-			line += " · current"
-		}
-		out = append(out, usageLine{Text: line, Style: style})
-	}
-	return out
-}
-
-// overlayQuota returns a copy of quotas with a live quota_updated reading
-// applied. A shared pool is one budget, so the fresh remaining fraction and
-// reset time replace every model in the reading's pool, not just the model
-// the reading names. The reading is ignored when no fetched row matches it.
-func overlayQuota(quotas []api.ModelQuota, live *api.ModelQuota) []api.ModelQuota {
-	if live == nil || strings.TrimSpace(live.Model) == "" {
-		return quotas
-	}
-	out := make([]api.ModelQuota, len(quotas))
-	copy(out, quotas)
-	idx := -1
-	for i := range out {
-		if out[i].Model == live.Model {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		return quotas
-	}
-	pool := quotaPoolKey(out[idx])
-	for i := range out {
-		if quotaPoolKey(out[i]) != pool {
+	renderedProviders := 0
+	for _, p := range providers {
+		if len(p.Buckets) == 0 {
 			continue
 		}
-		out[i].RemainingFraction = live.RemainingFraction
-		if !live.ResetAt.IsZero() {
-			out[i].ResetAt = live.ResetAt
+		if renderedProviders > 0 {
+			out = append(out, usageLine{})
+		}
+		renderedProviders++
+
+		heading := cmp.Or(strings.TrimSpace(p.Provider), "provider")
+		if p.Account != "" {
+			heading += " · " + p.Account
+		}
+		out = append(out, usageLine{Text: heading, Style: lineDim})
+
+		if len(p.Models) == 0 {
+			ids := make([]string, 0, len(p.Buckets))
+			for id := range p.Buckets {
+				ids = append(ids, id)
+			}
+			slices.Sort(ids)
+			for _, id := range ids {
+				out = append(out, renderQuotaBucketLine(p.Buckets[id], now))
+			}
+			continue
+		}
+
+		groupMap := make(map[string]*bucketGroup)
+		for modelID, bucketIDs := range p.Models {
+			key := strings.Join(bucketIDs, "\x00")
+			grp, ok := groupMap[key]
+			if !ok {
+				grp = &bucketGroup{bucketIDs: slices.Clone(bucketIDs)}
+				groupMap[key] = grp
+			}
+			grp.models = append(grp.models, modelID)
+		}
+
+		groups := make([]*bucketGroup, 0, len(groupMap))
+		for _, grp := range groupMap {
+			slices.Sort(grp.models)
+			groups = append(groups, grp)
+		}
+		slices.SortStableFunc(groups, func(a, b *bucketGroup) int {
+			return strings.Compare(a.models[0], b.models[0])
+		})
+
+		for gi, grp := range groups {
+			if gi > 0 {
+				out = append(out, usageLine{})
+			}
+			labels := make([]string, len(grp.models))
+			for i, modelID := range grp.models {
+				labels[i] = modelID
+				if activeModelID != "" && modelID == activeModelID {
+					labels[i] += " · current"
+				}
+			}
+			if len(labels) > 1 {
+				out = append(out, usageLine{
+					Text:  fmt.Sprintf("  Shared pool (%d models): %s", len(labels), strings.Join(labels, ", ")),
+					Style: lineDim,
+				})
+			} else {
+				out = append(out, usageLine{
+					Text:  "  " + labels[0],
+					Style: lineDim,
+				})
+			}
+			for _, bid := range grp.bucketIDs {
+				b, ok := p.Buckets[bid]
+				if !ok {
+					continue
+				}
+				out = append(out, renderQuotaBucketLine(b, now))
+			}
+		}
+	}
+
+	if renderedProviders == 0 {
+		return []usageLine{{Text: "No quota-billed models in this workspace.", Style: lineDim}}
+	}
+	return out
+}
+
+func renderQuotaBucketLine(b api.QuotaBucket, now time.Time) usageLine {
+	var details []string
+	if b.ID != "" {
+		details = append(details, b.ID)
+	}
+	if b.Unlimited {
+		details = append(details, "unlimited")
+		return usageLine{
+			Text:  fmt.Sprintf("    %s  ∞     %s", quotaBar(100), strings.Join(details, " · ")),
+			Style: lineGood,
+		}
+	}
+
+	pct := min(max(int(b.RemainingFraction*100), 0), 100)
+	if b.Limit > 0 && b.Unit != "" && b.Unit != api.QuotaUnitPercent {
+		details = append(details, fmt.Sprintf("%g/%g %s", b.Used, b.Limit, b.Unit))
+	}
+	if reset := quotaResetText(b.ResetAt, now); reset != "" {
+		details = append(details, reset)
+	}
+	suffix := strings.Join(details, " · ")
+	if suffix != "" {
+		suffix = "  " + suffix
+	}
+	return usageLine{
+		Text:  fmt.Sprintf("    %s %3d%%%s", quotaBar(pct), pct, suffix),
+		Style: quotaGaugeStyle(pct),
+	}
+}
+
+// overlayQuotaSnapshot returns a copy of snap with a live quota_updated reading
+// applied to the matching provider's buckets. Because shared buckets are keyed
+// by ID in ProviderQuotaSnapshot.Buckets, updating each bucket refreshes every
+// model bound to that bucket.
+func overlayQuotaSnapshot(snap *api.QuotaSnapshotResponse, live *api.ModelQuota) *api.QuotaSnapshotResponse {
+	if snap == nil {
+		return nil
+	}
+	out := &api.QuotaSnapshotResponse{
+		Providers: make([]api.ProviderQuotaSnapshot, len(snap.Providers)),
+	}
+	for i, p := range snap.Providers {
+		copied := api.ProviderQuotaSnapshot{
+			Provider:    p.Provider,
+			Account:     p.Account,
+			CollectedAt: p.CollectedAt,
+			Buckets:     make(map[string]api.QuotaBucket, len(p.Buckets)),
+			Models:      make(map[string][]string, len(p.Models)),
+		}
+		maps.Copy(copied.Buckets, p.Buckets)
+		for m, ids := range p.Models {
+			copied.Models[m] = slices.Clone(ids)
+		}
+		out.Providers[i] = copied
+	}
+
+	if live == nil || len(live.Buckets) == 0 {
+		return out
+	}
+	liveProvider := strings.TrimSpace(live.Provider)
+	if liveProvider == "" {
+		if prov, _, ok := strings.Cut(live.Model, "/"); ok {
+			liveProvider = prov
+		}
+	}
+	for i := range out.Providers {
+		p := &out.Providers[i]
+		if liveProvider != "" && p.Provider != liveProvider {
+			continue
+		}
+		if live.Account != "" && p.Account != "" && p.Account != live.Account {
+			continue
+		}
+		ids := make([]string, 0, len(live.Buckets))
+		for _, b := range live.Buckets {
+			if b.ID == "" {
+				continue
+			}
+			p.Buckets[b.ID] = b
+			ids = append(ids, b.ID)
+		}
+		if live.Model != "" && len(ids) > 0 && len(p.Models[live.Model]) == 0 {
+			p.Models[live.Model] = ids
 		}
 	}
 	return out
 }
 
-// quotaPoolKey identifies the window several models may share: the same reset
-// moment and account under one provider means the same pool. Models without a
-// reported reset time get per-model keys — without one, independent windows
-// would merge into a false shared pool.
-func quotaPoolKey(q api.ModelQuota) string {
-	if q.ResetAt.IsZero() {
-		return q.Provider + "\x00" + q.Account + "\x00" + q.Model
-	}
-	return q.Provider + "\x00" + q.Account + "\x00" + q.ResetAt.UTC().Format(time.RFC3339)
-}
-
-// quotaPoolHeading names a quota pool after its provider and account. A pool
-// holding several models is called out as shared so the repetition reads as
-// one budget, not several.
-func quotaPoolHeading(q api.ModelQuota, all []api.ModelQuota) string {
-	share := 0
-	key := quotaPoolKey(q)
-	for _, other := range all {
-		if quotaPoolKey(other) == key {
-			share++
-		}
-	}
-	label := cmp.Or(strings.TrimSpace(q.Provider), "provider")
-	if q.Account != "" {
-		label += " · " + q.Account
-	}
-	if share > 1 {
-		label += fmt.Sprintf(" (shared pool · %d models)", share)
-	}
-	return label
-}
-
-// quotaResetText describes when a window refills; empty when the provider did
+// quotaResetText describes when a bucket refills; empty when the provider did
 // not report a reset time.
-func quotaResetText(q api.ModelQuota, now time.Time) string {
-	if q.ResetAt.IsZero() {
+func quotaResetText(resetAt *time.Time, now time.Time) string {
+	if resetAt == nil || resetAt.IsZero() {
 		return ""
 	}
-	reset := q.ResetAt.Local()
+	reset := resetAt.Local()
 	until := reset.Sub(now)
 	if until <= 0 {
 		return "resets now"

@@ -373,6 +373,19 @@ func (c *Client) GetModelQuota(ctx context.Context, model string) (*api.ModelQuo
 	return &out, nil
 }
 
+// GetQuotaSnapshots returns the multi-bucket quota snapshots across all
+// quota-capable providers in the workspace.
+func (c *Client) GetQuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotResponse, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.QuotaSnapshotResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/quotas", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ListSkills returns all effective skill resources in the workspace.
 func (c *Client) ListSkills(ctx context.Context) ([]api.Skill, error) {
 	if err := c.requireCWD(); err != nil {

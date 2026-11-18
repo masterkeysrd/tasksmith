@@ -108,6 +108,10 @@ func (g *fakeGateway) Quota(context.Context, models.Model) (*api.ModelQuota, err
 	return nil, nil
 }
 
+func (g *fakeGateway) QuotaSnapshots(context.Context) (*api.QuotaSnapshotResponse, error) {
+	return &api.QuotaSnapshotResponse{}, nil
+}
+
 func (g *fakeGateway) QuotaCapable(models.Model) bool { return false }
 
 func (g *fakeGateway) Close() error { return nil }

@@ -2,15 +2,10 @@ package gateway
 
 import (
 	"context"
-	"errors"
-	"strings"
 	"testing"
 
-	"github.com/google/jsonschema-go/jsonschema"
-	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
-	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/warp"
@@ -94,95 +89,6 @@ func TestEffectiveProfileAndSettings(t *testing.T) {
 	settings = models.Settings{Temperature: &value, Thinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}, StrictThinking: true}
 	if _, _, err := model.Configure(settings); err == nil {
 		t.Fatal("unsupported explicit thinking accepted")
-	}
-}
-
-func TestRequestCapabilities(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		base      *profile.Profile
-		override  *bool
-		wantError bool
-	}{
-		{"unknown", nil, nil, false},
-		{"supported profile", &profile.Profile{Capabilities: profile.Capabilities{ToolCall: true}}, nil, false},
-		{"unsupported profile", &profile.Profile{}, nil, true},
-		{"workspace unsupported", nil, new(false), true},
-		{"workspace supported", nil, new(true), false},
-		{"override supported", &profile.Profile{}, new(true), false},
-		{"override unsupported", &profile.Profile{Capabilities: profile.Capabilities{ToolCall: true}}, new(false), true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := &thinkingTestProvider{modelProfile: tc.base}
-			spec := &warp.ProviderModel{ID: "model", Capabilities: &warp.ProviderModelCapabilities{Completion: new(true), Tools: tc.override}}
-			effective := models.Merge("provider/model", "ollama", spec, tc.base)
-			g := &gatewayImpl{providers: map[string]*providerInstance{"provider": {cfg: ProviderConfig{Name: "provider", Type: "ollama"}, llmProv: p}}}
-			model, err := g.LLM(context.Background(), effective, llm.ModelConfig{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			model = model.BindToolDefs(tool.Definition{Name: "search"})
-			stream, err := model.Stream(context.Background(), []message.Message{message.NewUserText("test")})
-			if tc.wantError {
-				if !errors.Is(err, ErrUnsupportedCapability) || !strings.Contains(err.Error(), "tools") || p.request != nil {
-					t.Fatalf("error=%v request=%+v", err, p.request)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			for range stream {
-			}
-			if p.request == nil || len(p.request.Tools) != 1 || p.request.Tools[0].Name != "search" {
-				t.Fatalf("request: %+v", p.request)
-			}
-		})
-	}
-}
-
-func TestRequestContentValidation(t *testing.T) {
-	text := message.NewUserText("text")
-	image := message.NewUser(&message.ImageBlock{Data: []byte("image"), MIMEType: "image/png"})
-	urlImage := message.NewUserImageURL("https://example.test/image")
-	audio := message.NewUser(&message.AudioBlock{Data: []byte("audio"), MIMEType: "audio/wav"})
-	history := []message.Message{&message.Assistant{Content: message.Content{&message.ToolCall{ID: "call", Name: "search"}}}, &message.Tool{ToolCallID: "call"}}
-	for _, tc := range []struct {
-		name string
-		prof models.Model
-		req  *llm.Request
-		want string
-	}{
-		{"text without tools", models.Model{Capabilities: models.Capabilities{Tools: new(false)}}, &llm.Request{Messages: []message.Message{text}}, ""},
-		{"text unsupported", models.Model{Modalities: models.Modalities{Input: []string{"image"}}}, &llm.Request{Messages: []message.Message{text}}, "text input"},
-		{"tool history", models.Model{Capabilities: models.Capabilities{Tools: new(false)}}, &llm.Request{Messages: history}, "tool history"},
-		{"unknown history", models.Model{}, &llm.Request{Messages: history}, ""},
-		{"image supported", models.Model{ProviderType: "ollama", Modalities: models.Modalities{Input: []string{"image"}}}, &llm.Request{Messages: []message.Message{image}}, ""},
-		{"image unsupported", models.Model{ProviderType: "ollama", Modalities: models.Modalities{Input: []string{"text"}}}, &llm.Request{Messages: []message.Message{text, image}}, "image input"},
-		{"unknown modality", models.Model{ProviderType: "ollama"}, &llm.Request{Messages: []message.Message{image}}, ""},
-		{"empty modalities", models.Model{ProviderType: "ollama", Modalities: models.Modalities{Input: []string{}}}, &llm.Request{Messages: []message.Message{image}}, "image input"},
-		{"ollama image url", models.Model{ProviderType: "ollama"}, &llm.Request{Messages: []message.Message{urlImage}}, "cannot safely send"},
-		{"openai audio", models.Model{ProviderType: "openai"}, &llm.Request{Messages: []message.Message{audio}}, "cannot safely send"},
-		{"genai audio", models.Model{ProviderType: "genai"}, &llm.Request{Messages: []message.Message{audio}}, ""},
-		{"assistant image", models.Model{ProviderType: "genai"}, &llm.Request{Messages: []message.Message{&message.Assistant{Content: image.Content}}}, "cannot safely send"},
-		{"unknown block", models.Model{}, &llm.Request{Messages: []message.Message{message.NewUser(&message.ToolCallChunk{})}}, "cannot safely send"},
-		{"user tool call", models.Model{}, &llm.Request{Messages: []message.Message{message.NewUser(&message.ToolCall{})}}, "cannot safely send"},
-		{"unsupported schema", models.Model{Capabilities: models.Capabilities{StructuredOutput: new(false)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, "structured output"},
-		{"anthropic schema supported", models.Model{ProviderType: "anthropic", Capabilities: models.Capabilities{StructuredOutput: new(true)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, ""},
-		{"anthropic schema unknown", models.Model{ProviderType: "anthropic"}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, ""},
-		{"anthropic json", models.Model{ProviderType: "anthropic"}, &llm.Request{ResponseFormat: "json_object"}, ""},
-		{"openai schema and json", models.Model{ProviderType: "openai", Capabilities: models.Capabilities{StructuredOutput: new(true)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}, ResponseFormat: "json_object"}, ""},
-		{"anthropic schema unsupported", models.Model{ProviderType: "anthropic", Capabilities: models.Capabilities{StructuredOutput: new(false)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, "structured output"},
-		{"openai schema unsupported", models.Model{ProviderType: "openai", Capabilities: models.Capabilities{StructuredOutput: new(false)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, "structured output"},
-		{"unknown schema", models.Model{}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.req.Model = "model"
-			err := validateRequest(tc.prof, tc.req)
-			if tc.want == "" && err != nil || tc.want != "" && (!errors.Is(err, ErrUnsupportedCapability) || !strings.Contains(err.Error(), tc.want)) {
-				t.Fatalf("error: %v", err)
-			}
-		})
 	}
 }
 

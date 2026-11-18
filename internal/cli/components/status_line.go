@@ -112,10 +112,15 @@ func usageText(usage store.UsageTotals) string {
 // countdown is omitted when the provider did not report a reset time.
 func quotaUsageText(quota store.QuotaState, usage store.UsageTotals, now time.Time) string {
 	if quota.Known {
-		badge := fmt.Sprintf("%d%%", quota.RemainingPct)
-		if !quota.ResetAt.IsZero() {
-			if until := quota.ResetAt.Sub(now); until > 0 {
-				badge = fmt.Sprintf("%d%% (↻ %s)", quota.RemainingPct, format.Duration(until, format.Compact()))
+		var badge string
+		if quota.Unlimited {
+			badge = "∞"
+		} else {
+			badge = fmt.Sprintf("%d%%", quota.RemainingPct)
+			if !quota.ResetAt.IsZero() {
+				if until := quota.ResetAt.Sub(now); until > 0 {
+					badge = fmt.Sprintf("%d%% (↻ %s)", quota.RemainingPct, format.Duration(until, format.Compact()))
+				}
 			}
 		}
 		if usage.Calls == 0 {
@@ -135,6 +140,9 @@ func quotaUsageText(quota store.QuotaState, usage store.UsageTotals, now time.Ti
 // quotaUsageColor picks the emphasis for a quota badge: error at empty,
 // warning when under a fifth of the window remains.
 func quotaUsageColor(scheme *theme.Scheme, quota store.QuotaState) color.Color {
+	if quota.Unlimited {
+		return scheme.Color.Text.Secondary
+	}
 	switch {
 	case quota.RemainingPct <= 0:
 		return scheme.Color.Text.Error

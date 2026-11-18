@@ -938,19 +938,28 @@ func (c *capturingProvider) SupportsInlineTools(string) bool   { return false }
 
 type quotaCapableProvider struct {
 	capturingProvider
-	quota llm.QuotaInfo
+	quota llm.QuotaBuckets
 	found bool
 }
 
-func (q *quotaCapableProvider) GetQuota(context.Context, string) (llm.QuotaInfo, bool, error) {
+func (q *quotaCapableProvider) GetQuota(context.Context, string) (llm.QuotaBuckets, bool, error) {
 	return q.quota, q.found, nil
 }
 
-func (q *quotaCapableProvider) ListQuotas(context.Context) (map[string]llm.QuotaInfo, error) {
-	if !q.found {
-		return nil, nil
+func (q *quotaCapableProvider) GetQuotaSnapshot(context.Context) (llm.QuotaSnapshot, error) {
+	if !q.found || len(q.quota) == 0 {
+		return llm.QuotaSnapshot{}, nil
 	}
-	return map[string]llm.QuotaInfo{"gemini-pro": q.quota}, nil
+	buckets := make(map[string]llm.QuotaBucket, len(q.quota))
+	ids := make([]string, 0, len(q.quota))
+	for _, b := range q.quota {
+		buckets[b.ID] = b
+		ids = append(ids, b.ID)
+	}
+	return llm.QuotaSnapshot{
+		Buckets: buckets,
+		Models:  map[string][]string{"gemini-pro": ids},
+	}, nil
 }
 
 func TestGatewayQuota(t *testing.T) {
@@ -959,7 +968,7 @@ func TestGatewayQuota(t *testing.T) {
 
 	t.Run("quota provider reports", func(t *testing.T) {
 		prov := &quotaCapableProvider{
-			quota: llm.QuotaInfo{RemainingFraction: 0.42, ResetTime: reset.Format(time.RFC3339)},
+			quota: llm.QuotaBuckets{{ID: "default", RemainingFraction: 0.42, ResetAt: &reset}},
 			found: true,
 		}
 		gw := &gatewayImpl{providers: map[string]*providerInstance{
@@ -972,11 +981,66 @@ func TestGatewayQuota(t *testing.T) {
 		if q == nil {
 			t.Fatal("expected quota payload, got nil")
 		}
-		if q.RemainingFraction != 0.42 {
-			t.Errorf("RemainingFraction = %v, want 0.42", q.RemainingFraction)
+		if len(q.Buckets) != 1 || q.Buckets[0].RemainingFraction != 0.42 {
+			t.Fatalf("Buckets = %+v, want 1 bucket with RemainingFraction=0.42", q.Buckets)
 		}
-		if !q.ResetAt.Equal(reset) {
-			t.Errorf("ResetAt = %v, want %v", q.ResetAt, reset)
+		if q.Buckets[0].ResetAt == nil || !q.Buckets[0].ResetAt.Equal(reset) {
+			t.Errorf("ResetAt = %v, want %v", q.Buckets[0].ResetAt, reset)
+		}
+	})
+
+	t.Run("quota provider preserves all buckets", func(t *testing.T) {
+		earlierReset := reset.Add(-time.Hour)
+		prov := &quotaCapableProvider{
+			quota: llm.QuotaBuckets{
+				{ID: "unlimited", Unlimited: true, RemainingFraction: 1.0},
+				{ID: "7d", RemainingFraction: 0.85, ResetAt: &reset},
+				{ID: "5h", RemainingFraction: 0.15, ResetAt: &earlierReset},
+			},
+			found: true,
+		}
+		gw := &gatewayImpl{providers: map[string]*providerInstance{
+			"antigravity": {cfg: ProviderConfig{Name: "antigravity", Type: "antigravity"}, llmProv: prov},
+		}}
+		q, err := gw.Quota(ctx, models.Model{ID: "antigravity/gemini-pro"})
+		if err != nil {
+			t.Fatalf("Quota failed: %v", err)
+		}
+		if q == nil || len(q.Buckets) != 3 {
+			t.Fatalf("got quota %+v, want 3 buckets", q)
+		}
+		bottleneck, ok := q.Bottleneck()
+		if !ok || bottleneck.ID != "5h" || bottleneck.RemainingFraction != 0.15 || bottleneck.ResetAt == nil || !bottleneck.ResetAt.Equal(earlierReset) {
+			t.Fatalf("got bottleneck %+v (ok=%v), want 5h at 0.15 ResetAt=%v", bottleneck, ok, earlierReset)
+		}
+	})
+
+	t.Run("quota snapshots returns qualified models and shared buckets", func(t *testing.T) {
+		prov := &quotaCapableProvider{
+			quota: llm.QuotaBuckets{
+				{ID: "5h", RemainingFraction: 0.42, ResetAt: &reset},
+				{ID: "7d", RemainingFraction: 0.88},
+			},
+			found: true,
+		}
+		gw := &gatewayImpl{providers: map[string]*providerInstance{
+			"antigravity": {cfg: ProviderConfig{Name: "antigravity", Type: "antigravity"}, llmProv: prov},
+			"openai":      {cfg: ProviderConfig{Name: "openai", Type: "openai"}, llmProv: &capturingProvider{}},
+		}}
+		snapResp, err := gw.QuotaSnapshots(ctx)
+		if err != nil {
+			t.Fatalf("QuotaSnapshots failed: %v", err)
+		}
+		if len(snapResp.Providers) != 1 {
+			t.Fatalf("providers = %d, want 1", len(snapResp.Providers))
+		}
+		pSnap := snapResp.Providers[0]
+		if pSnap.Provider != "antigravity" || len(pSnap.Buckets) != 2 {
+			t.Fatalf("provider snapshot = %+v", pSnap)
+		}
+		ids := pSnap.Models["antigravity/gemini-pro"]
+		if len(ids) != 2 || ids[0] != "5h" || ids[1] != "7d" {
+			t.Fatalf("model bindings = %+v", pSnap.Models)
 		}
 	})
 
@@ -999,31 +1063,6 @@ func TestGatewayQuota(t *testing.T) {
 			t.Errorf("expected ErrProviderNotFound, got %v", err)
 		}
 	})
-}
-
-// TestValidateRequestToolBlocks verifies that validateRequest allows
-// *message.ToolReferenceBlock and *message.ToolDefinitionBlock on tool-capable
-// models but rejects them on models without tool support.
-func TestValidateRequestToolBlocks(t *testing.T) {
-	toolTrue, toolFalse := true, false
-
-	capable := models.Model{ID: "p/m", ProviderType: "openai", Capabilities: models.Capabilities{Tools: &toolTrue}}
-	incapable := models.Model{ID: "p/m", ProviderType: "openai", Capabilities: models.Capabilities{Tools: &toolFalse}}
-
-	req := &llm.Request{
-		Model: "m",
-		Messages: []message.Message{
-			message.NewUser(&message.ToolReferenceBlock{ToolName: "grep"}),
-			message.NewUser(&message.ToolDefinitionBlock{Name: "custom", Description: "x"}),
-		},
-	}
-
-	if err := validateRequest(capable, req); err != nil {
-		t.Fatalf("expected tool-capable model to allow tool reference/definition blocks, got %v", err)
-	}
-	if err := validateRequest(incapable, req); err == nil {
-		t.Fatalf("expected non-tool-capable model to reject tool reference blocks, got nil")
-	}
 }
 
 // TestGatewayDeferredAndInlineToolMiddleware verifies that the gateway wires

@@ -474,7 +474,20 @@ func (w *workspaceRouter) getModel(rw http.ResponseWriter, r *http.Request) {
 }
 
 func (w *workspaceRouter) getModelQuota(rw http.ResponseWriter, r *http.Request) {
-	id := strings.TrimSpace(r.URL.Query().Get("model"))
+	q := r.URL.Query()
+	if !q.Has("model") {
+		snap, err := w.b.GetQuotaSnapshots(r.Context(), RequestWorkspace(r))
+		if err != nil {
+			WriteError(rw, err)
+			return
+		}
+		if snap == nil {
+			snap = &api.QuotaSnapshotResponse{}
+		}
+		WriteJSON(rw, http.StatusOK, snap)
+		return
+	}
+	id := strings.TrimSpace(q.Get("model"))
 	if id == "" {
 		WriteBadRequest(rw, "model query parameter must not be empty")
 		return

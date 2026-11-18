@@ -99,9 +99,14 @@ type Gateway interface {
 
 	GetProfile(id string) (profile.Profile, bool)
 
-	// Quota returns the remaining quota for a quota-billed model, or (nil, nil)
-	// when the model's provider does not report quotas or has no quota data.
+	// Quota returns the remaining quota buckets for a quota-billed model, or
+	// (nil, nil) when the model's provider does not report quotas or has no
+	// quota data.
 	Quota(ctx context.Context, model models.Model) (*api.ModelQuota, error)
+
+	// QuotaSnapshots returns the full multi-bucket quota snapshots across all
+	// quota-capable workspace providers.
+	QuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotResponse, error)
 
 	// QuotaCapable reports whether the model's provider can report quota at
 	// all. It is a cheap capability check (no network), used to label models

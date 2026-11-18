@@ -877,6 +877,20 @@ func (d *Daemon) GetModelQuota(ctx context.Context, rawWS, id string) (*api.Mode
 	return gw.Quota(ctx, model)
 }
 
+// GetQuotaSnapshots returns the live multi-bucket quota snapshots across all
+// quota-capable providers in the workspace.
+func (d *Daemon) GetQuotaSnapshots(ctx context.Context, rawWS string) (*api.QuotaSnapshotResponse, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+	gw := rt.Gateway()
+	if gw == nil {
+		return &api.QuotaSnapshotResponse{}, nil
+	}
+	return gw.QuotaSnapshots(ctx)
+}
+
 func (d *Daemon) GetPermissions(ctx context.Context, rawWS string) (*api.PermissionsResponse, error) {
 	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {

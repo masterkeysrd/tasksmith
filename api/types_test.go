@@ -890,11 +890,16 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 				Payload: QuotaUpdatedEvent{
 					SessionID: "s1",
 					Quota: ModelQuota{
-						Model:             "pool/gemini-pro",
-						Provider:          "pool",
-						RemainingFraction: 0.94,
-						ResetAt:           now,
-						Account:           "dev@example.com",
+						Model:    "pool/gemini-pro",
+						Provider: "pool",
+						Account:  "dev@example.com",
+						Buckets: []QuotaBucket{
+							{
+								ID:                "5h",
+								RemainingFraction: 0.94,
+								ResetAt:           &now,
+							},
+						},
 					},
 				},
 			},

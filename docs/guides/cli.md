@@ -330,7 +330,7 @@ Tool calls:            41 total · 38 ok · 1 error · 2 denied · 0 canceled
 
 - **Tabs** (`1`/`2`/`3`/`4` or `←`/`→`): the current session, the current workspace, all workspaces, and quota windows. `/usage workspace`, `/usage global`, and `/usage quotas` open the browser on that tab.
 - **Group by** (`m` model, `p` provider, `a` agent, `u` purpose, `i` pricing tier, `d` day) and **range** (`t`: 24 hours, 7 days, 30 days, all time) apply to the Workspace and Global tabs.
-- **Quotas** (`4`): subscription-billed models show a remaining-capacity bar and percentage, grouped under a provider · account heading, with one reset countdown per window. Models sharing one window are listed once as a shared pool, and the session's model is marked `current`.
+- **Quotas** (`4`): subscription-billed providers show one remaining-capacity bar per quota bucket (`5h`, `7d`, request pools, or `unlimited`), grouped under a `provider · account` heading with each bucket's reset countdown and optional `used/limit unit` counts. Models sharing the same bucket IDs are listed together as a shared pool, and the session's model is marked `current`.
 - **Tools** show calls, errors, permission denials, cancellations, total and slowest time, and lines changed per tool.
 - **Insights** such as "40% of cost came from calls above 150k context" or "`bash` failed 40% of its calls" appear only when they apply, each with a short hint.
 

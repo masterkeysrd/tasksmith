@@ -48,7 +48,8 @@
 //   - `GET  /v1/agents/{name}`               – Fetch a single agent.
 //   - `GET  /v1/models`                      – List available models.
 //   - `GET  /v1/models/{id...}`              – Fetch a single model.
-//   - `GET  /v1/quotas?model=<id>`           – Remaining quota for a quota-billed model (204 when the provider reports none).
+//   - `GET  /v1/quotas`                     – Multi-bucket quota snapshots across all quota-capable workspace providers.
+//   - `GET  /v1/quotas?model=<id>`           – Remaining quota buckets for one quota-billed model (204 when the provider reports none).
 //   - `GET  /v1/sandbox`                     – Sandbox scopes, effective settings, host backend availability, and resolved paths.
 //   - `PUT  /v1/sandbox`                     – Validate and overwrite one sandbox.json scope (global or project).
 //   - `GET  /v1/workspace/mcps`              – List configured MCP servers with status and discoveries.

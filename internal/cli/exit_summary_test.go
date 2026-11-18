@@ -58,14 +58,14 @@ func TestFormatExitSummary(t *testing.T) {
 }
 
 func TestFormatExitSummaryQuotaRow(t *testing.T) {
+	reset := time.Now().Add(3*time.Hour + 40*time.Minute)
 	out := FormatExitSummary(ExitSummaryInput{
 		SessionID: "sess-123",
 		Usage:     sampleUsage(),
 		Quota: &api.ModelQuota{
-			Model:             "antigravity/gemini",
-			RemainingFraction: 0.94,
-			ResetAt:           time.Now().Add(3*time.Hour + 40*time.Minute),
-			Account:           "user@example.com",
+			Model:   "antigravity/gemini",
+			Account: "user@example.com",
+			Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.94, ResetAt: &reset}},
 		},
 	})
 
@@ -85,13 +85,13 @@ func TestFormatExitSummaryQuotaRow(t *testing.T) {
 
 func TestFormatExitSummaryQuotaRowEdgeCases(t *testing.T) {
 	// A reset moment already past must not render a "(↻ 0ms)" countdown.
+	expired := time.Now().Add(-90 * time.Second)
 	out := FormatExitSummary(ExitSummaryInput{
 		SessionID: "sess-123",
 		Usage:     sampleUsage(),
 		Quota: &api.ModelQuota{
-			Model:             "antigravity/gemini",
-			RemainingFraction: 0.5,
-			ResetAt:           time.Now().Add(-90 * time.Second),
+			Model:   "antigravity/gemini",
+			Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.5, ResetAt: &expired}},
 		},
 	})
 	if strings.Contains(out, "0ms") || strings.Contains(out, "↻") {
@@ -105,7 +105,7 @@ func TestFormatExitSummaryQuotaRowEdgeCases(t *testing.T) {
 	out = FormatExitSummary(ExitSummaryInput{
 		SessionID: "sess-123",
 		Usage:     sampleUsage(),
-		Quota:     &api.ModelQuota{Model: "antigravity/gemini", RemainingFraction: 1.4},
+		Quota:     &api.ModelQuota{Model: "antigravity/gemini", Buckets: []api.QuotaBucket{{ID: "5h", RemainingFraction: 1.4}}},
 	})
 	if !strings.Contains(out, "100%") {
 		t.Errorf("fraction above 1.0 not clamped to 100%%:\n%s", out)

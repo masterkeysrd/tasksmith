@@ -37,6 +37,9 @@ type WorkspaceBackend interface {
 	// GetModelQuota returns a nil payload when the model's provider does not
 	// report quotas; the router renders that as HTTP 204.
 	GetModelQuota(ctx context.Context, workspace, id string) (*api.ModelQuota, error)
+	// GetQuotaSnapshots returns the multi-bucket quota snapshots across all
+	// quota-capable providers in the workspace.
+	GetQuotaSnapshots(ctx context.Context, workspace string) (*api.QuotaSnapshotResponse, error)
 	GetPermissions(ctx context.Context, workspace string) (*api.PermissionsResponse, error)
 	AddPermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)
 	RemovePermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)

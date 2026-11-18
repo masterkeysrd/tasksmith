@@ -411,18 +411,96 @@ type Model struct {
 	QuotaBilled bool `json:"quota_billed,omitempty"`
 }
 
-// ModelQuota reports the remaining subscription/quota capacity for a model.
+// QuotaUnit identifies what a quota bucket counts.
+type QuotaUnit string
+
+const (
+	QuotaUnitPercent  QuotaUnit = "percent"
+	QuotaUnitRequests QuotaUnit = "requests"
+	QuotaUnitCredits  QuotaUnit = "credits"
+	QuotaUnitTokens   QuotaUnit = "tokens"
+)
+
+// QuotaBucket describes a single rate-limit or billing quota bucket
+// constraining a model or provider pool (e.g. a 5h burst window, a 7d weekly
+// window, or a monthly premium-request pool).
+type QuotaBucket struct {
+	ID                string        `json:"id"`
+	Scope             string        `json:"scope,omitempty"`
+	Window            time.Duration `json:"window,omitempty"`
+	Unit              QuotaUnit     `json:"unit,omitempty"`
+	Limit             float64       `json:"limit,omitempty"`
+	Used              float64       `json:"used,omitempty"`
+	RemainingFraction float64       `json:"remaining_fraction"`
+	Unlimited         bool          `json:"unlimited,omitempty"`
+	Overage           float64       `json:"overage,omitempty"`
+	ResetAt           *time.Time    `json:"reset_at,omitempty"`
+}
+
+// Remaining returns Limit - Used clamped at zero, or zero when Limit <= 0.
+func (b QuotaBucket) Remaining() float64 {
+	if b.Limit <= 0 {
+		return 0
+	}
+	if rem := b.Limit - b.Used; rem > 0 {
+		return rem
+	}
+	return 0
+}
+
+// Exhausted reports whether this bucket has no remaining capacity.
+func (b QuotaBucket) Exhausted() bool {
+	return !b.Unlimited && b.RemainingFraction <= 0
+}
+
+// ModelQuota reports the remaining subscription/quota buckets for a model.
 // It is only returned for providers that bill by quota rather than per token.
 type ModelQuota struct {
 	Model string `json:"model"`
 	// Provider is the workspace provider name the quota was read from.
 	Provider string `json:"provider,omitempty"`
-	// RemainingFraction is the available capacity between 0.0 and 1.0.
-	RemainingFraction float64 `json:"remaining_fraction"`
-	// ResetAt is when the quota window resets; zero when unknown.
-	ResetAt time.Time `json:"reset_at"`
 	// Account is the authenticated account identity when known (e.g. OAuth email).
 	Account string `json:"account,omitempty"`
+	// Buckets lists the quota windows/pools constraining this model.
+	Buckets []QuotaBucket `json:"buckets"`
+}
+
+// Bottleneck returns the most constraining bucket in Buckets (preferring
+// metered buckets over unlimited ones, then selecting the lowest RemainingFraction).
+func (q ModelQuota) Bottleneck() (QuotaBucket, bool) {
+	if len(q.Buckets) == 0 {
+		return QuotaBucket{}, false
+	}
+	best := q.Buckets[0]
+	for _, b := range q.Buckets[1:] {
+		if best.Unlimited && !b.Unlimited {
+			best = b
+			continue
+		}
+		if b.Unlimited && !best.Unlimited {
+			continue
+		}
+		if b.RemainingFraction < best.RemainingFraction {
+			best = b
+		}
+	}
+	return best, true
+}
+
+// ProviderQuotaSnapshot reports the full point-in-time multi-bucket quota
+// snapshot for one workspace provider, separating shared buckets from per-model
+// bucket bindings.
+type ProviderQuotaSnapshot struct {
+	Provider    string                 `json:"provider"`
+	Account     string                 `json:"account,omitempty"`
+	CollectedAt time.Time              `json:"collected_at"`
+	Buckets     map[string]QuotaBucket `json:"buckets,omitempty"`
+	Models      map[string][]string    `json:"models,omitempty"`
+}
+
+// QuotaSnapshotResponse is returned by GET /v1/quotas (without ?model=).
+type QuotaSnapshotResponse struct {
+	Providers []ProviderQuotaSnapshot `json:"providers"`
 }
 
 // HealthResponse reports the daemon's process identity, build version,

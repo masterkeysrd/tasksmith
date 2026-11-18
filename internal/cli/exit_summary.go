@@ -115,22 +115,29 @@ func exitCostRow(in ExitSummaryInput, scheme *theme.Scheme, paint paintFunc) (st
 	duration := format.DurationMilis(in.Usage.Totals.DurationMS)
 
 	if q := in.Quota; q != nil {
-		pct := min(max(int(q.RemainingFraction*100), 0), 100)
-		value := fmt.Sprintf("%d%%", pct)
-		if !q.ResetAt.IsZero() {
-			// A reset moment already past means the window refilled; showing
-			// "(↻ 0ms)" would read as a broken countdown.
-			if until := q.ResetAt.Sub(time.Now().UTC()); until > 0 {
-				value += paint(scheme.Color.Text.Muted, fmt.Sprintf(" (↻ %s)", format.Duration(until, format.Compact())))
+		if bucket, ok := q.Bottleneck(); ok {
+			var value string
+			if bucket.Unlimited {
+				value = "unlimited"
+			} else {
+				pct := min(max(int(bucket.RemainingFraction*100), 0), 100)
+				value = fmt.Sprintf("%d%%", pct)
+				if bucket.ResetAt != nil && !bucket.ResetAt.IsZero() {
+					// A reset moment already past means the window refilled; showing
+					// "(↻ 0ms)" would read as a broken countdown.
+					if until := bucket.ResetAt.Sub(time.Now().UTC()); until > 0 {
+						value += paint(scheme.Color.Text.Muted, fmt.Sprintf(" (↻ %s)", format.Duration(until, format.Compact())))
+					}
+				}
+				switch {
+				case pct <= 0:
+					value = paint(scheme.Color.Text.Error, value)
+				case pct < 20:
+					value = paint(scheme.Color.Text.Warning, value)
+				}
 			}
+			return "Quota", value + paint(scheme.Color.Text.Muted, fmt.Sprintf(" (%s)", duration))
 		}
-		switch {
-		case pct <= 0:
-			value = paint(scheme.Color.Text.Error, value)
-		case pct < 20:
-			value = paint(scheme.Color.Text.Warning, value)
-		}
-		return "Quota", value + paint(scheme.Color.Text.Muted, fmt.Sprintf(" (%s)", duration))
 	}
 
 	allUnpriced := in.Usage.Totals.UnpricedCalls > 0 && in.Usage.Totals.UnpricedCalls == in.Usage.Totals.Calls

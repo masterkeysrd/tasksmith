@@ -90,28 +90,55 @@ func enrichRateLimit(ctx context.Context, err error, readQuota quotaReader) erro
 	return fmt.Errorf("%w · %s", err, fact)
 }
 
-// quotaFacts renders the objective state of a quota window, e.g.
-// "0% quota remaining · resets in 42m at 15:20". A window with no reported
-// reset still states the remaining share. A full window states nothing: a
-// rate-limit error contradicts it, so a percentage would be noise.
+// quotaFacts renders the objective state of a model's quota buckets, e.g.
+// "0% quota remaining · resets in 42m at 15:20" (or for multi-bucket models,
+// "5h: 0% quota remaining · resets in 42m at 15:20 · 7d: 64% remaining").
+// A window with no reported reset still states the remaining share. When the
+// bottleneck bucket is full or unlimited, it returns empty: a rate-limit error
+// contradicts a full window, so a percentage would be noise.
 func quotaFacts(q api.ModelQuota, now time.Time) string {
-	pct := int(q.RemainingFraction * 100)
+	bottleneck, ok := q.Bottleneck()
+	if !ok || bottleneck.Unlimited {
+		return ""
+	}
+	pct := int(bottleneck.RemainingFraction * 100)
 	if pct >= 100 {
 		return ""
 	}
 	pct = max(pct, 0)
 
-	parts := []string{fmt.Sprintf("%d%% quota remaining", pct)}
-	if q.ResetAt.IsZero() {
-		return strings.Join(parts, " · ")
+	multi := len(q.Buckets) > 1
+	var parts []string
+	head := fmt.Sprintf("%d%% quota remaining", pct)
+	if multi && bottleneck.ID != "" {
+		head = fmt.Sprintf("%s: %s", bottleneck.ID, head)
+	}
+	parts = append(parts, head)
+
+	if bottleneck.ResetAt != nil && !bottleneck.ResetAt.IsZero() {
+		reset := bottleneck.ResetAt.Local()
+		when := "resets at " + reset.Format("15:04")
+		if until := reset.Sub(now); until > 0 {
+			when = "resets in " + format.Duration(until, format.Compact()) + " at " + reset.Format("15:04")
+		}
+		parts = append(parts, when)
 	}
 
-	reset := q.ResetAt.Local()
-	when := "resets at " + reset.Format("15:04")
-	if until := reset.Sub(now); until > 0 {
-		when = "resets in " + format.Duration(until, format.Compact()) + " at " + reset.Format("15:04")
+	if multi {
+		for _, b := range q.Buckets {
+			if b.ID == bottleneck.ID || b.Unlimited {
+				continue
+			}
+			bpct := int(b.RemainingFraction * 100)
+			if bpct >= 100 {
+				continue
+			}
+			bpct = max(bpct, 0)
+			if b.ID != "" {
+				parts = append(parts, fmt.Sprintf("%s: %d%% remaining", b.ID, bpct))
+			}
+		}
 	}
-	parts = append(parts, when)
 	return strings.Join(parts, " · ")
 }
 

@@ -34,27 +34,43 @@ func TestIsRateLimited(t *testing.T) {
 func TestQuotaFacts(t *testing.T) {
 	now := time.Now()
 
-	if got := quotaFacts(api.ModelQuota{RemainingFraction: 1}, now); got != "" {
+	if got := quotaFacts(api.ModelQuota{Buckets: []api.QuotaBucket{{ID: "default", RemainingFraction: 1}}}, now); got != "" {
 		t.Errorf("full window facts = %q, want empty (a rate limit contradicts it)", got)
 	}
-	if got := quotaFacts(api.ModelQuota{RemainingFraction: 0.5}, now); got != "50% quota remaining" {
+	if got := quotaFacts(api.ModelQuota{Buckets: []api.QuotaBucket{{ID: "default", Unlimited: true, RemainingFraction: 0}}}, now); got != "" {
+		t.Errorf("unlimited window facts = %q, want empty", got)
+	}
+	if got := quotaFacts(api.ModelQuota{Buckets: []api.QuotaBucket{{ID: "default", RemainingFraction: 0.5}}}, now); got != "50% quota remaining" {
 		t.Errorf("no-reset facts = %q", got)
 	}
 	// +30s of slack: quotaFacts measures the countdown against its own clock.
 	reset := now.Add(42*time.Minute + 30*time.Second)
-	withReset := api.ModelQuota{RemainingFraction: 0.04, ResetAt: reset}
+	withReset := api.ModelQuota{Buckets: []api.QuotaBucket{{ID: "default", RemainingFraction: 0.04, ResetAt: &reset}}}
 	want := "4% quota remaining · resets in 42m at " + reset.Local().Format("15:04")
 	if got := quotaFacts(withReset, now); got != want {
 		t.Errorf("reset facts = %q, want %q", got, want)
 	}
-	if got := quotaFacts(api.ModelQuota{RemainingFraction: -0.2}, now); got != "0% quota remaining" {
+	if got := quotaFacts(api.ModelQuota{Buckets: []api.QuotaBucket{{ID: "default", RemainingFraction: -0.2}}}, now); got != "0% quota remaining" {
 		t.Errorf("negative fraction facts = %q, want clamped to zero", got)
+	}
+
+	multi := api.ModelQuota{Buckets: []api.QuotaBucket{
+		{ID: "7d", RemainingFraction: 0.64},
+		{ID: "5h", RemainingFraction: 0.0, ResetAt: &reset},
+	}}
+	wantMulti := "5h: 0% quota remaining · resets in 42m at " + reset.Local().Format("15:04") + " · 7d: 64% remaining"
+	if got := quotaFacts(multi, now); got != wantMulti {
+		t.Errorf("multi-bucket facts = %q, want %q", got, wantMulti)
 	}
 }
 
 func TestEnrichRateLimit(t *testing.T) {
 	ctx := context.Background()
-	quota := &api.ModelQuota{Model: "p/m", RemainingFraction: 0, ResetAt: time.Now().Add(time.Hour + time.Minute)}
+	reset := time.Now().Add(time.Hour + time.Minute)
+	quota := &api.ModelQuota{
+		Model:   "p/m",
+		Buckets: []api.QuotaBucket{{ID: "default", RemainingFraction: 0, ResetAt: &reset}},
+	}
 
 	t.Run("rate limit gains facts", func(t *testing.T) {
 		err := errors.New("upstream: API error (status 429): slow down")

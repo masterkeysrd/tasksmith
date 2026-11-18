@@ -52,12 +52,13 @@ unknown). A muted footer under the list describes the highlighted model, and fil
 labels, aliases, ids, provider names, and billing cells.
 
 For subscription-billed models the status line's `usage` segment switches to a quota badge
-(`94% (↻ 3h12m) · 12.3k tok` — see `references/statusline.md`), turn and exit summaries omit
-dollar cost, and `/usage` gains a fourth tab, `4 Quotas`, listing one bar per quota window with
-percent remaining (gauged red under 20%, yellow under 50%, green from 50% up), a reset countdown,
-and shared-pool grouping. Quota readings update live from
-daemon events; `/usage quotas` also accepts the tab as an argument. Never claim a dollar cost for
-a quota-billed call, and never invent a reset time the provider did not report.
+for the bottleneck bucket (`94% (↻ 3h12m) · ↑2.0M ↓4.9k`, or `∞` when unlimited — see
+`references/statusline.md`), turn and exit summaries omit dollar cost, and `/usage` gains a fourth
+tab, `4 Quotas`, listing each provider's multi-bucket quota snapshots (one bar per bucket with
+percent remaining, optional `used/limit unit`, reset countdown, or `unlimited`, gauged red under
+20%, yellow under 50%, green from 50% up) with shared-pool grouping by bucket ID. Quota readings
+update live from daemon events; `/usage quotas` also accepts the tab as an argument. Never claim a
+dollar cost for a quota-billed call, and never invent a reset time the provider did not report.
 
 ## Sandbox & permissions
 

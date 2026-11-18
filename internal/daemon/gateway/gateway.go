@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/masterkeysrd/loom/decision"
@@ -117,26 +119,112 @@ func (g *gatewayImpl) Quota(ctx context.Context, m models.Model) (*api.ModelQuot
 	if !ok || inst.llmProv == nil {
 		return nil, nil
 	}
-	info, found, err := qp.GetQuota(ctx, m.ID.Name())
+	buckets, found, err := qp.GetQuota(ctx, m.ID.Name())
 	if err != nil {
 		return nil, err
 	}
-	if !found {
+	if !found || len(buckets) == 0 {
 		return nil, nil
 	}
 
-	q := &api.ModelQuota{
-		Model:             string(m.ID),
-		Provider:          inst.cfg.Name,
-		RemainingFraction: info.RemainingFraction,
+	outBuckets := make([]api.QuotaBucket, 0, len(buckets))
+	for _, b := range buckets {
+		outBuckets = append(outBuckets, toAPIQuotaBucket(b))
 	}
-	if reset, perr := info.ParsedResetTime(); perr == nil && !reset.IsZero() {
-		q.ResetAt = reset
+
+	q := &api.ModelQuota{
+		Model:    string(m.ID),
+		Provider: inst.cfg.Name,
+		Buckets:  outBuckets,
 	}
 	if _, account, terr := LoadProviderToken(inst.cfg.Name); terr == nil && account != "" {
 		q.Account = account
 	}
 	return q, nil
+}
+
+func (g *gatewayImpl) QuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotResponse, error) {
+	g.mu.RLock()
+	if g.closed {
+		g.mu.RUnlock()
+		return nil, ErrGatewayClosed
+	}
+	type providerEntry struct {
+		name string
+		qp   llm.QuotaProvider
+	}
+	entries := make([]providerEntry, 0, len(g.providers))
+	for name, inst := range g.providers {
+		if inst == nil || inst.authErr != nil || inst.llmProv == nil {
+			continue
+		}
+		if qp, ok := inst.llmProv.(llm.QuotaProvider); ok {
+			entries = append(entries, providerEntry{name: name, qp: qp})
+		}
+	}
+	g.mu.RUnlock()
+
+	slices.SortFunc(entries, func(a, b providerEntry) int {
+		return strings.Compare(a.name, b.name)
+	})
+
+	resp := &api.QuotaSnapshotResponse{}
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		snap, err := entry.qp.GetQuotaSnapshot(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
+		}
+		if len(snap.Buckets) == 0 && len(snap.Models) == 0 {
+			continue
+		}
+
+		apiSnap := api.ProviderQuotaSnapshot{
+			Provider:    entry.name,
+			CollectedAt: snap.CollectedAt,
+			Buckets:     make(map[string]api.QuotaBucket, len(snap.Buckets)),
+			Models:      make(map[string][]string, len(snap.Models)),
+		}
+		if _, account, terr := LoadProviderToken(entry.name); terr == nil && account != "" {
+			apiSnap.Account = account
+		}
+		for id, b := range snap.Buckets {
+			apiSnap.Buckets[id] = toAPIQuotaBucket(b)
+		}
+		for modelID, bucketIDs := range snap.Models {
+			qualified := modelID
+			if !strings.Contains(qualified, "/") {
+				qualified = entry.name + "/" + modelID
+			}
+			apiSnap.Models[qualified] = slices.Clone(bucketIDs)
+		}
+		resp.Providers = append(resp.Providers, apiSnap)
+	}
+	return resp, nil
+}
+
+func toAPIQuotaBucket(b llm.QuotaBucket) api.QuotaBucket {
+	out := api.QuotaBucket{
+		ID:                b.ID,
+		Scope:             b.Scope,
+		Window:            b.Window,
+		Unit:              api.QuotaUnit(b.Unit),
+		Limit:             b.Limit,
+		Used:              b.Used,
+		RemainingFraction: b.RemainingFraction,
+		Unlimited:         b.Unlimited,
+		Overage:           b.Overage,
+	}
+	if b.ResetAt != nil && !b.ResetAt.IsZero() {
+		t := *b.ResetAt
+		out.ResetAt = &t
+	}
+	return out
 }
 
 // quotaBilled reports whether calls on this provider should be booked against
@@ -204,7 +292,6 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 	if inst.cfg.Type == "anthropic" {
 		model = model.WithMiddleware(anthropicCachingMiddleware())
 	}
-	model = model.WithMiddleware(validateRequestMiddleware(m))
 	model = model.WithMiddleware(llm.DeferredToolsMiddleware(nil), llm.InlineToolsMiddleware(nil))
 	model = model.WithMiddleware(metricsLLMMiddleware(m, g.cfg.Metrics, inst.quotaBilled(m)))
 	return model, nil

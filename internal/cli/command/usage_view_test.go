@@ -131,126 +131,147 @@ func TestUsageTabBar(t *testing.T) {
 	}
 }
 
-func TestQuotaLinesSharedPool(t *testing.T) {
+func TestQuotaLinesSharedPoolAndMultiBucket(t *testing.T) {
 	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
-	reset := now.Add(3*time.Hour + 40*time.Minute)
-	quotas := []api.ModelQuota{
-		{Model: "pool/b", Provider: "pool", Account: "dev@example.com", RemainingFraction: 0.94, ResetAt: reset},
-		{Model: "pool/a", Provider: "pool", Account: "dev@example.com", RemainingFraction: 0.94, ResetAt: reset},
-		{Model: "solo/x", Provider: "solo", RemainingFraction: 0},
+	reset5h := now.Add(3*time.Hour + 40*time.Minute)
+	reset7d := now.Add(48 * time.Hour)
+	snap := &api.QuotaSnapshotResponse{
+		Providers: []api.ProviderQuotaSnapshot{
+			{
+				Provider: "pool",
+				Account:  "dev@example.com",
+				Buckets: map[string]api.QuotaBucket{
+					"5h": {ID: "5h", RemainingFraction: 0.94, ResetAt: &reset5h},
+					"7d": {ID: "7d", RemainingFraction: 0.40, ResetAt: &reset7d},
+				},
+				Models: map[string][]string{
+					"pool/b": {"5h", "7d"},
+					"pool/a": {"5h", "7d"},
+				},
+			},
+			{
+				Provider: "solo",
+				Buckets: map[string]api.QuotaBucket{
+					"requests":  {ID: "requests", Unit: api.QuotaUnitRequests, Used: 300, Limit: 300, RemainingFraction: 0},
+					"unlimited": {ID: "unlimited", Unlimited: true, RemainingFraction: 1.0},
+				},
+				Models: map[string][]string{
+					"solo/x": {"requests", "unlimited"},
+				},
+			},
+		},
 	}
-	lines := quotaLines(quotas, nil, "pool/a", now)
+	lines := quotaLines(snap, nil, "pool/a", now)
 	out := text(lines)
 
-	if !strings.Contains(out, "pool · dev@example.com (shared pool · 2 models)") {
-		t.Errorf("shared pool heading missing:\n%s", out)
+	if !strings.Contains(out, "pool · dev@example.com") {
+		t.Errorf("provider heading missing:\n%s", out)
 	}
-	if n := strings.Count(out, "resets in 3h40m at"); n != 1 {
-		t.Errorf("shared reset rendered %d times, want once per pool:\n%s", n, out)
+	if !strings.Contains(out, "Shared pool (2 models): pool/a · current, pool/b") {
+		t.Errorf("shared pool line with active model marker missing:\n%s", out)
 	}
-	if !strings.Contains(out, "94%") || !strings.Contains(out, "█") {
-		t.Errorf("quota bar missing:\n%s", out)
+	if !strings.Contains(out, "94%  5h · resets in 3h40m at") || !strings.Contains(out, "40%  7d · resets in 48h at") {
+		t.Errorf("multi-bucket bars/countdowns missing:\n%s", out)
 	}
-	if !strings.Contains(out, "pool/a · current") {
-		t.Errorf("active model not marked:\n%s", out)
+	if !strings.Contains(out, "0%  requests · 300/300 requests") {
+		t.Errorf("empty discrete-unit bucket row missing:\n%s", out)
 	}
-	if !strings.Contains(out, "0%  solo/x") {
-		t.Errorf("empty window row missing:\n%s", out)
+	if !strings.Contains(out, "∞     unlimited") {
+		t.Errorf("unlimited bucket row missing:\n%s", out)
 	}
-	// Gauge bands: the healthy pool rows read green, the exhausted window red.
-	var good, danger int
+	// Gauge bands: 5h (94%) + unlimited are green, 7d (40%) is warn, requests (0%) is danger.
+	var good, warn, danger int
 	for _, l := range lines {
 		switch l.Style {
 		case lineGood:
 			good++
+		case lineWarn:
+			warn++
 		case lineDanger:
 			danger++
 		}
 	}
-	if good != 2 || danger != 1 {
-		t.Errorf("gauge styles: good=%d danger=%d, want 2 pool rows green and the empty window red:\n%s", good, danger, out)
+	if good != 2 || warn != 1 || danger != 1 {
+		t.Errorf("gauge styles: good=%d warn=%d danger=%d, want 2 green, 1 warn, 1 danger:\n%s", good, warn, danger, out)
 	}
 }
 
 func TestQuotaLinesLiveReadingOverridesFetch(t *testing.T) {
 	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
 	reset := now.Add(3 * time.Hour)
-	quotas := []api.ModelQuota{
-		{Model: "pool/a", Provider: "pool", Account: "dev@example.com", RemainingFraction: 0.94, ResetAt: reset},
-		{Model: "pool/b", Provider: "pool", Account: "dev@example.com", RemainingFraction: 0.94, ResetAt: reset},
-		{Model: "other/c", Provider: "other", RemainingFraction: 0.5, ResetAt: reset.Add(time.Hour)},
+	liveReset := now.Add(40 * time.Minute)
+	snap := &api.QuotaSnapshotResponse{
+		Providers: []api.ProviderQuotaSnapshot{
+			{
+				Provider: "pool",
+				Account:  "dev@example.com",
+				Buckets: map[string]api.QuotaBucket{
+					"5h": {ID: "5h", RemainingFraction: 0.94, ResetAt: &reset},
+				},
+				Models: map[string][]string{
+					"pool/a": {"5h"},
+					"pool/b": {"5h"},
+				},
+			},
+			{
+				Provider: "other",
+				Buckets: map[string]api.QuotaBucket{
+					"daily": {ID: "daily", RemainingFraction: 0.5},
+				},
+				Models: map[string][]string{
+					"other/c": {"daily"},
+				},
+			},
+		},
 	}
-	live := &api.ModelQuota{Model: "pool/a", Provider: "pool", Account: "dev@example.com", RemainingFraction: 0.41, ResetAt: now.Add(40 * time.Minute)}
-	out := text(quotaLines(quotas, live, "pool/a", now))
+	live := &api.ModelQuota{
+		Model:    "pool/a",
+		Provider: "pool",
+		Account:  "dev@example.com",
+		Buckets:  []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.41, ResetAt: &liveReset}},
+	}
+	out := text(quotaLines(snap, live, "pool/a", now))
 
-	// The live reading replaces the fetched percentage for its whole pool...
-	if !strings.Contains(out, "41%") {
-		t.Errorf("live percentage not applied:\n%s", out)
+	if !strings.Contains(out, "41%  5h · resets in 40m at") {
+		t.Errorf("live percentage and reset time not applied:\n%s", out)
 	}
 	if strings.Contains(out, "94%") {
 		t.Errorf("stale fetched percentage still rendered:\n%s", out)
 	}
-	// ...including shared-pool peers, and the countdown follows the fresh reset.
-	if !strings.Contains(out, "resets in 40m at") {
-		t.Errorf("live reset time not applied:\n%s", out)
-	}
-	// Unrelated pools keep their fetched values.
-	if !strings.Contains(out, "50%  other/c") {
+	if !strings.Contains(out, "50%  daily") {
 		t.Errorf("unrelated pool changed:\n%s", out)
 	}
 }
 
-func TestQuotaLinesCurrentWithoutLiveReading(t *testing.T) {
-	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
-	quotas := []api.ModelQuota{
-		{Model: "pool/a", Provider: "pool", RemainingFraction: 0.8, ResetAt: now.Add(time.Hour)},
-	}
-	out := text(quotaLines(quotas, nil, "pool/a", now))
-	if !strings.Contains(out, "pool/a · current") {
-		t.Errorf("current marker lost when no live reading arrived yet:\n%s", out)
-	}
-}
-
-func TestQuotaLinesGroupsInterleavedPools(t *testing.T) {
+func TestQuotaLinesGroupsDistinctBucketSetsUnderOneProvider(t *testing.T) {
 	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
 	resetA := now.Add(2 * time.Hour)
 	resetB := now.Add(5 * time.Hour)
-	// Model names interleave alphabetically across two pools of one provider.
-	quotas := []api.ModelQuota{
-		{Model: "prov/claude-sonnet", Provider: "prov", RemainingFraction: 0.5, ResetAt: resetB},
-		{Model: "prov/gemini-flash", Provider: "prov", RemainingFraction: 0.5, ResetAt: resetA},
-		{Model: "prov/gemini-pro", Provider: "prov", RemainingFraction: 0.5, ResetAt: resetB},
+	snap := &api.QuotaSnapshotResponse{
+		Providers: []api.ProviderQuotaSnapshot{
+			{
+				Provider: "prov",
+				Buckets: map[string]api.QuotaBucket{
+					"flash": {ID: "flash", RemainingFraction: 0.7, ResetAt: &resetA},
+					"pro":   {ID: "pro", RemainingFraction: 0.5, ResetAt: &resetB},
+				},
+				Models: map[string][]string{
+					"prov/claude-sonnet": {"pro"},
+					"prov/gemini-flash":  {"flash"},
+					"prov/gemini-pro":    {"pro"},
+				},
+			},
+		},
 	}
-	out := text(quotaLines(quotas, nil, "", now))
-	// Pool B (2 models) must render as ONE section; pool A holds one model,
-	// so it gets a plain heading.
-	if n := strings.Count(out, "prov (shared pool · 2 models)"); n != 1 {
-		t.Errorf("shared-pool headings = %d, want the 2-model pool once:\n%s", n, out)
+	out := text(quotaLines(snap, nil, "", now))
+	if n := strings.Count(out, "Shared pool (2 models): prov/claude-sonnet, prov/gemini-pro"); n != 1 {
+		t.Errorf("shared-pool group count = %d, want 1:\n%s", n, out)
 	}
-	if n := strings.Count(out, "resets in 5h at"); n != 1 {
-		t.Errorf("pool B reset rendered %d times, want once:\n%s", n, out)
+	if !strings.Contains(out, "  prov/gemini-flash") {
+		t.Errorf("single-model group missing:\n%s", out)
 	}
-	if n := strings.Count(out, "resets in 2h at"); n != 1 {
-		t.Errorf("pool A reset rendered %d times, want once:\n%s", n, out)
-	}
-	for _, model := range []string{"prov/claude-sonnet", "prov/gemini-flash", "prov/gemini-pro"} {
-		if !strings.Contains(out, model) {
-			t.Errorf("row %s missing:\n%s", model, out)
-		}
-	}
-}
-
-func TestQuotaLinesNoResetModelsStaySeparate(t *testing.T) {
-	quotas := []api.ModelQuota{
-		{Model: "prov/a", Provider: "prov", RemainingFraction: 0.7},
-		{Model: "prov/b", Provider: "prov", RemainingFraction: 0.2},
-	}
-	out := text(quotaLines(quotas, nil, "", time.Now()))
-	if strings.Contains(out, "shared pool") {
-		t.Errorf("models without reset times merged into a false shared pool:\n%s", out)
-	}
-	if !strings.Contains(out, "70%  prov/a") || !strings.Contains(out, "20%  prov/b") {
-		t.Errorf("independent windows missing:\n%s", out)
+	if !strings.Contains(out, "resets in 5h at") || !strings.Contains(out, "resets in 2h at") {
+		t.Errorf("bucket resets missing:\n%s", out)
 	}
 }
 
@@ -279,31 +300,26 @@ func TestQuotaGaugeStyle(t *testing.T) {
 	}
 }
 
-func TestFetchModelQuotas(t *testing.T) {
-	quotas, err := fetchModelQuotas(context.Background(), quotasTransport{})
+func TestFetchQuotaSnapshots(t *testing.T) {
+	snap, err := fetchQuotaSnapshots(context.Background(), quotasTransport{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(quotas) != 1 || quotas[0].Model != "pool/a" {
-		t.Fatalf("quotas = %+v, want only the quota-billed chat model", quotas)
+	if snap == nil || len(snap.Providers) != 1 || snap.Providers[0].Provider != "pool" {
+		t.Fatalf("snap = %+v, want pool snapshot", snap)
 	}
 }
 
-// quotasTransport serves one quota-billed chat model, one priced model, and
-// one quota-billed embedding model that must be skipped.
 type quotasTransport struct{}
 
-func (quotasTransport) ListModels(context.Context) ([]api.Model, error) {
-	return []api.Model{
-		{ID: "pool/a", Provider: "pool", Name: "A", QuotaBilled: true},
-		{ID: "priced/b", Provider: "priced", Name: "B", Pricing: &api.ModelPricing{Input: 1, Output: 2}},
-		{ID: "pool/c", Provider: "pool", Name: "C", QuotaBilled: true, Capabilities: api.ModelCapabilities{Completion: new(false)}},
+func (quotasTransport) GetQuotaSnapshots(context.Context) (*api.QuotaSnapshotResponse, error) {
+	return &api.QuotaSnapshotResponse{
+		Providers: []api.ProviderQuotaSnapshot{
+			{
+				Provider: "pool",
+				Buckets:  map[string]api.QuotaBucket{"5h": {ID: "5h", RemainingFraction: 0.5}},
+				Models:   map[string][]string{"pool/a": {"5h"}},
+			},
+		},
 	}, nil
-}
-
-func (quotasTransport) GetModelQuota(_ context.Context, model string) (*api.ModelQuota, error) {
-	if model != "pool/a" {
-		return nil, nil
-	}
-	return &api.ModelQuota{Model: model, Provider: "pool", RemainingFraction: 0.5}, nil
 }

@@ -620,7 +620,7 @@ composition hides it.
 | **Session** (`1`) | Total cost; API and wall-clock duration; code changes (lines added and removed); usage by model (uncached input, cache read, cache write, output, cost); prompt cache (requests, share of input from cache, misses, expected rebuilds after compaction, last use); cache read and write cost; tool calls with per-tool calls, errors, denied, canceled, total and slowest time, and lines changed; usage insights. |
 | **Workspace** (`2`) | The selected range for the current workspace: cost and trend versus the previous period, sessions and average cost per session, API duration, code changes and cost per 100 changed lines, tokens, cache, usage grouped by the selected dimension, top sessions by cost, tools, insights. |
 | **Global** (`3`) | The same as Workspace across all workspaces, plus usage by workspace and top sessions across workspaces. |
-| **Quotas** (`4`) | Live quota windows of every quota-billed chat model: a remaining-capacity bar and percentage per model, grouped under a provider · account heading, with one `resets in <countdown> at <HH:MM>` line per window. Models sharing one window (same provider, account, and reset moment) are listed once as a shared pool. The session's model is marked `current`; each row is gauged by remaining capacity — red under 20%, yellow under 50%, green from 50% up. Updates live from `quota_updated` events and `r` re-reads. |
+| **Quotas** (`4`) | Live multi-bucket quota snapshots of every quota-billed workspace provider: models sharing the same bucket IDs appear under a `Shared pool (N models)` list, with one bar, optional unit usage (`used/limit unit`), `unlimited` badge, and `resets in <countdown> at <HH:MM>` line per bucket. The session's model is marked `current`; each metered bar is gauged by remaining capacity — red under 20%, yellow under 50%, green from 50% up. Updates live from `quota_updated` events and `r` re-reads. |
 
 | Key | Action |
 | :--- | :--- |
@@ -671,7 +671,8 @@ All usage endpoints are read-only.
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/v1/quotas?model=<id>` | `ModelQuota` (`model`, `provider`, `remaining_fraction` 0–1, optional `reset_at` RFC 3339, optional `account`) for quota-billed providers. Returns `204 No Content` when the model's provider does not report quotas; `400` when `model` is missing. |
+| `GET` | `/v1/quotas` | `QuotaSnapshotResponse` (`providers[]` of `ProviderQuotaSnapshot` with `provider`, optional `account`, `collected_at`, `buckets` map keyed by bucket ID, and `models` map of qualified model IDs to ordered bucket IDs). |
+| `GET` | `/v1/quotas?model=<id>` | `ModelQuota` (`model`, `provider`, optional `account`, and `buckets[]` of `QuotaBucket` with `id`, `scope`, `window`, `unit`, `limit`, `used`, `remaining_fraction` 0–1, `unlimited`, `overage`, and optional `reset_at` RFC 3339) for quota-billed providers. Returns `204 No Content` when the model's provider does not report quotas; `400` when `model=` is empty. |
 
 Model listings carry the billing facts behind this: each `Model` reports `description` and
 `quota_billed` (`true` when the model has no pricing and its provider bills against a

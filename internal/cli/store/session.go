@@ -970,27 +970,44 @@ func SetQuota(quota api.ModelQuota) {
 	})
 }
 
-// QuotaState is the comparable snapshot of quota shown in the status line.
+// QuotaState is the comparable snapshot of the active model's bottleneck
+// quota bucket shown in the status line.
 type QuotaState struct {
-	Known bool
+	Known    bool
+	BucketID string
 	// RemainingPct is whole percent of the window still available (0-100).
 	RemainingPct int
+	Unlimited    bool
 	// ResetAt is when the window refills; zero when the provider did not say.
 	ResetAt time.Time
 	// Account is the authenticated identity behind the window, when known.
 	Account string
 }
 
-// UseQuota subscribes a component to the active model's quota reading.
+// UseQuota subscribes a component to the active model's bottleneck quota reading.
 func UseQuota() QuotaState {
 	return UseSession(func(s SessionState) QuotaState {
 		if !s.ModelQuotaBilled || s.Quota == nil {
 			return QuotaState{}
 		}
+		bucket, ok := s.Quota.Bottleneck()
+		if !ok {
+			return QuotaState{}
+		}
+		pct := quotaPercent(bucket.RemainingFraction)
+		if bucket.Unlimited {
+			pct = 100
+		}
+		var resetAt time.Time
+		if bucket.ResetAt != nil {
+			resetAt = *bucket.ResetAt
+		}
 		return QuotaState{
 			Known:        true,
-			RemainingPct: quotaPercent(s.Quota.RemainingFraction),
-			ResetAt:      s.Quota.ResetAt,
+			BucketID:     bucket.ID,
+			RemainingPct: pct,
+			Unlimited:    bucket.Unlimited,
+			ResetAt:      resetAt,
 			Account:      s.Quota.Account,
 		}
 	})
