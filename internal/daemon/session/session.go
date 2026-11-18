@@ -39,17 +39,21 @@ import (
 
 // Config holds runtime dependencies and parameters for initializing a [Session].
 type Config struct {
-	ID          string
-	Title       string
-	ParentID    string
-	WorkDir     string
-	Parent      *Session
-	Session     api.SessionConfig
-	DB          *sql.DB
-	Workspace   *workspace.Workspace
-	Gateway     func() gateway.Gateway
-	Catalog     func() *models.Catalog
-	Permissions permissions.Manager
+	ID       string
+	Title    string
+	ParentID string
+	WorkDir  string
+	Parent   *Session
+	Session  api.SessionConfig
+	// InitialPermissions optionally seeds a new session's session-scoped
+	// permission grants. It is used when forking so the branch keeps the
+	// approvals the source session already earned.
+	InitialPermissions api.Permissions
+	DB                 *sql.DB
+	Workspace          *workspace.Workspace
+	Gateway            func() gateway.Gateway
+	Catalog            func() *models.Catalog
+	Permissions        permissions.Manager
 	// SandboxSettings optionally carries the workspace's sandbox.json manager
 	// (nil keeps the built-in defaults: DefaultMode backend and the built-in
 	// policy floor only). It supplies the effective default backend, the
@@ -193,13 +197,14 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 
 	now := time.Now().UTC()
 	sess := &Session{
-		ID:        id,
-		Title:     strings.TrimSpace(cfg.Title),
-		Config:    resolvedConfig,
-		ParentID:  cfg.ParentID,
-		WorkDir:   cfg.WorkDir,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          id,
+		Title:       strings.TrimSpace(cfg.Title),
+		Config:      resolvedConfig,
+		ParentID:    cfg.ParentID,
+		WorkDir:     cfg.WorkDir,
+		Permissions: cfg.InitialPermissions.Clone(),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	if err := initSession(ctx, sess, cfg); err != nil {
@@ -239,6 +244,7 @@ func Open(ctx context.Context, dbSess *Session, cfg Config) (*Session, error) {
 		Title:       dbSess.Title,
 		Config:      dbSess.Config,
 		ParentID:    dbSess.ParentID,
+		ForkedFrom:  dbSess.ForkedFrom,
 		WorkDir:     dbSess.WorkDir,
 		CreatedAt:   dbSess.CreatedAt,
 		UpdatedAt:   dbSess.UpdatedAt,
@@ -294,9 +300,13 @@ type Session struct {
 	Config      api.SessionConfig       `json:"config"`
 	Diagnostics []api.SessionDiagnostic `json:"diagnostics,omitempty"`
 	ParentID    string                  `json:"parent_id,omitempty"`
-	WorkDir     string                  `json:"work_dir,omitempty"`
-	CreatedAt   time.Time               `json:"created_at"`
-	UpdatedAt   time.Time               `json:"updated_at"`
+	// ForkedFrom records the session ID this thread was forked from. It is
+	// provenance only: unlike ParentID it does not attach the fork to the
+	// parent/child delegation tree, so forks stay top-level human threads.
+	ForkedFrom string    `json:"forked_from,omitempty"`
+	WorkDir    string    `json:"work_dir,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 
 	parent   *Session   `json:"-"`
 	children []*Session `json:"-"`
@@ -373,6 +383,7 @@ func (s *Session) Clone() *Session {
 		Title:       s.Title,
 		Config:      cpConfig,
 		ParentID:    s.ParentID,
+		ForkedFrom:  s.ForkedFrom,
 		WorkDir:     s.WorkDir,
 		parent:      s.parent,
 		children:    slices.Clone(s.children),

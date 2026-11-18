@@ -790,9 +790,13 @@ type Session struct {
 	Todos              []TodoItem          `json:"todos,omitempty"`
 	Queue              []QueueItem         `json:"queue,omitempty"`
 	ParentID           string              `json:"parent_id,omitempty"`
-	WorkDir            string              `json:"work_dir,omitempty"`
-	Subagents          []Session           `json:"subagents,omitempty"`
-	Activity           string              `json:"activity,omitempty"`
+	// ForkedFrom records the session ID this session was forked from. It is
+	// provenance only: a fork is a top-level thread and never appears in the
+	// source session's subagent tree.
+	ForkedFrom string    `json:"forked_from,omitempty"`
+	WorkDir    string    `json:"work_dir,omitempty"`
+	Subagents  []Session `json:"subagents,omitempty"`
+	Activity   string    `json:"activity,omitempty"`
 	// SandboxMode reports the effective sandbox isolation backend this
 	// session enforces ("native" or "local").
 	SandboxMode SandboxMode `json:"sandbox_mode,omitempty"`
@@ -828,6 +832,12 @@ type SessionPreview struct {
 type UpdateSessionRequest struct {
 	Title  string        `json:"title,omitempty"`
 	Config SessionConfig `json:"config"`
+}
+
+// ForkSessionRequest holds optional parameters for forking a session. An empty
+// Title derives one from the source session's title.
+type ForkSessionRequest struct {
+	Title string `json:"title,omitempty"`
 }
 
 // Role identifies the author of a conversation message.

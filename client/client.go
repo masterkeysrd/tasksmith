@@ -716,6 +716,43 @@ func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 	return c.doJSON(ctx, http.MethodDelete, path, nil, nil, nil)
 }
 
+// ForkSession branches an existing session into a new top-level session that
+// starts from the source's full conversation. An empty title derives one from
+// the source session's title.
+func (c *Client) ForkSession(ctx context.Context, sessionID string, req api.ForkSessionRequest) (*api.Session, error) {
+	path, err := c.sessionEndpoint(sessionID, "/fork")
+	if err != nil {
+		return nil, err
+	}
+	var out api.Session
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// LatestSession returns the workspace's most recently updated top-level
+// session without hydrating any session runtime, backing quick resume
+// (`-c` / `--continue`). It returns (nil, nil) when the workspace has no
+// sessions.
+func (c *Client) LatestSession(ctx context.Context) (*api.Session, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.Session
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/sessions/latest", nil, nil, &out); err != nil {
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if strings.TrimSpace(out.ID) == "" {
+		return nil, nil
+	}
+	return &out, nil
+}
+
 // Timeline returns the chronological session timeline for a session.
 func (c *Client) Timeline(ctx context.Context, sessionID string) ([]api.TimelineEntry, error) {
 	path, err := c.sessionEndpoint(sessionID, "/timeline")

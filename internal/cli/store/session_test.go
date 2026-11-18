@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1365,5 +1366,145 @@ func TestSwitchSessionDelegatedSlashCommandSeedsSpinnerAndSettles(t *testing.T) 
 	})
 	if st := GetStream(); st.Streaming || st.Delegated {
 		t.Fatalf("expected stream to settle after parent completion, got %+v", st)
+	}
+}
+
+// TestForkSessionSwitchesToFork verifies forking the active session posts the
+// fork request against the active session, then switches to the new session.
+func TestForkSessionSwitchesToFork(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	var forked atomic.Bool
+
+	rt := &mockSessionRoundTripper{
+		handler: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/v1/sessions/s1/fork") {
+				forked.Store(true)
+				resp := &http.Response{
+					StatusCode: http.StatusCreated,
+					Body: io.NopCloser(strings.NewReader(`{
+						"id": "s2",
+						"title": "Source (fork)",
+						"forked_from": "s1",
+						"status": "idle",
+						"config": {"mode": "default"}
+					}`)),
+					Header: make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			if req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/v1/sessions/s2") {
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(strings.NewReader(`{
+						"id": "s2",
+						"title": "Source (fork)",
+						"forked_from": "s1",
+						"status": "idle",
+						"config": {"mode": "default"}
+					}`)),
+					Header: make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			if req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/v1/sessions/s2/timeline") {
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`[]`)),
+					Header:     make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	SetSession(&api.Session{ID: "s1", Title: "Source"})
+
+	sessMu.Lock()
+	activeClient = c
+	activeCtx = context.Background()
+	sessMu.Unlock()
+	defer func() {
+		sessMu.Lock()
+		if streamCancel != nil {
+			streamCancel()
+			streamCancel = nil
+		}
+		sessMu.Unlock()
+	}()
+
+	ForkSession("", "")
+
+	deadline := time.Now().Add(2 * time.Second)
+	var loaded *api.Session
+	for time.Now().Before(deadline) {
+		if st := GetSession(); st.Session != nil && st.Session.ID == "s2" {
+			loaded = st.Session
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if loaded == nil {
+		t.Fatalf("expected switch to forked session s2, got %+v", GetSession().Session)
+	}
+	if loaded.ForkedFrom != "s1" {
+		t.Errorf("forked session provenance = %q, want s1", loaded.ForkedFrom)
+	}
+	if !forked.Load() {
+		t.Error("expected the fork request to target the active session s1")
+	}
+}
+
+// TestForkSessionWithoutActiveSessionWarns verifies forking with no session in
+// play surfaces a warning instead of issuing a request.
+func TestForkSessionWithoutActiveSessionWarns(t *testing.T) {
+	ResetSession()
+	ClearTranscript()
+	defer ResetSession()
+	defer ClearTranscript()
+
+	sessMu.Lock()
+	previousClient := activeClient
+	activeClient = nil
+	sessMu.Unlock()
+	defer func() {
+		sessMu.Lock()
+		activeClient = previousClient
+		sessMu.Unlock()
+	}()
+
+	ForkSession("", "")
+
+	st := GetTranscript()
+	if st.Items == nil {
+		t.Fatal("expected transcript warning items, got none")
+	}
+	found := false
+	for _, it := range *st.Items {
+		if nd, ok := it.Data.(NoticeData); ok && nd.Severity == NoticeSeverityWarning &&
+			strings.Contains(nd.Text, "no active session to fork") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about forking without an active session, got %+v", *st.Items)
 	}
 }

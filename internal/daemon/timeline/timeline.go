@@ -179,6 +179,11 @@ func marshalPayload(entry *Entry) ([]byte, error) {
 			return nil, ErrInvalidEntry
 		}
 		src = entry.Rule
+	case api.TimelineKindForked:
+		if entry.Forked == nil || strings.TrimSpace(entry.Forked.SessionID) == "" {
+			return nil, ErrInvalidEntry
+		}
+		src = entry.Forked
 	case api.TimelineKindInterrupted:
 		return []byte("{}"), nil
 	default:
@@ -354,6 +359,9 @@ func scanEntry(r rowScanner) (*Entry, error) {
 	case api.TimelineKindRule:
 		entry.Rule = new(api.RuleRecord)
 		dst = entry.Rule
+	case api.TimelineKindForked:
+		entry.Forked = new(api.ForkRecord)
+		dst = entry.Forked
 	case api.TimelineKindInterrupted:
 		return entry, nil
 	default:

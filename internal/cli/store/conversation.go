@@ -1170,8 +1170,9 @@ func inFlightTurnStart(sess *api.Session, entries []api.TimelineEntry) time.Time
 		switch entry.Kind {
 		case api.TimelineKindTurnCompleted, api.TimelineKindInterrupted, api.TimelineKindCommand:
 			start = time.Time{}
-		case api.TimelineKindModel, api.TimelineKindEffort, api.TimelineKindThinking, api.TimelineKindAgent, api.TimelineKindMode, api.TimelineKindCompacted:
-			// Idle configuration changes and finished compactions sit between turns.
+		case api.TimelineKindModel, api.TimelineKindEffort, api.TimelineKindThinking, api.TimelineKindAgent, api.TimelineKindMode, api.TimelineKindCompacted, api.TimelineKindForked:
+			// Idle configuration changes, finished compactions, and fork
+			// markers sit between turns.
 		default:
 			if start.IsZero() {
 				start = timelineEntryTime(entry)

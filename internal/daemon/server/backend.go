@@ -72,8 +72,10 @@ type SessionBackend interface {
 	CreateSession(ctx context.Context, workspace string, req api.CreateSessionRequest) (*api.Session, bool, error)
 	PreviewSession(ctx context.Context, workspace string, req api.PreviewSessionRequest) (*api.SessionPreview, error)
 	ListSessions(ctx context.Context, workspace string) ([]api.Session, error)
+	LatestSession(ctx context.Context, workspace string) (*api.Session, error)
 	GetSession(ctx context.Context, workspace, id string) (*api.Session, error)
 	UpdateSession(ctx context.Context, workspace, id string, req api.UpdateSessionRequest) (*api.Session, error)
+	ForkSession(ctx context.Context, workspace, id string, req api.ForkSessionRequest) (*api.Session, error)
 	DeleteSession(ctx context.Context, workspace, id string) error
 	Timeline(ctx context.Context, workspace, id string) ([]api.TimelineEntry, error)
 	Send(ctx context.Context, workspace, id string, req api.SendRequest) error

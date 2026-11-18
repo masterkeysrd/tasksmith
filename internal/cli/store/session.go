@@ -1737,6 +1737,40 @@ func SwitchSession(sessionID string) {
 	}()
 }
 
+// ForkSession branches the given session (or the active session when
+// sessionID is empty) into a new top-level session that starts from the same
+// conversation, then switches to it. An empty title derives one from the
+// source session's title.
+func ForkSession(sessionID, title string) {
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	sessMu.Unlock()
+
+	sid := strings.TrimSpace(sessionID)
+	if sid == "" {
+		if active := GetSession().Session; active != nil {
+			sid = active.ID
+		}
+	}
+	if c == nil || sid == "" {
+		AppendWarning("There is no active session to fork. Start a session first or pass a session ID.")
+		return
+	}
+
+	go func() {
+		if ctx == nil || ctx.Err() != nil {
+			ctx = context.Background()
+		}
+		forked, err := c.ForkSession(ctx, sid, api.ForkSessionRequest{Title: strings.TrimSpace(title)})
+		if err != nil {
+			AppendError("Error forking session", err.Error())
+			return
+		}
+		SwitchSession(forked.ID)
+	}()
+}
+
 // SetModel updates the model for the session, either via daemon API or in draft config.
 func SetModel(modelID string) {
 	st := GetSession()

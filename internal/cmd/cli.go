@@ -12,17 +12,20 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli"
 	"github.com/masterkeysrd/tasksmith/internal/version"
 )
 
 type replOptions struct {
-	sessionID   string
-	agent       string
-	model       string
-	title       string
-	sandboxMode string
-	backend     backend.Backend
+	sessionID    string
+	continueLast bool
+	forkSession  bool
+	agent        string
+	model        string
+	title        string
+	sandboxMode  string
+	backend      backend.Backend
 }
 
 // resolveSandboxMode returns the normalized --sandbox request ("native" or
@@ -39,6 +42,8 @@ func (o *replOptions) resolveSandboxMode() (api.SandboxMode, error) {
 
 func bindREPLFlags(cmd *cobra.Command, opts *replOptions) {
 	cmd.Flags().StringVar(&opts.sessionID, "session", "", "Existing session ID to resume")
+	cmd.Flags().BoolVarP(&opts.continueLast, "continue", "c", false, "Resume the workspace's most recently updated session")
+	cmd.Flags().BoolVar(&opts.forkSession, "fork", false, "Branch the resumed session (--session or -c) and attach to the fork")
 	cmd.Flags().StringVar(&opts.agent, "agent", "", "Agent name when creating a new session")
 	cmd.Flags().StringVar(&opts.model, "model", "", "Model identifier when creating a new session")
 	cmd.Flags().StringVar(&opts.title, "title", "", "Session title when creating a new session")
@@ -82,11 +87,34 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
 
+	sessionID := strings.TrimSpace(opts.sessionID)
+	if opts.continueLast && sessionID == "" {
+		latest, err := resolveLatestSession(ctx, c, wsDir)
+		if err != nil {
+			return err
+		}
+		sessionID = latest
+	}
+	if opts.forkSession {
+		if sessionID == "" {
+			return fmt.Errorf("--fork needs a session to branch: combine it with --session or -c")
+		}
+		probe := c
+		if probe.CWD() == "" {
+			probe = probe.WithCWD(wsDir)
+		}
+		forked, err := probe.ForkSession(ctx, sessionID, api.ForkSessionRequest{Title: strings.TrimSpace(opts.title)})
+		if err != nil {
+			return fmt.Errorf("fork session %q: %w", sessionID, err)
+		}
+		sessionID = forked.ID
+	}
+
 	if err := cli.Run(ctx, cli.Options{
 		Client:         c,
 		Workspace:      wsDir,
 		Version:        version.Get(),
-		SessionID:      strings.TrimSpace(opts.sessionID),
+		SessionID:      sessionID,
 		Agent:          strings.TrimSpace(opts.agent),
 		Model:          strings.TrimSpace(opts.model),
 		Title:          strings.TrimSpace(opts.title),
@@ -122,6 +150,24 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 	}
 
 	return nil
+}
+
+// resolveLatestSession resolves -c/--continue to the workspace's most recently
+// updated top-level session ID. It returns "" (fresh session) when the
+// workspace has no sessions yet, and surfaces transport errors.
+func resolveLatestSession(ctx context.Context, c *client.Client, wsDir string) (string, error) {
+	probe := c
+	if probe.CWD() == "" {
+		probe = probe.WithCWD(wsDir)
+	}
+	sess, err := probe.LatestSession(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolve latest session: %w", err)
+	}
+	if sess == nil {
+		return "", nil
+	}
+	return sess.ID, nil
 }
 
 // exitSummaryColors enables ANSI colors only for an interactive color-capable

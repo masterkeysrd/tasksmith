@@ -43,6 +43,8 @@ git diff | tasksmith -p "Review this diff for bugs"
 | Flag | Description |
 | :--- | :--- |
 | `--session <id>` | Resume an existing session (UUIDv7) instead of creating one. With a config flag (`--model`, `--mode`, `--agent`, `--effort`), overlays it onto the resumed session. |
+| `--continue` (`-c`) | Resume the workspace's most recently updated top-level session. Ignored when `--session` is given; creates a fresh session when the workspace has none. |
+| `--fork` | Branch the resolved session (`--session` or `-c`) and run on the fork instead of mutating the source. `--title` names the fork; a usage error when no session resolves. |
 | `--agent <name>` | Agent persona for the session (new or resumed). |
 | `--model <id>` | Model or `@alias` for the session (e.g. `openai/gpt-5.5`, `@fast`). |
 | `--title <title>` | Human-readable title for a new session. |
@@ -172,6 +174,7 @@ Other REPL-oriented events (`task_updated`, `todos_updated`, `queue_updated`, `c
 | `/budget` | `[tokens\|default]` | Shows or sets the thinking token budget. |
 | `/usage` | — | Prints session usage (`data` carries `api.SessionUsage`). |
 | `/compact` | `[focus]` | Triggers daemon-side compaction as a turn. |
+| `/fork` | `[title]` | Branches the current session and rebinds the run to the fork (`data` carries the forked `api.Session`). In `jsonl` mode the event stream follows the fork from that point on; a running source session is rejected. |
 | `/help` | — | Lists local commands and the forwarding rule. |
 | `/exit` | `/quit` | Ends the run (pending turns drain first in bidirectional mode). |
 
@@ -246,6 +249,12 @@ tasksmith -p --ephemeral --mode accept_edits "Add unit tests for internal/exec"
 tasksmith exec --session 0193abcd-... "Now apply the review feedback from before"
 ```
 
+**Branch a session before continuing** (the source stays untouched; `--title` optionally names the fork):
+
+```bash
+tasksmith exec --session 0193abcd-... --fork "Try the alternative approach"
+```
+
 ---
 
 ## 9. Embedding (Go SDK)
@@ -253,7 +262,7 @@ tasksmith exec --session 0193abcd-... "Now apply the review feedback from before
 The public `client` package (`github.com/masterkeysrd/tasksmith/client`) is the Go SDK surface — the same one `exec` itself uses:
 
 - `client.ConnectOrStart(...)` — connect to the daemon on `brain.sock`, or spawn a detached healthy one and wait. `client.DefaultSocketPath()`, `client.SpawnDetached`, `client.WaitForSocketHealthy` cover custom setups.
-- Session and stream calls (`CreateSession`, `Send`, `Cancel`, `Watch`, ...) mirror what the CLI does over HTTP + SSE.
+- Session and stream calls (`CreateSession`, `Send`, `Cancel`, `Watch`, `ForkSession`, ...) mirror what the CLI does over HTTP + SSE.
 
 Two integration styles:
 

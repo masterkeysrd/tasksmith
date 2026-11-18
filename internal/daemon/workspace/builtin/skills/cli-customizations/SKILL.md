@@ -4,10 +4,10 @@ kind: Skill
 metadata:
   name: cli-customizations
   displayName: CLI Customizations
-  description: Configure TaskSmith's interactive CLI settings such as the REPL status line composition and the color theme by editing their XDG config files or driving the /statusline view, drive the interactive /sandbox and /permissions editors, --sandbox startup flag, and ! shell mode, explain the /model picker columns, quota windows, and the /usage Quotas tab for subscription-billed providers, and document headless execution with tasksmith exec or -p including NDJSON framing, stdin control frames, slash commands without the TUI, and exit codes.
+  description: Configure TaskSmith's interactive CLI settings such as the REPL status line composition and the color theme by editing their XDG config files or driving the /statusline view, drive the interactive /sandbox and /permissions editors, --sandbox startup flag, and ! shell mode, explain the /model picker columns, quota windows, and the /usage Quotas tab for subscription-billed providers, document headless execution with tasksmith exec or -p including NDJSON framing, stdin control frames, slash commands without the TUI, and exit codes, and explain quick session resume with -c/--continue and session forking with --fork, /fork, or the F3 shortcut in /sessions.
 spec:
-  useWhen: "The user asks to change, hide, reorder, or configure the status line, status bar segments, compact mode, colors, or theme; asks how the interactive CLI is customized; wants to inspect or change sandboxing, isolation posture, excluded commands, or permission allow/deny rules from inside the REPL via /sandbox, /permissions, --sandbox, or ! commands; asks about quota windows, subscription-billed models, the /usage Quotas tab, or what the /model picker's context, alias, and pricing/quota columns mean; or asks about running TaskSmith headlessly or in CI via tasksmith exec, -p/--print, --input-format/--output-format jsonl or json, NDJSON control frames, headless slash commands, or exec exit codes."
-  keywords: [statusline, status line, status bar, segment, compact, theme, colors, cli settings, appearance, sandbox, /sandbox, permissions, /permissions, --sandbox, shell mode, ! command, excluded commands, quota, quotas, /usage, /model, subscription, rate limit, pricing, billing, exec, headless, --print, -p, one-shot, ci, automation, scripting, ndjson, jsonl, control frame, exit code, sdk, embedding]
+  useWhen: "The user asks to change, hide, reorder, or configure the status line, status bar segments, compact mode, colors, or theme; asks how the interactive CLI is customized; wants to inspect or change sandboxing, isolation posture, excluded commands, or permission allow/deny rules from inside the REPL via /sandbox, /permissions, --sandbox, or ! commands; asks about quota windows, subscription-billed models, the /usage Quotas tab, or what the /model picker's context, alias, and pricing/quota columns mean; asks about running TaskSmith headlessly or in CI via tasksmith exec, -p/--print, --input-format/--output-format jsonl or json, NDJSON control frames, headless slash commands, or exec exit codes; or asks to resume the last session with -c/--continue or to branch/fork a session with --fork, /fork, or the /sessions browser."
+  keywords: [statusline, status line, status bar, segment, compact, theme, colors, cli settings, appearance, sandbox, /sandbox, permissions, /permissions, --sandbox, shell mode, ! command, excluded commands, quota, quotas, /usage, /model, subscription, rate limit, pricing, billing, exec, headless, --print, -p, one-shot, ci, automation, scripting, ndjson, jsonl, control frame, exit code, sdk, embedding, resume, continue, -c, --continue, --fork, fork, /fork, branch, session browser, f3]
 ---
 
 # CLI Customizations
@@ -97,6 +97,26 @@ Quick rules:
   (`needs_input`) rather than hanging. Recommend `--input-format jsonl` for anything that may
   touch tools under `--mode ask`.
 - With `--output-format jsonl`, stdout carries frames only; never interleave prose with it.
+
+## Session resume & forking
+
+- `tasksmith -c` (also `--continue`, on the REPL, `exec`, and `-p`) resumes the workspace's most
+  recently updated top-level session without knowing its id. `--session <id>` wins over `-c`, and
+  `-c` with no sessions in the workspace quietly starts a fresh one — never promise it will error.
+- `/fork [title]` branches the current session into a new top-level session that starts from the
+  same conversation, then switches to it; `F3` in the `/sessions` browser forks the highlighted
+  session. An empty title derives `"<source title> (fork)"`.
+- `--fork` (REPL, `exec`, and `-p`) branches the session resolved by `--session` or `-c` before
+  the run attaches, so the source stays untouched; `--title` names the branch, and `--fork` with
+  no resolvable session is a usage error (exit `2`). Headless runs also accept `/fork [title]` as
+  a local slash command mid-session — with `--output-format jsonl` the event stream rebinds to
+  the fork from that point on.
+- A fork copies the conversation and permission grants but not pending permission prompts or
+  questions, subagents, or file-rollback history — reverting files stays with the originating
+  thread. Both timelines record a fork marker: the fork shows `⑂ Forked from "<source title>"`
+  and the source shows `⑂ Forked into "<fork title>"` at the branch point when reopened.
+  Forking is only allowed while the source session is idle; a running session returns a
+  conflict, so suggest cancelling or waiting first.
 
 ## Etiquette
 

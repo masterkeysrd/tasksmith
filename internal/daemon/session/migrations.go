@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 	`ALTER TABLE sessions ADD COLUMN parent_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE sessions ADD COLUMN work_dir TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_sessions_parent_id ON sessions(parent_id);`,
+	// 3: Add forked_from provenance column. Fork provenance deliberately does
+	// not reuse parent_id: a fork is a top-level thread, not a subagent, so it
+	// must stay outside the parent/child tree used for delegation and cascade
+	// deletion.
+	`ALTER TABLE sessions ADD COLUMN forked_from TEXT NOT NULL DEFAULT '';`,
 }
 
 // Migrate executes SQLite migrations for the session schema.

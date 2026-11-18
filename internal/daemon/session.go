@@ -203,6 +203,30 @@ func (r *workspaceRuntime) GetSession(ctx context.Context, id string) (*session.
 	return sess, nil
 }
 
+// LatestSessionMeta returns metadata for the most recently updated top-level
+// session without hydrating any session runtime, backing quick resume
+// (`-c` / `--continue`). It reports ErrSessionNotFound when the workspace has
+// no sessions, and overlays the live status when the newest session happens to
+// be resident.
+func (r *workspaceRuntime) LatestSessionMeta(ctx context.Context) (api.Session, error) {
+	if rt := r.SessionRuntime(); rt != nil && rt != r {
+		return rt.LatestSessionMeta(ctx)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return api.Session{}, err
+	}
+	dbSess, err := r.sessionStore.Latest(ctx)
+	if err != nil {
+		return api.Session{}, err
+	}
+	meta := session.ToAPISession(dbSess)
+	if live, ok := r.sessions.Snapshot().Get(dbSess.ID); ok {
+		meta = session.ToAPISession(live)
+	}
+	return meta, nil
+}
+
 // ListSessions lists all sessions for this workspace runtime.
 func (r *workspaceRuntime) ListSessions(ctx context.Context) ([]*session.Session, error) {
 	if rt := r.SessionRuntime(); rt != nil && rt != r {
@@ -261,6 +285,44 @@ func (r *workspaceRuntime) UpdateSession(ctx context.Context, id string, req api
 		return nil, err
 	}
 	return sess, nil
+}
+
+// ForkSession branches an existing session into a new top-level session that
+// starts from the source's full conversation, and registers it in SQLite and
+// the in-memory cache.
+func (r *workspaceRuntime) ForkSession(ctx context.Context, id string, req api.ForkSessionRequest) (*session.Session, error) {
+	if rt := r.SessionRuntime(); rt != nil && rt != r {
+		return rt.ForkSession(ctx, id, req)
+	}
+
+	r.reloadMu.RLock()
+	defer r.reloadMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, session.ErrEmptySessionID
+	}
+	source, err := r.getLiveSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	child, err := source.Fork(ctx, req.Title)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := child.CheckpointTo(ctx, r.sessionStore); err != nil {
+		_ = child.Close()
+		return nil, err
+	}
+
+	r.sessions.Save(child)
+
+	return child, nil
 }
 
 // DeleteSession terminates, cancels, and purges a session and its data from SQLite and disk.

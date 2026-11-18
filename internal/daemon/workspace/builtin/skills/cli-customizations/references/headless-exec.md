@@ -26,7 +26,9 @@ those files before quoting any flag, frame field, or exit code.
 | `--mode` | `default`, `accept_edits`, `plan`, `ask`, `auto` | permission mode |
 | `--sandbox` | `native`, `local` | new sessions only (immutable after creation) |
 | `--session` | session id | resume an existing session |
-| `--title` | string | new session title |
+| `--continue` (`-c`) | bool | resume the workspace's most recently updated session; ignored with `--session`, fresh when none exists |
+| `--fork` | bool | branch the session resolved by `--session` or `-c` and run on the fork; usage error when no session resolves |
+| `--title` | string | new session title (names the fork with `--fork`) |
 | `--max-turns` | integer | client-side cap; 0 = unlimited |
 | `--ephemeral` | bool | delete the session when the run ends |
 
@@ -79,8 +81,10 @@ With `--output-format jsonl`, stdout carries frames only; diagnostics go to stde
 
 `exec` dispatches these locally: `/model [id]`, `/models`, `/mode [mode]`,
 `/agent [name]`, `/agents`, `/effort [level|default]`, `/thinking [on|off|adaptive|default]`,
-`/budget [tokens|default]`, `/usage`, `/compact [focus]`, `/exit` (`/quit`), `/help`.
-Everything else — workspace commands and skills, `!` shell input, and `mcp:<server>:<prompt>`
+`/budget [tokens|default]`, `/usage`, `/compact [focus]`, `/fork [title]`, `/exit` (`/quit`),
+`/help`. `/fork` branches the current session and rebinds the run to the fork (rejected while
+the source session is running). Everything else — workspace commands and skills, `!` shell
+input, and `mcp:<server>:<prompt>`
 references — goes to the daemon. An unrecognized bare `/name` fails with `unknown slash
 command` (exit `1`); paths and `mcp:` references are never mistaken for commands.
 

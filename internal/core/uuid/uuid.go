@@ -2,6 +2,7 @@
 package uuid
 
 import (
+	"encoding/binary"
 	"fmt"
 	"time"
 
@@ -10,6 +11,23 @@ import (
 
 func NewString() string {
 	return uuid.Must(uuid.NewV7()).String()
+}
+
+// Monotonic builds a UUIDv7-shaped, lexicographically increasing ID from a
+// shared base timestamp and sequence number. Google's uuid.NewV7 only
+// guarantees millisecond resolution, so a burst of IDs generated within the
+// same millisecond could interleave; the sequence occupies the random prefix
+// instead, preserving generation order under lexicographic scans.
+func Monotonic(base time.Time, seq int) string {
+	var id uuid.UUID
+	ms := base.UnixMilli() + int64(seq/4096)
+	binary.BigEndian.PutUint64(id[:8], uint64(ms)<<16)
+	id[6] = 0x70 | byte(seq>>8&0x0F)
+	id[7] = byte(seq)
+	id[8] = 0x80
+	rnd := uuid.Must(uuid.NewRandom())
+	copy(id[9:], rnd[9:])
+	return id.String()
 }
 
 func Validate(val string) bool {

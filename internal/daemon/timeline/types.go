@@ -55,6 +55,7 @@ func (e Entry) Clone() Entry {
 	cp.CacheBroken = ptr.Clone(e.CacheBroken)
 	cp.TurnCompleted = ptr.Clone(e.TurnCompleted)
 	cp.Rule = ptr.Clone(e.Rule)
+	cp.Forked = ptr.Clone(e.Forked)
 	return cp
 }
 
@@ -201,6 +202,16 @@ func NewRuleEntry(rec api.RuleRecord) *Entry {
 		TimelineEntry: api.TimelineEntry{
 			Kind: api.TimelineKindRule,
 			Rule: &rec,
+		},
+	}
+}
+
+// NewForkedEntry creates an Entry initialized with a ForkRecord payload.
+func NewForkedEntry(rec api.ForkRecord) *Entry {
+	return &Entry{
+		TimelineEntry: api.TimelineEntry{
+			Kind:   api.TimelineKindForked,
+			Forked: &rec,
 		},
 	}
 }

@@ -77,6 +77,7 @@ func ToAPISession(sess *Session) api.Session {
 		Todos:              todos,
 		Queue:              queueItems,
 		ParentID:           sess.ParentID,
+		ForkedFrom:         sess.ForkedFrom,
 		WorkDir:            sess.WorkDir,
 		Subagents:          subagents,
 		Activity:           activity,

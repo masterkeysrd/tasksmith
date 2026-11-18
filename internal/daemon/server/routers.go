@@ -695,8 +695,10 @@ func (s *sessionRouter) initRoutes() {
 		PostRoute("/v1/sessions", s.postSessionCreate),
 		PostRoute("/v1/sessions/preview", s.postSessionPreview),
 		GetRoute("/v1/sessions", s.getSessionsList),
+		GetRoute("/v1/sessions/latest", s.getLatestSession),
 		GetRoute("/v1/sessions/{id}", s.getSession),
 		PatchRoute("/v1/sessions/{id}", s.patchSession),
+		PostRoute("/v1/sessions/{id}/fork", s.postFork),
 		DeleteRoute("/v1/sessions/{id}", s.deleteSession),
 		GetRoute("/v1/sessions/{id}/timeline", s.getTimeline),
 		PostRoute("/v1/sessions/{id}/send", s.postSend),
@@ -751,6 +753,22 @@ func (s *sessionRouter) getSessionsList(w http.ResponseWriter, r *http.Request) 
 	WriteJSON(w, http.StatusOK, sessions)
 }
 
+func (s *sessionRouter) getLatestSession(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.b.LatestSession(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	if sess == nil {
+		WriteJSON(w, http.StatusNotFound, api.ErrorResponse{
+			Code:    "not_found",
+			Message: "session: no sessions in this workspace",
+		})
+		return
+	}
+	WriteJSON(w, http.StatusOK, sess)
+}
+
 func (s *sessionRouter) getSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sess, err := s.b.GetSession(r.Context(), RequestWorkspace(r), id)
@@ -774,6 +792,21 @@ func (s *sessionRouter) patchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(w, http.StatusOK, sess)
+}
+
+func (s *sessionRouter) postFork(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	req, err := DecodeOptionalJSON[api.ForkSessionRequest](r)
+	if err != nil {
+		WriteBadRequest(w, err.Error())
+		return
+	}
+	sess, err := s.b.ForkSession(r.Context(), RequestWorkspace(r), id, req)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	WriteJSON(w, http.StatusCreated, sess)
 }
 
 func (s *sessionRouter) deleteSession(w http.ResponseWriter, r *http.Request) {

@@ -400,6 +400,61 @@ func TestExecCommandResumeSessionFlag(t *testing.T) {
 	}
 }
 
+func TestExecCommandForkFlagBranchesSession(t *testing.T) {
+	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
+
+	c, err := client.New(sockPath, client.WithCWD(wsDir))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+	source, err := c.CreateSession(context.Background(), api.CreateSessionRequest{
+		Title:  "source",
+		Config: api.SessionConfig{Model: "fake/fake-default-model"},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	out, errOut, code := runExecCLI(t, sockPath, wsDir, "", "--session", source.ID, "--fork", "--output-format", "json", "hello")
+	if code != exec.ExitOK {
+		t.Fatalf("exit code = %d (stderr=%q), want ok", code, errOut)
+	}
+	var res api.ExecResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &res); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if res.SessionID == source.ID {
+		t.Fatalf("--fork must run on a branch, got source session %q", res.SessionID)
+	}
+
+	fork, err := c.GetSession(context.Background(), res.SessionID)
+	if err != nil {
+		t.Fatalf("GetSession(fork): %v", err)
+	}
+	if fork.ForkedFrom != source.ID {
+		t.Fatalf("fork forked_from = %q, want source %q", fork.ForkedFrom, source.ID)
+	}
+	back, err := c.GetSession(context.Background(), source.ID)
+	if err != nil {
+		t.Fatalf("GetSession(source): %v", err)
+	}
+	if back.Status != api.StatusIdle {
+		t.Fatalf("source session status = %q after fork run, want idle", back.Status)
+	}
+}
+
+func TestExecCommandForkFlagWithoutSessionIsUsageError(t *testing.T) {
+	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
+
+	_, errOut, code := runExecCLI(t, sockPath, wsDir, "", "--fork", "hello")
+	if code != exec.ExitUsage {
+		t.Fatalf("exit code = %d (stderr=%q), want usage error", code, errOut)
+	}
+	if !strings.Contains(errOut, "--fork") {
+		t.Fatalf("stderr = %q, want it to name --fork", errOut)
+	}
+}
+
 func TestExecCommandEphemeralDeletesSession(t *testing.T) {
 	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
 

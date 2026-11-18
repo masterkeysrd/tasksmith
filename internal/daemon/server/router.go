@@ -158,6 +158,7 @@ func classifyError(err error) (int, string) {
 
 	case errors.Is(err, session.ErrSessionConflict),
 		errors.Is(err, session.ErrRevertConflict),
+		errors.Is(err, session.ErrSessionRunning),
 		errors.Is(err, broker.ErrExists),
 		errors.Is(err, tasks.ErrNotRunning),
 		strings.Contains(err.Error(), "session already has an active turn"):

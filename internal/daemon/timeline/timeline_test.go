@@ -282,6 +282,27 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "fork record",
+			makeEntry: func() *Entry {
+				return NewForkedEntry(api.ForkRecord{
+					Direction: api.ForkDirectionFrom,
+					SessionID: "sess-source",
+					Title:     "Source session",
+				})
+			},
+			verify: func(t *testing.T, original, loaded *Entry) {
+				if loaded.Kind != api.TimelineKindForked {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindForked)
+				}
+				if loaded.Forked == nil {
+					t.Fatal("loaded.Forked is nil")
+				}
+				if *loaded.Forked != *original.Forked {
+					t.Errorf("loaded.Forked = %+v, want %+v", *loaded.Forked, *original.Forked)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

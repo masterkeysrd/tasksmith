@@ -7,8 +7,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/extras/wind"
+	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
@@ -19,7 +25,7 @@ import (
 func TestRegistryBuiltinsAndLookup(t *testing.T) {
 	r := NewRegistry()
 
-	cmds := []string{"help", "mode", "model", "agent", "effort", "budget", "thinking", "theme", "new", "clear", "sessions", "changes", "revert", "exit", "permissions", "tasks", "daemon", "compact", "context", "workspace"}
+	cmds := []string{"help", "mode", "model", "agent", "effort", "budget", "thinking", "theme", "new", "clear", "fork", "sessions", "changes", "revert", "exit", "permissions", "tasks", "daemon", "compact", "context", "workspace"}
 	for _, name := range cmds {
 		cmd, ok := r.Lookup(name)
 		if !ok {
@@ -756,5 +762,126 @@ func TestRuleAndFileAutocomplete(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("expected rendered file completion view to contain %q, got:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestSessionBrowserRenderAndForkKeybinding(t *testing.T) {
+	store.ResetSession()
+	store.ResetStream()
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ResetSession()
+	defer store.ResetStream()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
+
+	var forkedID atomic.Value
+	mockHC := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet && req.URL.Path == "/v1/events" {
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			}
+			switch {
+			case req.Method == http.MethodGet && req.URL.Path == "/v1/sessions":
+				data, _ := json.Marshal([]api.Session{
+					{
+						ID:        "sess-1",
+						Title:     "Primary thread",
+						Config:    api.SessionConfig{Model: "anthropic/claude-sonnet-4-5"},
+						UpdatedAt: time.Now().UTC(),
+					},
+				})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+				}, nil
+			case req.Method == http.MethodPost && req.URL.Path == "/v1/sessions/sess-1/fork":
+				forkedID.Store("sess-1")
+				data, _ := json.Marshal(api.Session{
+					ID:         "sess-fork",
+					Title:      "Primary thread (fork)",
+					ForkedFrom: "sess-1",
+					Status:     api.StatusIdle,
+					Config:     api.SessionConfig{Mode: api.ModeDefault},
+				})
+				return &http.Response{
+					StatusCode: http.StatusCreated,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+				}, nil
+			case req.Method == http.MethodGet && req.URL.Path == "/v1/sessions/sess-fork":
+				data, _ := json.Marshal(api.Session{
+					ID:         "sess-fork",
+					Title:      "Primary thread (fork)",
+					ForkedFrom: "sess-1",
+					Status:     api.StatusIdle,
+					Config:     api.SessionConfig{Mode: api.ModeDefault},
+				})
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+				}, nil
+			case req.Method == http.MethodGet && req.URL.Path == "/v1/sessions/sess-fork/timeline":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("[]")),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+				}, nil
+			default:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("{}")),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+				}, nil
+			}
+		}),
+	}
+	testClient, err := client.New("/tmp/test-sessions.sock", client.WithHTTPClient(mockHC), client.WithCWD("/test/ws"))
+	if err != nil {
+		t.Fatalf("New client: %v", err)
+	}
+	store.SetClient(testClient)
+	store.EnqueueSlot(store.SlotItem{
+		ID:   "slot-sessions",
+		Kind: store.SlotKindPicker,
+		Data: SessionBrowser,
+	})
+
+	view := trail.SimpleFC("SessionBrowserTestApp", func() kitex.Node {
+		return SessionBrowser("slot-sessions")
+	})
+	app := testutils.StartApp(t,
+		wind.Provider(wind.ProviderProps{Client: wind.NewClient()}, view()),
+		100, 20,
+	)
+	t.Cleanup(app.Stop)
+
+	screen := app.WaitFor(func(s string) bool { return strings.Contains(s, "Primary thread") })
+	for _, want := range []string{"Sessions", "Primary thread", "f2", "Rename", "f3", "Fork", "f4", "Delete"} {
+		if !strings.Contains(screen, want) {
+			t.Fatalf("expected SessionBrowser to contain %q, got:\n%s", want, screen)
+		}
+	}
+
+	app.Press(key.Key{Code: key.KeyF3})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if st := store.GetSession(); st.Session != nil && st.Session.ID == "sess-fork" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if store.GetSlot().Active != nil {
+		t.Fatalf("expected slot to close after F3 fork, got %+v", store.GetSlot().Active)
+	}
+	if got, _ := forkedID.Load().(string); got != "sess-1" {
+		t.Fatalf("expected F3 to fork sess-1, got %q", got)
+	}
+	if st := store.GetSession(); st.Session == nil || st.Session.ID != "sess-fork" {
+		t.Fatalf("expected active session to switch to sess-fork, got %+v", st.Session)
 	}
 }

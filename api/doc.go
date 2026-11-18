@@ -35,6 +35,7 @@
 //   - [TimelineKindAgent]: active agent updates ([AgentChange]).
 //   - [TimelineKindMode]: permission mode transitions ([ModeChange]).
 //   - [TimelineKindPermission]: tool permission resolutions ([PermissionRecord]).
+//   - [TimelineKindForked]: session fork markers ([ForkRecord]).
 //
 // This package is a pure protocol contract and depends exclusively on the Go
 // standard library with zero internal or third-party dependencies.

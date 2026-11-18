@@ -102,6 +102,10 @@ type mockBackend struct {
 	getSessErr        error
 	updateSessResp    *api.Session
 	updateSessErr     error
+	latestSessResp    *api.Session
+	latestSessErr     error
+	forkSessResp      *api.Session
+	forkSessErr       error
 	deleteSessErr     error
 	timelineResp      []api.TimelineEntry
 	timelineErr       error
@@ -296,6 +300,14 @@ func (m *mockBackend) GetSession(ctx context.Context, workspace, id string) (*ap
 
 func (m *mockBackend) UpdateSession(ctx context.Context, workspace, id string, req api.UpdateSessionRequest) (*api.Session, error) {
 	return m.updateSessResp, m.updateSessErr
+}
+
+func (m *mockBackend) LatestSession(ctx context.Context, workspace string) (*api.Session, error) {
+	return m.latestSessResp, m.latestSessErr
+}
+
+func (m *mockBackend) ForkSession(ctx context.Context, workspace, id string, req api.ForkSessionRequest) (*api.Session, error) {
+	return m.forkSessResp, m.forkSessErr
 }
 
 func (m *mockBackend) DeleteSession(ctx context.Context, workspace, id string) error {
@@ -804,6 +816,50 @@ func TestSessionRouterEndpoints(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("send status = %d, want 202", rec.Code)
+	}
+
+	// Latest Session
+	mock.latestSessResp = &api.Session{ID: "sess-1", Title: "Test"}
+	req = httptest.NewRequest(http.MethodGet, "/v1/sessions/latest", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("latest session status = %d, want 200", rec.Code)
+	}
+
+	// Fork Session
+	mock.forkSessResp = &api.Session{ID: "sess-2", Title: "Test (fork)", ForkedFrom: "sess-1"}
+	req = httptest.NewRequest(http.MethodPost, "/v1/sessions/sess-1/fork", strings.NewReader(`{"title":"My fork"}`))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("fork session status = %d, want 201", rec.Code)
+	}
+	var forked api.Session
+	if err := json.Unmarshal(rec.Body.Bytes(), &forked); err != nil {
+		t.Fatalf("unmarshal forked session: %v", err)
+	}
+	if forked.ID != "sess-2" || forked.ForkedFrom != "sess-1" {
+		t.Errorf("forked session = %+v, want id sess-2 forked_from sess-1", forked)
+	}
+}
+
+func TestLatestSessionEndpointNotFoundWhenEmpty(t *testing.T) {
+	mock := &mockBackend{}
+	handler := setupTestServer(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/sessions/latest", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("latest session status = %d, want 404", rec.Code)
+	}
+	var errResp api.ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("unmarshal error response: %v", err)
+	}
+	if errResp.Code != "not_found" {
+		t.Errorf("error code = %q, want not_found", errResp.Code)
 	}
 }
 

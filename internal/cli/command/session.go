@@ -37,6 +37,15 @@ func (r *Registry) registerSessionCommands() {
 		},
 	})
 	r.Register(Command{
+		Name:        "fork",
+		Usage:       "/fork [title]",
+		Description: "Fork the current session into a new branch and switch to it",
+		Handler: func(args []string) error {
+			store.ForkSession("", strings.TrimSpace(strings.Join(args, " ")))
+			return nil
+		},
+	})
+	r.Register(Command{
 		Name:        "sessions",
 		Aliases:     []string{"session", "ls"},
 		Usage:       "/sessions [session_id]",
@@ -58,7 +67,7 @@ func handleSessions(args []string) error {
 	return nil
 }
 
-// SessionBrowser renders an interactive session browser with rename (f2) and delete (f4).
+// SessionBrowser renders an interactive session browser with rename (f2), fork (f3), and delete (f4).
 var SessionBrowser = trail.FC("SessionBrowser", func(slotID string) trail.Node {
 	c := store.Client()
 
@@ -178,8 +187,15 @@ var SessionBrowser = trail.FC("SessionBrowser", func(slotID string) trail.Node {
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "Switch"},
 		{Key: "f2", Label: "Rename"},
+		{Key: "f3", Label: "Fork"},
 		{Key: "f4", Label: "Delete"},
 		{Key: "esc", Label: "Cancel"},
+	}
+	pickerProps.Keys = map[string]func(uicomponents.Option){
+		"f3": func(opt uicomponents.Option) {
+			store.RemoveSlot(slotID)
+			store.ForkSession(opt.Value, "")
+		},
 	}
 	pickerProps.OnCancel = func() {
 		store.RemoveSlot(slotID)

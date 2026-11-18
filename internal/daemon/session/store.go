@@ -20,11 +20,17 @@ type ListFilter struct {
 	ParentID *string
 }
 
+// sessionColumns lists the sessions table columns in scanSession order.
+const sessionColumns = "id, title, config, permissions, parent_id, work_dir, forked_from, created_at, updated_at"
+
 // Store persists session metadata in SQLite.
 type Store interface {
 	Save(ctx context.Context, sess *Session) error
 	Get(ctx context.Context, id string) (*Session, error)
 	List(ctx context.Context, filter ListFilter) ([]*Session, error)
+	// Latest returns the most recently updated top-level (non-subagent)
+	// session, or ErrSessionNotFound when the workspace has none.
+	Latest(ctx context.Context) (*Session, error)
 	Delete(ctx context.Context, id string) error
 }
 
@@ -69,14 +75,15 @@ func (s *sqliteStore) Save(ctx context.Context, sess *Session) error {
 		return fmt.Errorf("session: marshal permissions: %w", err)
 	}
 
-	query := `INSERT INTO sessions (id, title, config, permissions, parent_id, work_dir, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	query := `INSERT INTO sessions (id, title, config, permissions, parent_id, work_dir, forked_from, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     title       = excluded.title,
     config      = excluded.config,
     permissions = excluded.permissions,
     parent_id   = excluded.parent_id,
     work_dir    = excluded.work_dir,
+    forked_from = excluded.forked_from,
     updated_at  = excluded.updated_at`
 
 	_, err = s.db.ExecContext(
@@ -88,6 +95,7 @@ ON CONFLICT(id) DO UPDATE SET
 		string(permsBytes),
 		snap.ParentID,
 		snap.WorkDir,
+		snap.ForkedFrom,
 		formatTime(createdAt),
 		formatTime(updatedAt),
 	)
@@ -100,7 +108,7 @@ ON CONFLICT(id) DO UPDATE SET
 func (s *sqliteStore) Get(ctx context.Context, id string) (*Session, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, title, config, permissions, parent_id, work_dir, created_at, updated_at FROM sessions WHERE id = ?`,
+		`SELECT `+sessionColumns+` FROM sessions WHERE id = ?`,
 		id,
 	)
 	sess, err := scanSession(row)
@@ -113,6 +121,24 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*Session, error) {
 	return sess, nil
 }
 
+// Latest returns the most recently updated top-level (non-subagent) session.
+// Subagent sessions are excluded because `--continue` resumes a human thread,
+// and the workspace database only ever holds this workspace's sessions.
+func (s *sqliteStore) Latest(ctx context.Context) (*Session, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT `+sessionColumns+` FROM sessions WHERE parent_id = '' ORDER BY updated_at DESC, id DESC LIMIT 1`,
+	)
+	sess, err := scanSession(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrSessionNotFound
+		}
+		return nil, fmt.Errorf("session: latest session: %w", err)
+	}
+	return sess, nil
+}
+
 func (s *sqliteStore) List(ctx context.Context, filter ListFilter) ([]*Session, error) {
 	var (
 		rows *sql.Rows
@@ -121,13 +147,13 @@ func (s *sqliteStore) List(ctx context.Context, filter ListFilter) ([]*Session, 
 	if filter.ParentID != nil {
 		rows, err = s.db.QueryContext(
 			ctx,
-			`SELECT id, title, config, permissions, parent_id, work_dir, created_at, updated_at FROM sessions WHERE parent_id = ? ORDER BY updated_at DESC, id DESC`,
+			`SELECT `+sessionColumns+` FROM sessions WHERE parent_id = ? ORDER BY updated_at DESC, id DESC`,
 			*filter.ParentID,
 		)
 	} else {
 		rows, err = s.db.QueryContext(
 			ctx,
-			`SELECT id, title, config, permissions, parent_id, work_dir, created_at, updated_at FROM sessions ORDER BY updated_at DESC, id DESC`,
+			`SELECT `+sessionColumns+` FROM sessions ORDER BY updated_at DESC, id DESC`,
 		)
 	}
 	if err != nil {
@@ -176,7 +202,7 @@ func scanSession(r rowScanner) (*Session, error) {
 		createdAtRaw string
 		updatedAtRaw string
 	)
-	if err := r.Scan(&sess.ID, &sess.Title, &configRaw, &permsRaw, &sess.ParentID, &sess.WorkDir, &createdAtRaw, &updatedAtRaw); err != nil {
+	if err := r.Scan(&sess.ID, &sess.Title, &configRaw, &permsRaw, &sess.ParentID, &sess.WorkDir, &sess.ForkedFrom, &createdAtRaw, &updatedAtRaw); err != nil {
 		return nil, err
 	}
 

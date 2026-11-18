@@ -24,7 +24,7 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - [ ] **Unified session modes & planning**: decoupled permission gates and behavioral postures (`default`, `accept_edits`, `plan`, `ask`, `auto`), mode-change pending approval unblocking, safe `<session-dir>/plans/` storage, `enter_plan_mode` / `exit_plan_mode`, and `/plan`
 - [x] **Headless, bidirectional stdio, & SDK execution**: one-shot and bidirectional streaming `tasksmith exec` / `-p` modes (`text`, `json`, and 1:1 `api/` `jsonl` over `stdin`/`stdout`) plus Go `client` SDK lifecycle helpers for CI, pipelines, and programmatic integrations
 - [ ] **Agent Client Protocol (`tasksmith acp`)**: JSON-RPC 2.0 stdio adapter over the shared local daemon for Zed, JetBrains, and Neovim with live TUI session sharing, tool diffs, and interactive permission prompts
-- [ ] **Quick session resume & forking**: `-c` / `--continue` flag for resuming the latest workspace session and `/fork` conversation branching
+- [x] **Quick session resume & forking**: `-c` / `--continue` flag for resuming the latest workspace session and `/fork` conversation branching
 - [ ] **Multimodal input**: image and PDF ingestion in `view`, `@` media attachments, and clipboard image paste in the composer
 - [ ] **Built-in `web_search` & CLI `auth`**: host-mediated web search tool and `tasksmith auth login|status|logout` subcommands
 - [ ] **WARP-managed `/providers` & deterministic `spec.enabled` policies**: interactive `/providers` browser, inline `F2` alias editor, and manifest-driven `spec.enabled` / `WORKSPACE.md` exclusions for providers, tools, and MCP servers

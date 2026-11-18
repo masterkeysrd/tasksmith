@@ -197,6 +197,26 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 			text = fmt.Sprintf("● Loaded Rule %s", rec.Rule)
 		}
 		return Notice(store.NoticeData{Text: text})
+	case api.TimelineKindForked:
+		if entry.Forked == nil {
+			return nil
+		}
+		rec := entry.Forked
+		switch rec.Direction {
+		case api.ForkDirectionInto:
+			if rec.Title != "" {
+				text = fmt.Sprintf("⑂ Forked into %q", rec.Title)
+			} else {
+				text = "⑂ Forked into a new session"
+			}
+		default:
+			if rec.Title != "" {
+				text = fmt.Sprintf("⑂ Forked from %q", rec.Title)
+			} else {
+				text = "⑂ Forked from another session"
+			}
+		}
+		return Notice(store.NoticeData{Text: text})
 	default:
 		text = "Timeline event: " + string(entry.Kind)
 	}

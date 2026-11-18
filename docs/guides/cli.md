@@ -60,6 +60,23 @@ To reconnect to an existing session, supply the `--session` flag:
 tasksmith --session 018f3a52-9b24-7800-842a-594247e62a1c
 ```
 
+To jump straight back into the workspace's most recently updated session without remembering its ID, use `-c` (`--continue`) — on the REPL, `exec`, or the `--print` one-shot:
+
+```bash
+tasksmith -c
+```
+
+`-c` is ignored when `--session` is given, and simply starts a fresh session when the workspace has none.
+
+To branch a resumed session instead of continuing it in place, add `--fork` — the run attaches to a new session that starts from the source's full conversation, leaving the source untouched (`--title` optionally names the branch):
+
+```bash
+tasksmith -c --fork
+tasksmith exec --session 018f3a52-9b24-7800-842a-594247e62a1c --fork "Try the other approach"
+```
+
+`--fork` needs a session to branch, so it is a usage error when neither `--session` nor `-c` resolves one. Inside a session, `/fork [title]` branches at any point — in the REPL it switches to the branch, and in headless `jsonl` runs the event stream follows the fork from that point on.
+
 When you exit a session, TaskSmith prints a goodbye block pairing the brand mark with the session's changes, cost (or remaining quota for subscription-billed providers), token totals, and the exact command needed to resume where you left off:
 
 ```text
@@ -165,8 +182,9 @@ Some built-in commands:
 | `/budget` | `/budget [tokens\|default]` | Show or set a model-supported thinking token budget. |
 | `/thinking` | `/thinking [on\|off\|adaptive\|default]` | Show or change a model-supported thinking toggle or adaptive strategy. |
 | `/mode` | `/mode [default\|accept_edits\|plan\|ask\|auto]` | Inspect or change the session permission mode. |
-| `/sessions` | `/sessions [session_id]` | Open the interactive session browser to switch, rename (`F2`), or delete (`F4`) sessions. |
+| `/sessions` | `/sessions [session_id]` | Open the interactive session browser to switch, rename (`F2`), fork (`F3`), or delete (`F4`) sessions. |
 | `/new` | `/new [model]` | Start a fresh session draft. |
+| `/fork` | `/fork [title]` | Branch the current session into a new top-level session that keeps the conversation, and switch to it. |
 | `/changes` | `/changes` | Open the interactive file changes browser. |
 | `/revert` | `/revert [path] [entry_id]` | Revert tracked file modifications for a specific path or the entire session. |
 | `/tasks` | `/tasks` | Open the background task monitor. |
@@ -426,7 +444,7 @@ Because events arrive as the same `api.Event` schema the TUI consumes, any proce
 
 ### Slash Commands & Shell Input Without the TUI
 
-Inside headless runs (including mid-session `send` frames), `/model`, `/models`, `/mode`, `/agent`, `/agents`, `/usage`, `/compact`, `/exit`, and `/help` work locally without starting a turn; workspace commands, skills, `!` shell input, and `mcp:<server>:<prompt>` references go through the daemon. An unrecognized bare `/name` fails fast with `unknown slash command` instead of being sent to the model. See [Slash Commands Without the TUI](../reference/exec.md#6-slash-commands-without-the-tui).
+Inside headless runs (including mid-session `send` frames), `/model`, `/models`, `/mode`, `/agent`, `/agents`, `/usage`, `/compact`, `/fork`, `/exit`, and `/help` work locally without starting a turn; workspace commands, skills, `!` shell input, and `mcp:<server>:<prompt>` references go through the daemon. An unrecognized bare `/name` fails fast with `unknown slash command` instead of being sent to the model. See [Slash Commands Without the TUI](../reference/exec.md#6-slash-commands-without-the-tui).
 
 ### Embedding (Go SDK)
 

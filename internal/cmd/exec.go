@@ -25,6 +25,8 @@ type execOptions struct {
 	mode         string
 	sandboxMode  string
 	sessionID    string
+	continueLast bool
+	forkSession  bool
 	title        string
 	maxTurns     int
 	ephemeral    bool
@@ -39,6 +41,8 @@ func bindExecFlags(cmd *cobra.Command, opts *execOptions) {
 	cmd.Flags().StringVar(&opts.mode, "mode", "", "Permission mode for the session (default, accept_edits, plan, ask, auto)")
 	cmd.Flags().StringVar(&opts.sandboxMode, "sandbox", "", "Sandbox isolation backend for new sessions: \"native\" or \"local\"")
 	cmd.Flags().StringVar(&opts.sessionID, "session", "", "Existing session ID to resume")
+	cmd.Flags().BoolVarP(&opts.continueLast, "continue", "c", false, "Resume the workspace's most recently updated session")
+	cmd.Flags().BoolVar(&opts.forkSession, "fork", false, "Branch the resumed session (--session or -c) and run on the fork")
 	cmd.Flags().StringVar(&opts.title, "title", "", "Session title when creating a new session")
 	cmd.Flags().IntVar(&opts.maxTurns, "max-turns", 0, "Stop the run after this many completed turns (0 = no limit)")
 	cmd.Flags().BoolVar(&opts.ephemeral, "ephemeral", false, "Delete the session after the run settles")
@@ -87,6 +91,8 @@ func (o *execOptions) toRunOptions(rootOpts *rootOptions, cmd *cobra.Command) (e
 		InputFormat:  inputFormat,
 		OutputFormat: outputFormat,
 		SessionID:    strings.TrimSpace(o.sessionID),
+		Continue:     o.continueLast,
+		Fork:         o.forkSession,
 		Title:        strings.TrimSpace(o.title),
 		MaxTurns:     o.maxTurns,
 		Ephemeral:    o.ephemeral,
@@ -173,6 +179,8 @@ func (p *printOptions) runExec(cmd *cobra.Command, rootOpts *rootOptions, replOp
 		mode:         p.mode,
 		sandboxMode:  replOpts.sandboxMode,
 		sessionID:    replOpts.sessionID,
+		continueLast: replOpts.continueLast,
+		forkSession:  replOpts.forkSession,
 		title:        replOpts.title,
 		maxTurns:     p.maxTurns,
 		ephemeral:    p.ephemeral,

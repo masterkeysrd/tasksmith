@@ -15,7 +15,7 @@ import (
 // (workspace commands, skills, MCP prompts) stays the single source of truth
 // for workflow behavior across clients.
 var localCommands = []string{
-	"model", "models", "mode", "agent", "agents", "effort", "thinking", "budget", "usage", "compact", "exit", "quit", "help",
+	"model", "models", "mode", "agent", "agents", "effort", "thinking", "budget", "usage", "compact", "fork", "exit", "quit", "help",
 }
 
 // newMessageID mints the uuid-v7 message id the daemon expects on sends.
@@ -76,6 +76,8 @@ func (r *run) localCommand(text string) (bool, error) {
 		return true, r.cmdUsage()
 	case "compact":
 		return true, r.cmdCompact(args)
+	case "fork":
+		return true, r.cmdFork(args)
 	default:
 		return false, nil
 	}
@@ -365,6 +367,25 @@ func (r *run) cmdCompact(args []string) error {
 		r.pendingSends--
 		return err
 	}
+	return nil
+}
+
+// cmdFork branches the active session into a new top-level session and
+// rebinds the run to the fork: subsequent turns (jsonl mode) and the terminal
+// result belong to the branch, while the source keeps its own history
+// untouched. The daemon rejects forking a session with a turn in flight, and
+// that conflict surfaces as a command error.
+func (r *run) cmdFork(args []string) error {
+	title := strings.TrimSpace(strings.Join(args, " "))
+	forked, err := r.c.ForkSession(r.ctx, r.sess.ID, api.ForkSessionRequest{Title: title})
+	if err != nil {
+		return err
+	}
+	r.sess = forked
+	if r.watchCancel != nil {
+		r.rebindMainWatch()
+	}
+	r.reportCommandData("/fork", fmt.Sprintf("forked session %s as %q.", forked.ID, forked.Title), forked, nil)
 	return nil
 }
 

@@ -79,6 +79,14 @@ type Options struct {
 
 	// SessionID resumes an existing session; empty creates a fresh one.
 	SessionID string
+	// Continue resolves an empty SessionID to the workspace's most recently
+	// updated top-level session (`-c` / `--continue`). A workspace without
+	// sessions silently falls back to a fresh session.
+	Continue bool
+	// Fork branches the resolved session (--session or -c) and runs on the
+	// branch instead of mutating the source (`--fork`). Forking a workspace
+	// with no sessions is a usage error.
+	Fork bool
 	// MaxTurns bounds how many daemon turn completions the run waits for
 	// before it stops (0 = unbounded). It is enforced client-side because the
 	// harness caps steps within a turn, not turns across a session.

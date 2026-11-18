@@ -1576,6 +1576,25 @@ func (d *Daemon) ListSessions(ctx context.Context, rawWS string) ([]api.Session,
 	return out, nil
 }
 
+// LatestSession returns metadata for the workspace's most recently updated
+// top-level session without hydrating session runtimes. It returns a nil
+// session when the workspace has no sessions.
+func (d *Daemon) LatestSession(ctx context.Context, rawWS string) (*api.Session, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	meta, err := rt.LatestSessionMeta(ctx)
+	if errors.Is(err, session.ErrSessionNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &meta, nil
+}
+
 func (d *Daemon) GetSession(ctx context.Context, rawWS, id string) (*api.Session, error) {
 	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
@@ -1598,6 +1617,23 @@ func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.Up
 	}
 
 	sess, err := rt.UpdateSession(ctx, id, req)
+	if err != nil {
+		return nil, err
+	}
+
+	out := session.ToAPISession(sess)
+	return &out, nil
+}
+
+// ForkSession branches a session into a new top-level session seeded with the
+// source's conversation.
+func (d *Daemon) ForkSession(ctx context.Context, rawWS, id string, req api.ForkSessionRequest) (*api.Session, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	sess, err := rt.ForkSession(ctx, id, req)
 	if err != nil {
 		return nil, err
 	}

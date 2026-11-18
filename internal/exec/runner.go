@@ -56,6 +56,11 @@ type run struct {
 	startCursor string
 	watchedSubs map[string]struct{}
 
+	// watchCancel aborts the main session watcher's subscription context.
+	// /fork cancels and replaces it so the watcher re-subscribes to the
+	// fork's stream topic without reporting a lost stream.
+	watchCancel context.CancelFunc
+
 	// Loop-owned turn state.
 	tracker        *turnTracker
 	permOwners     map[string]string
@@ -156,13 +161,36 @@ func (r *run) connect() error {
 	return nil
 }
 
-// resolveSession resumes --session (overlaying any flag config) or creates a
-// fresh session with the requested configuration.
+// resolveSession resumes --session or -c/--continue, branches them with
+// --fork, overlays any flag config, or creates a fresh session with the
+// requested configuration.
 func (r *run) resolveSession() error {
-	if id := strings.TrimSpace(r.opts.SessionID); id != "" {
-		sess, err := r.c.GetSession(r.ctx, id)
+	id := strings.TrimSpace(r.opts.SessionID)
+	if id == "" && r.opts.Continue {
+		latest, err := r.c.LatestSession(r.ctx)
 		if err != nil {
-			return fmt.Errorf("resume session %q: %w", id, err)
+			return fmt.Errorf("resolve latest session: %w", err)
+		}
+		if latest != nil {
+			id = latest.ID
+		}
+	}
+	if id != "" {
+		var (
+			sess *api.Session
+			err  error
+		)
+		if r.opts.Fork {
+			sess, err = r.c.ForkSession(r.ctx, id, api.ForkSessionRequest{Title: strings.TrimSpace(r.opts.Title)})
+			if err != nil {
+				return fmt.Errorf("fork session %q: %w", id, err)
+			}
+			id = sess.ID
+		} else {
+			sess, err = r.c.GetSession(r.ctx, id)
+			if err != nil {
+				return fmt.Errorf("resume session %q: %w", id, err)
+			}
 		}
 		if req := r.opts.Config.Sandbox; req != "" && sess.SandboxMode != "" && req != sess.SandboxMode {
 			r.warn(fmt.Sprintf("session %s already runs under the %s sandbox backend; --sandbox %s cannot be applied to an existing session", id, sess.SandboxMode, req))
@@ -179,6 +207,9 @@ func (r *run) resolveSession() error {
 		r.sess = sess
 		r.seedSessionPending(sess)
 		return nil
+	}
+	if r.opts.Fork {
+		return newUsageError("--fork needs a session to branch: combine it with --session or -c")
 	}
 
 	sess, err := r.c.CreateSession(r.ctx, api.CreateSessionRequest{
@@ -220,15 +251,32 @@ func (r *run) startWatcher() {
 	cursor := client.NewCursor()
 	r.since = cursor
 	r.startCursor = cursor
+	r.rebindMainWatch()
+	for i := range r.sess.Subagents {
+		r.ensureSubagentWatcher(r.sess.Subagents[i].ID)
+	}
+}
+
+// rebindMainWatch (re)starts the main session watcher goroutine subscribed to
+// the current session's stream topic. Cancelling the previous subscription
+// context makes the old watcher return without reporting a stream error, so a
+// /fork rebind switches the watched topic cleanly.
+func (r *run) rebindMainWatch() {
+	if r.watchCancel != nil {
+		r.watchCancel()
+	}
+	sessionID := r.sess.ID
+	watchCtx, cancel := context.WithCancel(r.ctx)
+	r.watchCancel = cancel
 	go func() {
 		for attempt := 0; ; attempt++ {
-			err := r.consumeStream()
-			if r.ctx.Err() != nil {
+			err := r.consumeStream(watchCtx, sessionID)
+			if watchCtx.Err() != nil || r.ctx.Err() != nil {
 				return
 			}
 			if client.IsNeedSync(err) {
 				r.setSince(client.NewCursor())
-				attempt = 0
+				attempt = -1
 			} else if attempt >= streamReconnectAttempts {
 				select {
 				case r.streamErr <- err:
@@ -243,9 +291,6 @@ func (r *run) startWatcher() {
 			}
 		}
 	}()
-	for i := range r.sess.Subagents {
-		r.ensureSubagentWatcher(r.sess.Subagents[i].ID)
-	}
 }
 
 // ensureSubagentWatcher subscribes to a child subagent's turn stream once so
@@ -313,11 +358,11 @@ func (r *run) isWatchedSubagent(id string) bool {
 // consumeStream iterates the session and session-metadata topics until the
 // iterator ends. TopicSessions lets non-interactive runs detect child subagents
 // waiting on permissions/questions without polluting the NDJSON output stream.
-func (r *run) consumeStream() error {
+func (r *run) consumeStream(watchCtx context.Context, sessionID string) error {
 	r.watchMu.Lock()
 	since := r.since
 	r.watchMu.Unlock()
-	for ev, err := range r.c.Watch(r.ctx, since, api.SessionStreamTopic(r.sess.ID), api.TopicSessions) {
+	for ev, err := range r.c.Watch(watchCtx, since, api.SessionStreamTopic(sessionID), api.TopicSessions) {
 		if err != nil {
 			return err
 		}

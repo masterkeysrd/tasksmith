@@ -20,6 +20,7 @@ const (
 	TimelineKindCacheBroken   TimelineKind = "cache_broken"
 	TimelineKindTurnCompleted TimelineKind = "turn_completed"
 	TimelineKindRule          TimelineKind = "rule"
+	TimelineKindForked        TimelineKind = "forked"
 )
 
 // CommandRecord captures a direct user shell command (!) and its output.
@@ -96,6 +97,25 @@ type RuleRecord struct {
 	Path    string `json:"path,omitempty"`
 }
 
+// ForkRecord captures a session fork marker. The forked session records the
+// source it branched from; the source session records the fork it produced.
+type ForkRecord struct {
+	// Direction distinguishes the two perspectives of the same fork event.
+	// "forked_from" marks the forked session, "forked_into" marks the source.
+	Direction string `json:"direction"`
+	// SessionID is the counterpart session of the fork event: the source for
+	// "forked_from" markers and the new fork for "forked_into" markers.
+	SessionID string `json:"session_id"`
+	// Title is the counterpart session's title at fork time.
+	Title string `json:"title,omitempty"`
+}
+
+// Fork marker directions of a [ForkRecord].
+const (
+	ForkDirectionFrom = "forked_from"
+	ForkDirectionInto = "forked_into"
+)
+
 // Turn completion statuses of a [TurnCompletedRecord].
 const (
 	TurnStatusDone     = "done"
@@ -139,4 +159,5 @@ type TimelineEntry struct {
 	CacheBroken   *CacheBrokenRecord   `json:"cache_broken,omitempty"`
 	TurnCompleted *TurnCompletedRecord `json:"turn_completed,omitempty"`
 	Rule          *RuleRecord          `json:"rule,omitempty"`
+	Forked        *ForkRecord          `json:"forked,omitempty"`
 }

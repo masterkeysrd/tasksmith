@@ -51,6 +51,8 @@ The following flags are accepted by `tasksmith` and `tasksmith repl` only — `t
 | Flag | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--session <id>` | | *(none)* | UUIDv7 of an existing session to resume immediately. |
+| `--continue` | `-c` | `false` | Resume the workspace's most recently updated top-level session (including forks). Ignored when `--session` is given; starts a fresh session when the workspace has none. |
+| `--fork` | | `false` | Branch the resolved session (`--session` or `-c`) and attach to the fork instead of mutating the source. `--title` names the fork. A usage error when no session resolves. |
 | `--agent <name>` | | `main` | Default agent persona to activate for newly initialized sessions. |
 | `--model <id>` | | Provider default | Upstream model identifier (e.g., `openai/gpt-5.5` or `ollama/qwen3.8`). |
 | `--title <title>` | | *(none)* | Optional human-readable title assigned to a newly created session. |
@@ -85,7 +87,8 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/clear`** | | *(none)* | Creates and transitions to a fresh draft session. |
 | **`/exit`** | `/quit`, `/q` | *(none)* | Gracefully terminates and exits the interactive REPL. |
 | **`/new`** | | `[model]` | Creates and transitions to a fresh draft session, optionally overriding the model. |
-| **`/sessions`** | `/session`, `/ls` | `[session_id]` | Switches to `session_id`, or opens the interactive session browser to switch, rename, or delete sessions. |
+| **`/fork`** | | `[title]` | Forks the current session into a new top-level session that starts from the same conversation, then switches to it. An optional title overrides the derived `"… (fork)"` name. |
+| **`/sessions`** | `/session`, `/ls` | `[session_id]` | Switches to `session_id`, or opens the interactive session browser to switch, rename, fork, or delete sessions. |
 | **`/changes`** | | *(none)* | Opens the interactive changes browser to inspect tracked file modifications, diffs, and hashes. |
 | **`/revert`** | | `[path] [entry_id]` | Reverts uncommitted file mutations for a specific file, change entry, or the entire session. |
 | **`/permissions`** | `/perm`, `/perms` | *(none)* | Opens the interactive permissions browser to inspect and edit project and global allow/deny rules. |
@@ -394,6 +397,7 @@ While browsing history, the composer's bottom border is replaced by a centered r
 | :--- | :--- | :--- |
 | `Enter` | Session Browser | Switches active workspace session to the selected session. |
 | `F2` | Session Browser | Prompts inline to rename the selected session title. |
+| `F3` | Session Browser | Forks the selected session into a new top-level session and switches to it. |
 | `F4` | Session Browser | Prompts confirmation (`y`/`Enter`) to permanently delete the selected session. |
 
 ### Changes Browser (`/changes`)
@@ -605,6 +609,7 @@ composition hides it.
 | :--- | :--- | :--- |
 | Spinner statistics | `(<elapsed> · ↑<input> ↓<output>)` | Elapsed time since the turn started streaming. `↑` and `↓` are the tokens sent and received in the turn, summed across its calls (not the context size): the session's token growth since the turn started plus the running usage of the in-flight call (`usage` on the stream chunk, cumulative per call). They start at zero. |
 | Turn summary line | `<Verb> for <elapsed> · ↑<input> ↓<output> · <cost> · done <time>` | `turn_completed` timeline entry written by the daemon when the turn ends. Canceled and failed turns use `Stopped after` and `Failed after`. Completed turns under 5 seconds are skipped. The cost part is omitted when every call was subscription-billed. |
+| Fork marker line | `⑂ Forked from "<title>"` / `⑂ Forked into "<title>"` | `forked` timeline entry written by the daemon when a session is forked. The forked session records `Forked from` naming the source; the source session records `Forked into` naming the new fork. |
 
 ## Usage Browser (`/usage`)
 
