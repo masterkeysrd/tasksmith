@@ -68,4 +68,4 @@ spec:
 ---
 
 Use the `edit` tool to perform targeted literal string replacements in an existing text file.
-Always read the file with `view` first. Provide `path`, the exact `old_text` (including surrounding context and indentation), and `new_text`. Set `replace_all` to `true` only when replacing every occurrence in the file.
+Always read the file with `view` first, include enough exact surrounding context and indentation for `old_text` to match uniquely, and set `replace_all: true` only when replacing every occurrence.

@@ -20,7 +20,7 @@ A command is an executable followed by arguments, not a shell command line. Task
 
 Standard output is returned as text. A nonzero exit reports standard error, standard output if standard error is empty, or the exit code if neither contains an error. The output schema is metadata, not output parsing or validation; an absent or unparseable schema defaults to a string schema. Execution is subject to the sandbox and permission system.
 
-For command templating references (`{{.Input.<field>}}`, `{{.Workspace.Dir}}`, `{{.Project.Dir}}`, `{{.Agent.Name}}`), schema authoring, and the eager/deferred partitioning rules, see [Custom tool manifests](tools.md).
+For command templating references (`{{.Input.<field>}}`, `{{.Workspace.Dir}}`, `{{.Project.Dir}}`, `{{.Agent.Name}}`), schema authoring, and the eager/deferred partitioning rules, see [Custom tool manifests](./tools.md).
 
 ### Safety annotations
 

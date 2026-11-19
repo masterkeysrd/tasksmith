@@ -303,6 +303,48 @@ func TestBuiltinSandboxPermissionReferences(t *testing.T) {
 			t.Fatalf("modes-and-planning reference lacks %q guidance", want)
 		}
 	}
+	quotasAuthRef, err := os.ReadFile(filepath.Join(builtinDir, "skills", "cli-customizations", "references", "models-quotas-and-auth.md"))
+	if err != nil {
+		t.Fatalf("synced cli-customizations models-quotas-and-auth reference missing: %v", err)
+	}
+	for _, want := range []string{"Quotas", "tasksmith auth", "/login", "--paste"} {
+		if !strings.Contains(string(quotasAuthRef), want) {
+			t.Fatalf("models-quotas-and-auth reference lacks %q guidance", want)
+		}
+	}
+	sessionsMediaRef, err := os.ReadFile(filepath.Join(builtinDir, "skills", "cli-customizations", "references", "sessions-and-media.md"))
+	if err != nil {
+		t.Fatalf("synced cli-customizations sessions-and-media reference missing: %v", err)
+	}
+	for _, want := range []string{"--continue", "/fork", "capability_mismatch", "Ctrl+V"} {
+		if !strings.Contains(string(sessionsMediaRef), want) {
+			t.Fatalf("sessions-and-media reference lacks %q guidance", want)
+		}
+	}
+	appearanceRef, err := os.ReadFile(filepath.Join(builtinDir, "skills", "cli-customizations", "references", "appearance.md"))
+	if err != nil {
+		t.Fatalf("synced cli-customizations appearance reference missing: %v", err)
+	}
+	for _, want := range []string{"statusline.json", "theme.json", "/theme", "extends"} {
+		if !strings.Contains(string(appearanceRef), want) {
+			t.Fatalf("appearance reference lacks %q guidance", want)
+		}
+	}
+
+	mainPrompt, err := resolved.Agent.Render(&warp.AgentRenderOptions{
+		Workspace: cat.WorkspaceSpec(),
+		Project:   cat.Project(),
+		Resolved:  resolved,
+		Globals:   cat.AgentRenderGlobals(resolved),
+	})
+	if err != nil {
+		t.Fatalf("render main agent: %v", err)
+	}
+	for _, unwanted := range []string{"<keywords>", "<globs>", "No specific skills required."} {
+		if strings.Contains(mainPrompt, unwanted) {
+			t.Fatalf("main agent prompt still renders redundant %q", unwanted)
+		}
+	}
 
 	sk, ok := cat.GetSkill("tasksmith-customizations")
 	if !ok {
@@ -341,8 +383,17 @@ func TestBuiltinSandboxPermissionReferences(t *testing.T) {
 		if err != nil || !strings.Contains(fbText, "references/sandbox-and-permissions.md") {
 			t.Fatalf("fallback render for %s: %v", name, err)
 		}
-		if name == "cli-customizations" && !strings.Contains(fbText, "references/headless-exec.md") {
-			t.Fatalf("fallback render for %s lacks headless-exec reference", name)
+		if name == "cli-customizations" {
+			for _, ref := range []string{
+				"references/appearance.md",
+				"references/headless-exec.md",
+				"references/models-quotas-and-auth.md",
+				"references/sessions-and-media.md",
+			} {
+				if !strings.Contains(fbText, ref) {
+					t.Fatalf("fallback render for %s lacks %s reference", name, ref)
+				}
+			}
 		}
 	}
 }

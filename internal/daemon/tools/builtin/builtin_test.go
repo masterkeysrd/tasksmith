@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -242,6 +243,46 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 	if !slices.Equal(gotNames, expected) {
 		t.Fatalf("expected resolved tools %v, got %v", expected, gotNames)
 	}
+}
+
+func TestBuiltinToolsInputSchemaEnums(t *testing.T) {
+	_, c, _, _, _ := setupBuiltinEnv(t, false)
+	defs := make(map[string]*jsonschema.Schema)
+	for _, def := range c.Definitions() {
+		defs[def.Name] = def.InputSchema
+	}
+
+	assertEnum := func(name string, got []any, want ...string) {
+		t.Helper()
+		strs := make([]string, len(got))
+		for i, v := range got {
+			strs[i], _ = v.(string)
+		}
+		if !slices.Equal(strs, want) {
+			t.Errorf("%s enum = %v, want %v", name, got, want)
+		}
+	}
+
+	askSchema := defs[builtin.ToolAskQuestion]
+	if askSchema == nil || askSchema.Properties["questions"] == nil || askSchema.Properties["questions"].Items == nil {
+		t.Fatalf("ask_question schema missing questions.items: %+v", askSchema)
+	}
+	assertEnum("ask_question.questions[].type", askSchema.Properties["questions"].Items.Properties["type"].Enum,
+		"single", "multi", "text", "confirm")
+
+	todosSchema := defs[builtin.ToolTodos]
+	if todosSchema == nil || todosSchema.Properties["todos"] == nil || todosSchema.Properties["todos"].Items == nil {
+		t.Fatalf("todos schema missing todos.items: %+v", todosSchema)
+	}
+	assertEnum("todos.todos[].status", todosSchema.Properties["todos"].Items.Properties["status"].Enum,
+		"pending", "in_progress", "completed")
+
+	tasksSchema := defs[builtin.ToolTasks]
+	if tasksSchema == nil || tasksSchema.Properties["action"] == nil {
+		t.Fatalf("tasks schema missing action: %+v", tasksSchema)
+	}
+	assertEnum("tasks.action", tasksSchema.Properties["action"].Enum,
+		"list", "status", "kill", "send_input")
 }
 
 func TestReadOnlyToolsPrepareEvaluateExecute(t *testing.T) {

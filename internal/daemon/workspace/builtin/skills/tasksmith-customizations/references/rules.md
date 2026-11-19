@@ -9,7 +9,7 @@ Rules are discovered recursively in user, workspace, project, and system resourc
 TaskSmith resolves them against the active agent and injects them in two ways:
 
 - **Always-on** rules (`triggers.always: true`) are rendered into a `<workspace_rules>` block in the static system prompt, so they sit in the cached prefix on every turn.
-- **Conditional** rules appear only as a name-and-trigger entry in `<available_rules>`. The agent loads the body with `load_rule` when relevant, or the harness injects it automatically when a trigger fires.
+- **Conditional** rules appear in `<available_rules>` with only `name`, `description`, and `useWhen` (`globs`, `tools`, and `keywords` are evaluated directly by the harness rather than rendered into the static prompt). The agent loads the body proactively with `load_rule` when `description`/`useWhen` matches, or the harness injects/suggests it automatically when a trigger fires.
 
 An injection writes the rendered body into a hidden `<system_reminders>` message and emits a `● Loaded Rule …` line in the transcript, so the user sees it without the raw XML appearing in the conversation. Each rule is injected at most once per compaction epoch; loaded and suggested sets reset on compaction, so long sessions do not accumulate stale rule bodies.
 

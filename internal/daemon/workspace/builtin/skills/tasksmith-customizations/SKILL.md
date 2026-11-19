@@ -4,10 +4,10 @@ kind: Skill
 metadata:
   name: tasksmith-customizations
   displayName: TaskSmith Customizations
-  description: Author, configure, and maintain TaskSmith workspace resources including Rules, Skills, Agents, Commands, Decisions, Tools, MCP servers, Model Providers, Plugins, and WORKSPACE.md / AGENTS.md files, plus daemon-side sandbox and permission configuration (sandbox.json isolation posture and permissions.json rules).
+  description: Author and configure TaskSmith WARP workspace resources (WORKSPACE.md, AGENTS.md, Rule, Skill, Agent, Command, Decision, Tool, MCP, ModelProvider, Plugin) and daemon isolation/policy files (sandbox.json and permissions.json).
 spec:
-  useWhen: "Creating, editing, or configuring TaskSmith rules (*.rule.md), skills (SKILL.md), agents (*.agent.md), commands (*.command.md), decisions (*.decision.md), custom tools (*.tool.md), MCP servers, model providers (*.provider.yaml), plugins (PLUGIN.md or PLUGIN.yaml), WORKSPACE.md, or AGENTS.md; or configuring sandboxing, host path access (allowWrite/denyWrite/denyRead/allowRead), network domain filtering (open/allowlist/disabled), excludedCommands, or permission allow/deny rules."
-  keywords: [rule, rules, skill, agent, subagent, command, decision, tool, mcp, provider, plugin, workspace.md, agents.md, sandbox, sandbox.json, permissions, permissions.json, allowwrite, denywrite, denyread, allowread, allowlist, excludedcommands, network, isolation, model tiers, "@fast", "@balanced", "@smart", "@flagship", "@inherit", modelaliases]
+  useWhen: "Creating, editing, or troubleshooting *.rule.md, SKILL.md, *.agent.md, *.command.md, *.decision.md, *.tool.md, MCP servers, *.provider.yaml, plugins, WORKSPACE.md, AGENTS.md, model tiers (@fast/@balanced/@smart/@flagship), sandbox path/network/excludedCommands rules, or permission allow/deny policies."
+  keywords: [rule, skill, agent, subagent, command, decision, tool, mcp, provider, plugin, workspace.md, agents.md, sandbox.json, permissions.json, allowwrite, denywrite, denyread, allowread, excludedcommands, "@fast", "@balanced", "@smart", "@flagship", "@inherit", modelaliases]
 ---
 
 # TaskSmith Customizations

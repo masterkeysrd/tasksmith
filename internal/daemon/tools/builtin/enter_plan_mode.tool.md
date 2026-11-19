@@ -36,14 +36,9 @@ spec:
       - instructions
 ---
 
-Transition the current session into `plan` mode so you can investigate the codebase and produce a structured implementation plan before modifying project code.
+Transition the current session into `plan` mode (idempotent; returns `plans_dir`) to investigate the codebase and produce a structured plan before modifying project code.
 
-<when_to_use>
-- Non-trivial implementation tasks with architectural choices, multiple affected components, or ambiguous requirements where alignment on a plan saves rework.
-- When the user asks to plan or design an approach before making changes.
-</when_to_use>
-
-<how_it_works>
-- Calling `enter_plan_mode` is idempotent: if the session is already in `plan` mode, it confirms the active mode and returns the session's safe plans directory (`plans_dir`).
-- While in `plan` mode, investigate using read-only tools, clarify ambiguities via `ask_question`, ask the user via `ask_question` whether to save the plan document in `plans_dir` or in the current workspace directory, write the plan file, and call `exit_plan_mode` with its `path` for review.
-</how_it_works>
+<guidelines>
+- **When to use**: Non-trivial tasks with architectural tradeoffs, multiple affected components, or ambiguous requirements, or whenever the user asks to plan first.
+- **Workflow**: Explore using read-only tools, clarify ambiguities via `ask_question`, ask via `ask_question` whether to save the plan in `plans_dir` or the workspace directory, write the plan file, and call `exit_plan_mode` with its `path` for review.
+</guidelines>

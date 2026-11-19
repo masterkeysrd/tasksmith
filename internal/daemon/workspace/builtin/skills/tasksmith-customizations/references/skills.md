@@ -6,7 +6,7 @@ A Skill packages specialized instructions and optional supporting files. Its met
 
 Skills are normally stored at `.agents/skills/<name>/SKILL.md` in a workspace or project, or under `$XDG_CONFIG_HOME/tasksmith/agents/skills/` for a user. They follow the resource hierarchy and can also be provided by the system or workspace plugins. Supporting references and scripts live alongside `SKILL.md`; they are not automatically included in the instructions.
 
-The main agent receives metadata for its resolved skills. `useWhen` and `keywords` help the model decide when a skill is relevant; they are not a deterministic activation engine. The `load_skill` tool accepts an accessible skill name and arguments, renders the instructions, and returns both the text and the skill directory for reading supporting files. It rejects skills outside the agent's resolved set.
+The main agent receives `<available_skills>` metadata (`name`, `description`, `useWhen`, and argument declarations) for its resolved skills; `keywords` is kept for catalog/UI metadata and is not rendered into the model prompt. `description` and `useWhen` help the model decide when a skill is relevant; they are not a deterministic activation engine. The `load_skill` tool accepts an accessible skill name and arguments, renders the instructions, and returns both the text and the skill directory for reading supporting files. It rejects skills outside the agent's resolved set.
 
 A user can also invoke a skill with `/name` and arguments. A matching Command is resolved first, so it takes precedence over a Skill with the same slash name. The rendered skill instructions are then included in the user message. Slash invocation uses workspace lookup, whereas `load_skill` checks the agent's resolved skill set.
 
@@ -14,8 +14,10 @@ A user can also invoke a skill with `/name` and arguments. A matching Command is
 
 Skills give workspaces a two-stage progressive-disclosure mechanism:
 
-1. **Before invocation**: Only `metadata.name`, `metadata.description`, `spec.useWhen`, `spec.keywords`, and argument metadata appear in `<available_skills>`. Write `description` and `useWhen` as crisp trigger conditions so the model knows *when* to call `load_skill` without needing the body up front.
-2. **After invocation**: Keep `SKILL.md` itself focused on core mental models, decision trees, and workflow steps. When a skill covers multiple subtopics, large schemas, or lengthy examples, place them in sibling `references/*.md` files (or helper scripts under `scripts/`) and link them in a compact table inside `SKILL.md` so the agent reads only the specific reference file its current task needs.
+1. **Before invocation (`description` + `useWhen` in `<available_skills>`)**: Only `metadata.name`, `metadata.description`, `spec.useWhen`, and argument metadata are rendered into the system prompt on every turn. Keep both fields concise (1–2 sentences each) with **complementary, non-duplicative roles** — neither vague nor a 150-word flag dump:
+   - **`metadata.description`** (*what it covers*): Name the concrete domain, files, or surfaces inside the skill once so both `/skills` and the model see its scope (e.g., *"Author PostgreSQL schema migrations, concurrent indexes, and safe column rollouts."*).
+   - **`spec.useWhen`** (*when to load it*): State the user intents, tasks, or file patterns that require calling `load_skill`, without repeating `description` word-for-word (e.g., *"Creating, reviewing, or troubleshooting SQL migration files or table schema changes."*).
+2. **After invocation (`SKILL.md` front page → `references/*.md`)**: Treat `SKILL.md` as a compact front page (~40–80 lines) holding only core mental models, non-negotiable guardrails, and a routing table to sibling `references/*.md` files (or `scripts/`). Place detailed schemas, flag/keybinding tables, protocol frames, and lengthy examples inside `references/*.md` so the agent reads only the specific reference file its current task needs.
 
 ## Definition
 

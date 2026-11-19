@@ -78,7 +78,4 @@ spec:
       - hash
 ---
 
-Use the `view` tool to read the contents of a file in the workspace.
-For text files (including `.svg`), specify `path` (relative to the workspace root or an absolute path inside the workspace) and optional `offset` (1-based start line) and `limit` (maximum number of lines to read).
-For supported media files (PNG/JPEG/WebP/GIF images, PDFs, and WAV/MP3/MP4/OGG/FLAC audio), `offset` and `limit` are ignored; for PDFs you may optionally specify `pages` (e.g., `"1-10"`).
-Always read a file with `view` before modifying it with `edit` or overwriting it with `write` or `remove`.
+Read a workspace file: returns numbered lines for text files (including `.svg`, using optional `offset` and `limit`) or attaches supported media (PNG/JPEG/WebP/GIF, PDF with optional `pages`, WAV/MP3/MP4/OGG/FLAC). Always read an existing file with `view` before `edit`, `write` overwrite, or `remove`.

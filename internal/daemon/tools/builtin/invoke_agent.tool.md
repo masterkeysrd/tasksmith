@@ -29,7 +29,7 @@ spec:
         description: "Workspace mode for the subagent: 'inherit' (default, shares current working directory) or 'worktree' (creates an isolated git worktree)."
       model:
         type: string
-        description: "Optional model override for the subagent: a tier alias ('@fast', '@balanced', '@smart', '@flagship', '@default'), '@inherit' to reuse this session's model, or a provider/model identifier. Must be permitted by the subagent's spec.models allowlist when it declares one."
+        description: "Optional model override ('@fast', '@balanced', '@smart', '@flagship', '@default', '@inherit', or 'provider/model'); omit to use the subagent's default."
     required:
       - agent
       - title
@@ -67,9 +67,9 @@ spec:
 Spawn an autonomous specialized subagent asynchronously in an isolated child session.
 
 <guidelines>
-- **Roster Only**: Only invoke subagents explicitly available in your roster (such as `<available_subagents>`). Never invent or guess subagent names.
-- **Self-Contained Prompts**: Each subagent runs in an isolated child session without your conversation history. Provide `title` (concise 3-6 word UI summary) and a clear, self-contained `prompt` with relevant file paths, constraints, and expected output. If a skill applies, instruct the subagent to load it directly rather than summarizing it.
-- **Model Routing**: Omit `model` to run the subagent on its default model (the first resolvable entry in its `spec.models` / `<allowed_models>`) — prefer omitting it over passing the default explicitly, since a tier alias may be unconfigured in this workspace. Pass `model` only to deviate: a tier alias (`@fast`, `@balanced`, `@smart`, `@flagship`, `@default`), `@inherit` to reuse your current session model, or an explicit `provider/model` ID (discover valid IDs with `manage_agents` `action: "models"` instead of guessing). When a subagent declares `<allowed_models>`, only matching references are accepted; a subagent without `<allowed_models>` accepts any model.
-- **Workspace Isolation**: Use `workspace: "inherit"` (the default) to share the current working directory, or `workspace: "worktree"` to run risky refactors or parallel conflicting edits in an isolated git worktree.
-- **Asynchronous Execution**: Subagents execute in parallel in the background. When a subagent turn finishes, the system automatically delivers a `<subagent_completed>` notification to your execution queue and wakes you up. Do NOT poll `manage_agents` `status` in a loop; continue independent work or stop calling tools to wait.
+- **Roster Only**: Only invoke subagents listed in `<available_subagents>`; never invent subagent names.
+- **Self-Contained Prompts**: Child sessions do not inherit your conversation history — provide a concise `title` (`3–6` words) and a self-contained `prompt` with relevant file paths, constraints, and expected output. If a skill applies, instruct the subagent to call `load_skill` directly rather than summarizing it.
+- **Model Routing**: Omit `model` to run on the subagent's default model — prefer omitting `model` over passing `<default_model>` explicitly, since a tier alias may be unconfigured in this workspace (omitting falls back cleanly, whereas an unconfigured explicit alias errors). Pass `model` only to deviate: a tier alias (`@fast`, `@balanced`, `@smart`, `@flagship`, `@default`), `@inherit`, or a `provider/model` ID verified via `manage_agents` `action: "models"` (subject to `<allowed_models>` when declared).
+- **Workspace Isolation**: Use `workspace: "inherit"` (default) to share the current working directory, or `workspace: "worktree"` to isolate risky refactors or parallel conflicting edits in a git worktree.
+- **Asynchronous Execution**: Subagents run in parallel in the background and automatically deliver `<subagent_completed>` to wake you up when done — do **not** poll `manage_agents` `status` in a loop.
 </guidelines>

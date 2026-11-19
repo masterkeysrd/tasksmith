@@ -66,17 +66,9 @@ spec:
       - results
 ---
 
-Search the web and return a list of results with titles, URLs, and snippets.
-
-<when-to-use>
-- Looking up external libraries, APIs, or tools you are unfamiliar with.
-- Finding documentation, changelogs, or release notes for a dependency.
-- Researching error messages or issues that are not explained by the codebase.
-- Verifying facts or current best practices that may have changed over time.
-</when-to-use>
+Search the web and return result titles, URLs, and snippets.
 
 <guidelines>
-- Results are summaries only — use `web_fetch` on a result URL to retrieve the full page content.
-- Prefer codebase tools (`grep`, `glob`, `view`) over web search for anything that can be answered from the project itself.
-- Narrow noisy queries with `allowed_domains` (for example official documentation hosts) or drop known junk sources with `blocked_domains`.
+- **When to use**: External libraries/APIs, dependency changelogs/docs, unfamiliar error messages, or facts not in the codebase — prefer `grep`, `glob`, and `view` for anything answerable from the repository itself.
+- **Follow-up & filtering**: Results are snippets only; call `web_fetch` on promising URLs to read full pages, and use `allowed_domains` or `blocked_domains` to narrow noisy queries.
 </guidelines>

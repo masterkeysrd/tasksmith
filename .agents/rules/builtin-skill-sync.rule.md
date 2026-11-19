@@ -61,12 +61,15 @@ changes that leave user-facing behavior and schemas unchanged.
 
 ## 2. Authoring and verification checklist
 
-- **Keep triggers discoverable**: when adding a new configuration topic, update `SKILL.md`'s
-  `metadata.description`, `spec.useWhen`, `spec.keywords`, and reference index so the agent loads
-  the skill when users ask about the feature.
-- **Put detail in `references/*.md`**: keep `SKILL.md` concise and place full field tables,
-  validation rules, and examples in `references/*.md`, verified against real Go structs and CLI
-  handlers (never fabricate flags, keys, or defaults).
+- **Complementary, high-signal `description` + `useWhen`**: both fields are rendered into
+  `<available_skills>` on every turn (`spec.keywords` is not rendered into the prompt). Keep each to
+  1–2 crisp sentences without over-simplifying: `metadata.description` names the concrete surfaces
+  and files the skill covers once, while `spec.useWhen` states the user intents/tasks that trigger
+  loading it without repeating `description` word-for-word or dumping exhaustive flag lists.
+- **Progressive-disclosure `SKILL.md` front pages**: keep each `SKILL.md` compact (~40–80 lines) —
+  scope, non-negotiable safety/credential guardrails, and the `references/*.md` routing table. Place
+  detailed schemas, keymaps, quota/exit-code tables, and examples in `references/*.md` verified
+  against real Go structs and CLI handlers (never fabricate flags, keys, or defaults).
 - **Zero machine-local paths**: use portable paths (`~/.config/tasksmith/`,
   `$XDG_CONFIG_HOME/tasksmith/`, `$XDG_DATA_HOME/tasksmith/`, `<workspace-root>/`) and relative
   links only; never write machine-local absolute paths or local-filesystem URI schemes.

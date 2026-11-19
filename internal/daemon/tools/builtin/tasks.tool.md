@@ -94,17 +94,10 @@ spec:
         description: Human-readable status or action summary.
 ---
 
-Manage and monitor background tasks in the current session.
-
-<actions>
-- `list`: List background tasks in the session along with their status, duration, and log file paths.
-- `status`: Retrieve the current execution state, exit code, `log_path`, and the last `limit` lines (default 100) of output for `task_id`. You can also use `view` (with `offset` and `limit`) or `grep` directly on `log_path` to search large logs.
-- `kill`: Terminate a running background task (`task_id`).
-- `send_input`: Write `input` to the standard input (`stdin`) of a running task (`task_id`). Only tasks that read stdin interactively (background bash commands) accept data; tasks whose input is fixed at launch (such as custom tools) report that input is unsupported.
-</actions>
+Manage and monitor background tasks in the current session (`list`, `status`, `kill`, `send_input`).
 
 <guidelines>
-- The system automatically notifies and wakes you up when a background task finishes execution. Do NOT poll `status` in a loop waiting for completion. Simply perform other work or stop calling tools and wait for the completion notification.
-- Use `status` when you need to check intermediate logs of a long-running server/watcher or inspect output on demand.
-- Use `kill` to stop background servers or watchers once you are done testing them.
+- **No polling**: The system automatically notifies and wakes you up when a background task finishes — do **not** poll `status` in a loop waiting for completion.
+- **Logs (`status`)**: Returns execution state, exit code, `log_path`, and trailing `limit` lines (default 100); use `view` (`offset`/`limit`) or `grep` directly on `log_path` to search large logs.
+- **Interactive stdin & cleanup**: `send_input` only works on tasks reading stdin interactively (background `bash` commands; fixed-input custom tools reject stdin). Use `kill` to stop background servers or watchers once testing is complete.
 </guidelines>

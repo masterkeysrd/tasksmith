@@ -73,5 +73,4 @@ spec:
       - entries
 ---
 
-Use the `ls` tool to inspect directory entries inside the workspace.
-You can optionally set `path` (defaults to `.`), `recursive`, `max_depth`, `include_hidden`, `ignore` glob patterns, and `limit`.
+Inspect directory entries inside the workspace (`path` defaults to `.`; use `glob` when searching for files by wildcard pattern across subdirectories).

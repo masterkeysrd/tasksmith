@@ -57,5 +57,4 @@ spec:
       - matches
 ---
 
-Use the `glob` tool to locate files by name or path pattern (such as `**/*.go` or `src/*.ts`).
-Provide a `pattern` and optional `path`, `include_hidden`, `ignore` patterns, and `limit`.
+Locate workspace files by name or path glob `pattern` (such as `**/*.go` or `src/*.ts`); use `grep` when searching file contents.

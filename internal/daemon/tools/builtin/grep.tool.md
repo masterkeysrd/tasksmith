@@ -85,5 +85,4 @@ spec:
       - matches
 ---
 
-Use the `grep` tool to search across text files for lines matching a regular expression `pattern`.
-You can scope the search with `path` and `include` file globs, enable `case_insensitive` matching, request surrounding `context_lines`, or cap results with `limit`.
+Search workspace text files for lines matching a regular expression `pattern` (narrow large searches with `path` or `include` file globs).

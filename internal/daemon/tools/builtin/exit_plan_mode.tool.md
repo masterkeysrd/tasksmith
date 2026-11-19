@@ -43,8 +43,7 @@ spec:
 
 Submit a finished plan document for user review and exit `plan` mode once approved.
 
-<how_it_works>
+<guidelines>
 - `path` is required and must point to an existing plan file inside the workspace or the session's `plans` directory.
-- Execution pauses while the user reviews the plan and chooses whether to approve (switching to `accept_edits`, `default`, or `auto`) or keep planning with feedback.
-- If the user chooses to keep planning, stay in `plan` mode, incorporate their feedback into the plan document, and call `exit_plan_mode` again when ready.
-</how_it_works>
+- Execution pauses while the user chooses to approve (switching to `accept_edits`, `default`, or `auto`) or keep planning with feedback (stay in `plan` mode, incorporate feedback into the plan file, and call `exit_plan_mode` again).
+</guidelines>

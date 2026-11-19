@@ -245,6 +245,7 @@ func New(cfg Config) ([]tools.Tool, error) {
 				} else {
 					meta.Description = wsTool.Metadata.Description
 				}
+				meta.InputSchema = wsTool.Spec.InputSchema
 				if wsTool.Spec.Annotations != nil {
 					meta.Annotation = tool.Annotation{
 						IsOpenWorld:  wsTool.Spec.Annotations.IsOpenWorld,

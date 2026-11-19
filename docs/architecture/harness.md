@@ -154,7 +154,7 @@ Workspace rules and skills must reach the model without paying for their full te
 #### 1. Two-Tier Delivery
 | Tier | Location | Contents | Cost |
 | --- | --- | --- | --- |
-| **Discovery** | System prompt (static prefix) | `<available_skills>` and `<available_rules>` indexes — name, description, trigger keywords, usage conditions — plus the full bodies of always-on rules rendered once into `<workspace_rules>` | Billed once for the prompt prefix; stable across turns, so it stays cache-friendly |
+| **Discovery** | System prompt (static prefix) | `<available_skills>` and `<available_rules>` indexes — `name`, `description`, and `useWhen` usage conditions (`keywords`, `globs`, and `tools` stay in memory for harness matching) — plus the full bodies of always-on rules rendered once into `<workspace_rules>` | Billed once for the prompt prefix; stable across turns, so it stays cache-friendly |
 | **Payload** | Message history (appended) | Full conditional-rule and user-attached (`@rule:`, `@skill:`, `@<file>`, `@mcp:`) bodies inside a `<system_reminders>` message; model-pulled skill bodies returned as `load_skill` tool results | Billed only for resources the current task actually needs |
 
 Because the discovery tier does not grow with usage, a workspace can declare many rules and skills while each turn pays only for the index.

@@ -92,12 +92,5 @@ spec:
       - message
 ---
 
-Manage task checklist items and progress tracking for the current session.
-
-Use the `todos` tool to maintain an explicit, ordered checklist of tasks when planning or executing multi-step operations.
-
-Rules:
-- Provide the entire list of todos on each invocation.
-- At most one item should have `status: "in_progress"` at any time.
-- Provide `active_text` describing the immediate work (e.g. "Running unit tests"). This is displayed in the user interface spinner while work is ongoing.
-- Mark items as `completed` as soon as their work is finished.
+Maintain the session's ordered task checklist for multi-step operations.
+Pass the complete list of `todos` on each call, keep at most one item `in_progress` at a time (with a present-tense `active_text` for the live spinner), and mark items `completed` immediately as they finish.

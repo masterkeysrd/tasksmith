@@ -173,4 +173,4 @@ Custom tools are deferred by default. Listing the tool's name in the agent's `sp
 
 ## MCP Tools
 
-`MCP` resources describe external servers and are covered in [tools-and-mcp.md](tools-and-mcp.md). Tools exposed by an MCP server follow the same eager/deferred partitioning as custom tools and are deferred by default.
+`MCP` resources describe external servers and are covered in [tools-and-mcp.md](./tools-and-mcp.md). Tools exposed by an MCP server follow the same eager/deferred partitioning as custom tools and are deferred by default.

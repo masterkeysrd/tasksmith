@@ -100,6 +100,9 @@ func TestSubagentToolsRegistration(t *testing.T) {
 		}
 		if tool.Name() == builtin.ToolManageAgents {
 			hasManage = true
+			if got := tool.Definition().InputSchema.Properties["action"].Enum; len(got) != 5 {
+				t.Errorf("manage_agents.action enum = %v, want 5 actions", got)
+			}
 		}
 	}
 	if !hasInvoke {

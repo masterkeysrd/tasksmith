@@ -18,6 +18,12 @@ spec:
       action:
         type: string
         description: "The action to perform: 'list', 'status', 'send', 'kill', or 'models'."
+        enum:
+          - list
+          - status
+          - send
+          - kill
+          - models
       session_id:
         type: string
         description: "The session ID of the subagent (required for 'status', 'send', and 'kill')."
@@ -134,17 +140,9 @@ spec:
         description: Human-readable summary of the action result.
 ---
 
-Manage and monitor child subagent sessions, or discover valid subagent model overrides.
-
-<actions>
-- `list`: List all child subagent sessions spawned by this session along with their current `status`, `work_dir`, and any `error`.
-- `status`: Retrieve the current execution `status` and latest assistant `output` of a child subagent (`session_id` required).
-- `send`: Deliver a follow-up `message` to steer or continue a child subagent (`session_id` and `message` required).
-- `kill`: Cancel and terminate a running child subagent (`session_id` required).
-- `models`: List or search completion-capable models subagents can run on (optional `query` fuzzy search term, `provider` filter, `agent` to intersect against that subagent's `spec.models` allowlist, and bounded `limit`).
-</actions>
+Manage and monitor child subagent sessions (`list`, `status`, `send`, `kill`) or discover valid subagent model overrides (`models`).
 
 <guidelines>
-- The system automatically delivers a `<subagent_completed>` notification and wakes you up when a subagent turn finishes. Do NOT poll `status` in a loop waiting for completion; use `status` only to inspect intermediate progress on demand.
-- Use `action: "models"` to find valid `provider/model` IDs or `@aliases` before passing a non-tier `model` override to `invoke_agent` instead of guessing identifiers. Prefer omitting `agent` unless checking which models a specific subagent's allowlist permits.
+- **No polling**: The system automatically delivers `<subagent_completed>` and wakes you up when a subagent turn finishes — do **not** poll `status` in a loop; use `status` only to inspect intermediate progress on demand, `send` to steer/continue a child, and `kill` to cancel a running child.
+- **Model discovery (`action: "models"`)**: Find valid `provider/model` IDs or `@aliases` before passing a non-tier `model` override to `invoke_agent` instead of guessing identifiers. Prefer omitting `agent` unless checking which models a specific subagent's `spec.models` allowlist permits.
 </guidelines>

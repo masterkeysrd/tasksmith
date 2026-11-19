@@ -25,6 +25,11 @@ spec:
             type:
               type: string
               description: Question kind ('single', 'multi', 'text', or 'confirm').
+              enum:
+                - single
+                - multi
+                - text
+                - confirm
             question:
               type: string
               description: Short, direct one-line question.
@@ -99,72 +104,32 @@ spec:
       - answers
 ---
 
-Ask the user one or more structured questions and wait for their response. Use this when you need clarification, confirmation, or a design choice before proceeding.
+Ask the user one or more structured questions and wait for their response.
 
-<how_it_works>
-- Always provide a `questions` array with 1 to 5 items.
-- A single question renders directly; multiple questions render as a tabbed multi-step form with a confirmation summary screen at the end.
-- Every question MUST include:
-  1. `type` — `'single'`, `'multi'`, `'text'`, or `'confirm'`
-  2. `question` — a short, direct one-line question
-  3. `description` — context shown below the question with details, tradeoffs, or examples (**always required**; omitting it returns a validation error)
-</how_it_works>
-
-<hard_limits>
-Violations fail pre-flight validation and return an error:
-- **1 to 5 questions** per call. If you have more, prioritize or split across turns.
-- **2 to 5 options** required for `'single'` and `'multi'` questions; `options` must be omitted for `'text'` and `'confirm'`.
-- **Question `description` is required** on every question and must be under 300 characters.
-- **Option `description`** (when provided) must be under 100 characters.
-- **Option `id`s** must be unique within each question.
-</hard_limits>
-
-<question_types>
-- `'confirm'` — Yes/No proposition the user affirms or rejects (e.g., "Proceed with schema migration?", "Enable query caching?"). Never use `'confirm'` for A-vs-B choices or preference questions where both alternatives are valid approaches — use `'single'` with 2 options instead.
-- `'single'` — Pick one option from `options`. Use for any selection among named alternatives, including binary choices (e.g., "SQLite or PostgreSQL?"). If you recommend an option, put it first and append `(Recommended)` to its `label`.
-- `'multi'` — Pick one or more options from `options`.
-- `'text'` — Open-ended free-text input for narrative answers, identifiers, or custom values that cannot be enumerated as options.
-
-Note: `'single'` and `'multi'` questions automatically include a custom write-in input in the UI so the user can provide their own answer. Never add an "Other", "Custom", or "Something else" option manually.
-</question_types>
-
-<multiple_questions>
-- When asking multiple questions (`len(questions) > 1`), include a short `label` (1–3 words, e.g., `"Database"`, `"Caching"`) on each question for the step/tab header. If omitted, the first 3 words of `question` are used.
-- A confirmation screen is automatically shown after all questions are answered so the user can review their choices before submitting.
-- Provide top-level `title` (e.g., `"Ready to configure?"`) and `description` summarizing what will happen once confirmed.
-</multiple_questions>
+<validation_and_types>
+Pre-flight validation rejects calls that violate any rule below:
+- **1 to 5 questions** per call; every question MUST include `type`, a direct one-line `question`, and `description` (`<= 300` chars explaining context, tradeoffs, or impact).
+- **2 to 5 `options`** with unique `id`s (and optional `description` `<= 100` chars) are required for `'single'` and `'multi'`, and MUST be omitted for `'text'` and `'confirm'`.
+- **Question types**:
+  - `'confirm'`: Yes/No proposition the user affirms or rejects (e.g., *"Drop legacy v1 migration tables?"*). **Never** use `'confirm'` for A-vs-B choices where both are valid — use `'single'` with 2 options instead.
+  - `'single'`: Pick one named option (e.g., *"SQLite or PostgreSQL?"*). Put your recommended option first and append `(Recommended)` to its `label`.
+  - `'multi'`: Pick one or more options.
+  - `'text'`: Open-ended free-text input for identifiers or narrative answers that cannot be enumerated.
+- **Built-in write-in**: `'single'` and `'multi'` automatically include a custom write-in input in the UI — **never** add manual `"Other"` or `"Custom"` options.
+- **Multiple questions (`len > 1`)**: Render as a tabbed wizard with a confirmation summary screen — include a `1–3` word `label` on each question plus top-level `title` and `description`.
+</validation_and_types>
 
 <when_to_use>
-- Ambiguous requirements with multiple valid architectural or product interpretations
-- Choosing between concrete implementation approaches or tradeoffs
-- Confirming high-impact or irreversible operations not covered by tool permissions
-- Gathering a small batch of related configuration decisions at once
+- Ambiguous requirements with multiple valid product or architectural interpretations, or concrete implementation tradeoffs.
+- Confirming high-impact or irreversible operations not covered by standard tool permissions.
+- **Never use** for facts you can verify yourself by reading code, configs, or docs (`view`, `grep`, `glob`), or for routine tool execution approvals.
 </when_to_use>
 
-<when_not_to_use>
-- Questions you can answer yourself by reading code, config files, or documentation (`view`, `grep`, `glob`)
-- Standard tool execution authorization (handled automatically by the permission system)
-</when_not_to_use>
-
-<examples>
-Single question:
-```json
-{
-  "questions": [
-    {
-      "type": "confirm",
-      "question": "Drop legacy v1 migration tables?",
-      "description": "Removes 4 deprecated tables. Existing v2 data is unaffected, but v1 rollback will no longer be possible."
-    }
-  ]
-}
-```
-
-Multiple questions with confirmation:
+<example>
 ```json
 {
   "title": "Ready to scaffold authentication?",
-  "description": "We will generate the auth middleware, session store, and route guards based on your selections.",
+  "description": "Generates auth middleware and session storage based on your selections.",
   "questions": [
     {
       "label": "Session Store",
@@ -173,21 +138,16 @@ Multiple questions with confirmation:
       "description": "Controls session persistence and horizontal scaling behavior.",
       "options": [
         {"id": "sqlite", "label": "SQLite (Recommended)", "description": "Zero-config local database"},
-        {"id": "redis", "label": "Redis", "description": "Shared in-memory store for multi-instance deployments"},
-        {"id": "jwt", "label": "Stateless JWT", "description": "Signed cookies without server-side storage"}
+        {"id": "redis", "label": "Redis", "description": "Shared store for multi-instance deployments"}
       ]
     },
     {
-      "label": "OAuth Providers",
-      "type": "multi",
-      "question": "Which OAuth providers should we wire up?",
-      "description": "Select all providers to generate callback handlers for.",
-      "options": [
-        {"id": "github", "label": "GitHub"},
-        {"id": "google", "label": "Google"}
-      ]
+      "label": "Drop Legacy",
+      "type": "confirm",
+      "question": "Drop legacy v1 session tables?",
+      "description": "Existing v2 data is unaffected, but v1 rollback will no longer be possible."
     }
   ]
 }
 ```
-</examples>
+</example>

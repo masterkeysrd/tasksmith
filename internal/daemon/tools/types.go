@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -158,6 +159,7 @@ type Spec[In, Out any] struct {
 	Description  string
 	Annotation   tool.Annotation
 	DeferLoading bool
+	InputSchema  map[string]any
 	Prepare      func(ctx context.Context, in In) (*Plan, error)
 	Execute      func(ctx context.Context, in In) (Out, error)
 }
@@ -168,6 +170,7 @@ type Metadata struct {
 	Description  string
 	Annotation   tool.Annotation
 	DeferLoading bool
+	InputSchema  map[string]any
 }
 
 type typedTool[In, Out any] struct {
@@ -186,6 +189,7 @@ func NewHandler[In, Out any](name string, meta Metadata, h Handler[In, Out]) Too
 		Description:  meta.Description,
 		Annotation:   meta.Annotation,
 		DeferLoading: meta.DeferLoading,
+		InputSchema:  meta.InputSchema,
 		Prepare:      h.Prepare,
 		Execute:      h.Execute,
 	})
@@ -217,6 +221,10 @@ func New[In, Out any](spec Spec[In, Out]) (Tool, error) {
 	resolvedInput, err := inputSchema.Resolve(nil)
 	if err != nil {
 		return nil, fmt.Errorf("tools: resolve input schema for %q: %w", name, err)
+	}
+	if len(spec.InputSchema) > 0 {
+		inputSchema = inputSchema.CloneSchemas()
+		overlaySchemaEnums(inputSchema, spec.InputSchema)
 	}
 
 	title := spec.Title
@@ -369,4 +377,37 @@ func (t *typedTool[In, Out]) Execute(ctx context.Context, call *message.ToolCall
 		Content:           content,
 		StructuredContent: out,
 	}, nil
+}
+
+// overlaySchemaEnums recursively copies enum constraints from a raw WARP
+// manifest inputSchema map onto a struct-inferred [jsonschema.Schema] so
+// constrained-decoding LLM providers receive exact enum values.
+func overlaySchemaEnums(dst *jsonschema.Schema, raw map[string]any) {
+	if dst == nil || len(raw) == 0 {
+		return
+	}
+	switch v := raw["enum"].(type) {
+	case []any:
+		if len(v) > 0 {
+			dst.Enum = slices.Clone(v)
+		}
+	case []string:
+		if len(v) > 0 {
+			enums := make([]any, len(v))
+			for i, s := range v {
+				enums[i] = s
+			}
+			dst.Enum = enums
+		}
+	}
+	if rawProps, ok := raw["properties"].(map[string]any); ok && len(dst.Properties) > 0 {
+		for name, propSchema := range dst.Properties {
+			if rawProp, ok := rawProps[name].(map[string]any); ok {
+				overlaySchemaEnums(propSchema, rawProp)
+			}
+		}
+	}
+	if rawItems, ok := raw["items"].(map[string]any); ok && dst.Items != nil {
+		overlaySchemaEnums(dst.Items, rawItems)
+	}
 }

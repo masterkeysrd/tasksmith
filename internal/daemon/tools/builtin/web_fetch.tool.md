@@ -52,7 +52,5 @@ spec:
       - status_code
 ---
 
-Use the `web_fetch` tool to retrieve content from an `http` or `https` `url`.
-You may optionally specify `headers` and `format` (`"markdown"` by default to convert HTML to Markdown and pretty-print JSON/XML, `"text"` for plain text extraction from HTML and pretty-printed JSON/XML, or `"html"` for the raw unmodified response body).
-
-Responses exceeding 500 lines or 32 KB are automatically truncated, keeping the head and tail lines. The truncation notice includes the saved session output file path holding the complete response — inspect it with `view` (using `offset` and `limit`) or `grep` when the omitted content matters.
+Fetch content from an `http` or `https` `url` (`format` defaults to `"markdown"` for HTML-to-Markdown and pretty-printed JSON/XML; `"text"` extracts plain text; `"html"` returns the raw body).
+Responses exceeding 500 lines or 32 KB are truncated (head + tail kept) with the saved spill-file path in the notice — inspect omitted sections with `view` (`offset`/`limit`) or `grep`.
