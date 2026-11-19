@@ -103,7 +103,7 @@ var PlanReviewPrompt = trail.FC("PlanReviewPrompt", func(props PlanReviewPromptP
 		case k.MatchString("esc", "escape"):
 			submit("", "", true)
 		}
-	})
+	}, trail.InputOptions{IsActive: !s.submitting && !s.editing && !s.viewing})
 
 	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Icon.Primary).WhiteSpace(style.WhiteSpacePreWrap)
 	pathStyle := style.S().Foreground(scheme.Color.Text.Secondary).WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere)
