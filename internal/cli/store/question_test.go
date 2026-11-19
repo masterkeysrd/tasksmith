@@ -160,3 +160,96 @@ func TestSubmitQuestionSendsStructuredResponse(t *testing.T) {
 		t.Fatal("successful submission did not remove slot")
 	}
 }
+
+func TestPlanReviewEventsHydrationAndSubmit(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearSlot()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearSlot()
+	defer ClearTranscript()
+
+	pr := api.PlanReviewRequest{
+		ID:         "pr-1",
+		ToolCallID: "tc-exit-1",
+		Path:       "plans/feature.md",
+		Content:    "# Plan\n",
+	}
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("session")
+	acc.applyEvent(api.Event{
+		Type:    api.EventPlanReviewRequested,
+		Payload: api.PlanReviewRequestedEvent{SessionID: "other", PlanReviews: []api.PlanReviewRequest{pr}},
+	})
+	if len(acc.planReviews) != 0 {
+		t.Fatal("accepted another session's plan review")
+	}
+	acc.applyEvent(api.Event{
+		Type:    api.EventPlanReviewRequested,
+		Payload: api.PlanReviewRequestedEvent{SessionID: "session", PlanReviews: []api.PlanReviewRequest{pr}},
+	})
+	if GetSlot().Active == nil || GetSlot().Active.Kind != SlotKindPlanReview || !GetStream().WaitingPlanReview || GetStream().WaitingQuestion {
+		t.Fatalf("plan review slot/stream mismatch: slot=%+v stream=%+v", GetSlot().Active, GetStream())
+	}
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "session",
+			Entry: api.TimelineEntry{
+				ID:   "pr-entry",
+				Kind: api.TimelineKindPlanReview,
+				PlanReview: &api.PlanReviewRecord{
+					Request:  pr,
+					Decision: api.PlanReviewDecision{RequestID: pr.ID, ToolCallID: pr.ToolCallID, Approved: true, Mode: api.ModeAcceptEdits},
+				},
+			},
+		},
+	})
+	if GetSlot().Active != nil || len(acc.planReviews) != 0 || GetStream().WaitingPlanReview {
+		t.Fatalf("resolved plan review remains: slot=%+v stream=%+v", GetSlot().Active, GetStream())
+	}
+	if GetTranscript().Items != nil {
+		t.Fatalf("TimelineKindPlanReview should not append to transcript: %+v", *GetTranscript().Items)
+	}
+
+	// Verify SubmitPlanReview sends SendRequest{PlanReview: ...}
+	payload := make(chan api.SendRequest, 1)
+	rt := &mockSessionRoundTripper{handler: func(req *http.Request) (*http.Response, error) {
+		var body api.SendRequest
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		payload <- body
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	}}
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessMu.Lock()
+	activeClient, activeCtx = c, context.Background()
+	sessMu.Unlock()
+	SetSession(&api.Session{ID: "session"})
+	globalConversation.setSessionID("session")
+	globalConversation.SeedPlanReviews([]api.PlanReviewRequest{pr})
+	done := make(chan error, 1)
+	SubmitPlanReview(pr, api.PlanReviewDecision{Approved: true, Mode: api.ModeAuto}, func(err error) { done <- err })
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("submission timed out")
+	}
+	got := <-payload
+	if got.PlanReview == nil || got.PlanReview.RequestID != pr.ID || got.PlanReview.ToolCallID != pr.ToolCallID || !got.PlanReview.Approved || got.PlanReview.Mode != api.ModeAuto {
+		t.Fatalf("unexpected payload: %+v", got.PlanReview)
+	}
+	if GetSlot().Active != nil {
+		t.Fatal("successful submission did not remove slot")
+	}
+}

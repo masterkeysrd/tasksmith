@@ -247,22 +247,25 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 
 func TestWaitingForInteractionLocked(t *testing.T) {
 	tests := []struct {
-		name      string
-		status    api.SessionStatus
-		perms     []api.PermissionRequest
-		questions []api.QuestionRequest
-		want      bool
+		name        string
+		status      api.SessionStatus
+		perms       []api.PermissionRequest
+		questions   []api.QuestionRequest
+		planReviews []api.PlanReviewRequest
+		want        bool
 	}{
 		{name: "idle", status: api.StatusIdle},
 		{name: "pending permissions", status: api.StatusIdle, perms: []api.PermissionRequest{{ID: "p1"}}, want: true},
 		{name: "pending questions", status: api.StatusIdle, questions: []api.QuestionRequest{{ID: "q1"}}, want: true},
+		{name: "pending plan reviews", status: api.StatusIdle, planReviews: []api.PlanReviewRequest{{ID: "pr1"}}, want: true},
 		{name: "permission handoff", status: api.StatusWaitingPermission, want: true},
 		{name: "question handoff", status: api.StatusWaitingQuestion, want: true},
+		{name: "plan review handoff", status: api.StatusWaitingPlanReview, want: true},
 		{name: "both pending", status: api.StatusWaitingPermission, perms: []api.PermissionRequest{{ID: "p1"}}, questions: []api.QuestionRequest{{ID: "q1"}}, want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &Session{State: &State{Status: tt.status, PendingPermissions: tt.perms, PendingQuestions: tt.questions}}
+			s := &Session{State: &State{Status: tt.status, PendingPermissions: tt.perms, PendingQuestions: tt.questions, PendingPlanReviews: tt.planReviews}}
 			s.Lock()
 			got := s.waitingForInteractionLocked()
 			s.Unlock()

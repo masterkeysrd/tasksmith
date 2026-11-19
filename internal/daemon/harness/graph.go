@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -43,6 +44,11 @@ type NodeOptions struct {
 	// ModelInfo carries the resolved model's modality and provider metadata so
 	// the harness can hydrate or degrade media blocks before calling the model.
 	ModelInfo models.Model
+	// PlansDir is the session-scoped safe plans directory (<session-dir>/plans/)
+	// surfaced in plan-mode system reminders.
+	PlansDir string
+	// IsSubagent reports whether this harness runs a delegated child session.
+	IsSubagent bool
 }
 
 // Validate checks that required model and tools container dependencies are present.
@@ -73,7 +79,8 @@ type GraphConfig struct {
 }
 
 type AgentNodeConfig struct {
-	Logger log.Interface
+	Permissions permissions.SessionManager
+	Logger      log.Interface
 }
 
 type CompactionNodeConfig struct {
@@ -103,7 +110,8 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], []Node, error) {
 		Logger: cfg.Logger,
 	})
 	agentNode := NewAgentNode(AgentNodeConfig{
-		Logger: cfg.Logger,
+		Permissions: cfg.Permissions,
+		Logger:      cfg.Logger,
 	})
 	toolsNode := NewToolsNode(ToolsNodeConfig{
 		Metrics:     cfg.Metrics,
@@ -325,7 +333,10 @@ type AgentNode struct {
 	model        *llm.Model
 	modelInfo    models.Model
 	tools        tools.Container
+	permissions  permissions.SessionManager
 	systemPrompt string
+	plansDir     string
+	isSubagent   bool
 	limits       models.Limits
 	static       StaticContext
 	media        *media.Store
@@ -339,6 +350,8 @@ func (n *AgentNode) Configure(opts NodeOptions) {
 	n.modelInfo = opts.ModelInfo
 	n.tools = opts.Tools
 	n.systemPrompt = strings.TrimSpace(opts.SystemPrompt)
+	n.plansDir = strings.TrimSpace(opts.PlansDir)
+	n.isSubagent = opts.IsSubagent
 	n.limits = opts.Limits
 	n.static = opts.Static
 	n.media = opts.Media
@@ -348,19 +361,43 @@ func (n *AgentNode) Configure(opts NodeOptions) {
 // tool container, system prompt, limits, static context, and structured logger.
 func NewAgentNode(cfg AgentNodeConfig) *AgentNode {
 	return &AgentNode{
-		logger: cfg.Logger.ForComponent("harness.agent"),
+		permissions: cfg.Permissions,
+		logger:      cfg.Logger.ForComponent("harness.agent"),
 	}
+}
+
+// modeTransitionReminder constructs a cache-safe <system_reminders> user
+// message when entering or leaving non-act behavioral modes (plan or ask).
+// Transitions among default, accept_edits, and auto return nil.
+func modeTransitionReminder(prev, next api.PermissionMode, plansDir string) *message.User {
+	return NewSystemReminder(ModeTransitionReminder{
+		Prev:     prev,
+		Next:     next,
+		PlansDir: plansDir,
+	})
 }
 
 // Execute binds all registered tool definitions to the LLM model, invokes it with
 // the transient system prompt prepended to the conversation state, emits the
 // resulting assistant message to the stream, and appends it to [State.Messages].
 func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
-	llmMessages := make([]message.Message, 0, len(state.Messages)+1)
+	targetMode := api.ModeDefault
+	if n.permissions != nil {
+		targetMode = cmp.Or(n.permissions.Mode(), api.ModeDefault)
+	}
+	var modeReminder *message.User
+	if !n.isSubagent && state.Mode != targetMode {
+		modeReminder = modeTransitionReminder(state.Mode, targetMode, n.plansDir)
+	}
+
+	llmMessages := make([]message.Message, 0, len(state.Messages)+2)
 	if n.systemPrompt != "" {
 		llmMessages = append(llmMessages, message.NewSystemText(n.systemPrompt))
 	}
 	llmMessages = append(llmMessages, state.Messages...)
+	if modeReminder != nil {
+		llmMessages = append(llmMessages, modeReminder)
+	}
 
 	boundModel := n.model
 	if defs := n.tools.Definitions(); len(defs) > 0 {
@@ -397,6 +434,10 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	}
 
 	return graph.Update[State](func(s State) State {
+		if modeReminder != nil {
+			s = s.AppendMessage(modeReminder, MessageUpdateOptions{Static: n.static, Limits: n.limits, SkipContextRecalculation: true})
+		}
+		s.Mode = targetMode
 		s = s.AppendMessage(resp, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
@@ -584,8 +625,8 @@ func (n *ToolsNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	turnID := state.LastUserMessageID()
 	ctx = scope.With(ctx, scope.Scope{TurnID: turnID, MessageID: asstMsgID})
 
-	if len(state.PendingPermissions) > 0 || len(state.PendingQuestions) > 0 {
-		return n.resumeCalls(ctx, unfulfilled, state.PendingPermissions, state.PermissionDecisions, state.PendingQuestions, state.QuestionResponses, state.LoadedTools)
+	if len(state.PendingPermissions) > 0 || len(state.PendingQuestions) > 0 || len(state.PendingPlanReviews) > 0 {
+		return n.resumeCalls(ctx, unfulfilled, state.PendingPermissions, state.PermissionDecisions, state.PendingQuestions, state.QuestionResponses, state.PendingPlanReviews, state.PlanReviewDecisions, state.LoadedTools)
 	}
 	return n.evaluateCalls(ctx, unfulfilled, state.LoadedTools)
 }
@@ -626,6 +667,8 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 		s.PermissionDecisions = nil
 		s.PendingQuestions = nil
 		s.QuestionResponses = nil
+		s.PendingPlanReviews = nil
+		s.PlanReviewDecisions = nil
 		s.Context = computeContextState(n.static, s, n.limits)
 		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
@@ -636,6 +679,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
 	var pending []api.PermissionRequest
 	var questions []api.QuestionRequest
+	var planReviews []api.PlanReviewRequest
 	var updatedTodos []api.TodoItem
 	var hasTodos bool
 	var newTools []string
@@ -644,7 +688,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 	dedupState := State{LoadedTools: loadedTools}
 
 	for _, tc := range unfulfilled {
-		if tc.Name == "ask_question" {
+		if tc.Name == "ask_question" || tc.Name == "exit_plan_mode" {
 			plan, err := n.tools.Prepare(ctx, tc)
 			if err == nil {
 				var access tools.AccessDecision
@@ -665,21 +709,30 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 					}
 				}
 			}
-			var question api.QuestionRequest
 			if err == nil {
-				question, err = newQuestionRequest(tc)
-			}
-			if err != nil {
-				n.recordFailure(ctx, tc, err)
-				msg, msgErr := newErrorToolMessage(tc, err.Error())
-				if msgErr != nil {
-					return nil, msgErr
+				if tc.Name == "exit_plan_mode" {
+					var pr api.PlanReviewRequest
+					pr, err = newPlanReviewRequest(tc, plan)
+					if err == nil {
+						planReviews = append(planReviews, pr)
+						continue
+					}
+				} else {
+					var q api.QuestionRequest
+					q, err = newQuestionRequest(tc)
+					if err == nil {
+						questions = append(questions, q)
+						continue
+					}
 				}
-				emit(ctx, msg)
-				toolMsgs = append(toolMsgs, msg)
-				continue
 			}
-			questions = append(questions, question)
+			n.recordFailure(ctx, tc, err)
+			msg, msgErr := newErrorToolMessage(tc, err.Error())
+			if msgErr != nil {
+				return nil, msgErr
+			}
+			emit(ctx, msg)
+			toolMsgs = append(toolMsgs, msg)
 			continue
 		}
 		toolMsg, req, err := n.evaluateSingleCall(ctx, tc, plans)
@@ -704,16 +757,19 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 		}
 	}
 
-	if len(pending) > 0 || len(questions) > 0 {
+	if len(pending) > 0 || len(questions) > 0 || len(planReviews) > 0 {
 		return graph.InterruptUpdate[State](func(s State) State {
 			s.Messages = append(s.Messages, toolMsgs...)
 			s.PendingPermissions = clonePermissionRequests(pending)
 			s.PermissionDecisions = nil
 			s.PendingQuestions = cloneQuestionRequests(questions)
 			s.QuestionResponses = nil
+			s.PendingPlanReviews = clonePlanReviewRequests(planReviews)
+			s.PlanReviewDecisions = nil
 			if hasTodos {
 				s.Todos = slices.Clone(updatedTodos)
 			}
+			s = applyPlanToolStateUpdates(s, toolToolMessages(toolMsgs))
 			s = s.RecordLoadedTools(newTools...)
 			s.Context = computeContextState(n.static, s, n.limits)
 			emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
@@ -722,6 +778,51 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 	}
 
 	return n.appendToolMessagesUpdate(ctx, toolMsgs, unfulfilled, plans, updatedTodos, hasTodos, newTools), nil
+}
+
+func newPlanReviewRequest(tc *message.ToolCall, plan *tools.Plan) (api.PlanReviewRequest, error) {
+	if plan == nil || plan.PlanReview == nil {
+		return api.PlanReviewRequest{}, fmt.Errorf("%w: plan review payload missing", ErrInvalidConfig)
+	}
+	return api.PlanReviewRequest{
+		ID:         uuid.NewString(),
+		ToolCallID: tc.ID,
+		Path:       plan.PlanReview.Path,
+		Content:    plan.PlanReview.Content,
+	}, nil
+}
+
+func planReviewOutcome(dec api.PlanReviewDecision) tools.PlanReviewOutcome {
+	if dec.Canceled {
+		return tools.PlanReviewOutcome{Approved: false}
+	}
+	return tools.PlanReviewOutcome{
+		Approved: dec.Approved,
+		Mode:     dec.Mode,
+		Feedback: strings.TrimSpace(dec.Feedback),
+	}
+}
+
+func applyPlanToolStateUpdates(s State, results []*message.Tool) State {
+	for _, res := range results {
+		if res == nil || res.IsError {
+			continue
+		}
+		switch res.Name {
+		case "enter_plan_mode":
+			s.Mode = api.ModePlan
+		case "exit_plan_mode":
+			if out, ok := res.StructuredContent.(api.ExitPlanModeOutput); ok {
+				if out.PlanPath != "" {
+					s.PlanPath = out.PlanPath
+				}
+				if out.Approved && out.Mode != "" {
+					s.Mode = api.PermissionMode(out.Mode)
+				}
+			}
+		}
+	}
+	return s
 }
 
 func newQuestionRequest(tc *message.ToolCall) (api.QuestionRequest, error) {
@@ -775,7 +876,7 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 	return msg, nil, nil
 }
 
-func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []api.PermissionRequest, decisions map[string]api.PermissionDecision, questions []api.QuestionRequest, answers map[string]api.QuestionResponse, loadedTools []string) (graph.Command[State], error) {
+func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []api.PermissionRequest, decisions map[string]api.PermissionDecision, questions []api.QuestionRequest, answers map[string]api.QuestionResponse, planReviews []api.PlanReviewRequest, planReviewDecisions map[string]api.PlanReviewDecision, loadedTools []string) (graph.Command[State], error) {
 	pendingByCall := make(map[string]api.PermissionRequest, len(pending))
 	for _, req := range pending {
 		pendingByCall[req.ToolCallID] = req
@@ -784,9 +885,14 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 	for _, req := range questions {
 		questionsByCall[req.ToolCallID] = req
 	}
+	planReviewsByCall := make(map[string]api.PlanReviewRequest, len(planReviews))
+	for _, req := range planReviews {
+		planReviewsByCall[req.ToolCallID] = req
+	}
 
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
 	var nextQuestions []api.QuestionRequest
+	var nextPlanReviews []api.PlanReviewRequest
 	var updatedTodos []api.TodoItem
 	var hasTodos bool
 	var newTools []string
@@ -806,6 +912,20 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 	dedupState := State{LoadedTools: loadedTools}
 
 	for _, tc := range unfulfilled {
+		if req, ok := planReviewsByCall[tc.ID]; ok {
+			dec, found := lookupPlanReviewDecision(planReviewDecisions, req)
+			if !found {
+				return nil, ErrPendingPlanReviewsUnresolved
+			}
+			outcome := planReviewOutcome(dec)
+			toolMsg, err := n.executeTool(tools.WithPlanReviewOutcome(ctx, outcome), tc, true, false)
+			if err != nil {
+				return nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, err)
+			}
+			emit(ctx, toolMsg)
+			toolMsgs = append(toolMsgs, toolMsg)
+			continue
+		}
 		if req, ok := questionsByCall[tc.ID]; ok {
 			response, found := lookupQuestionResponse(answers, req)
 			if !found {
@@ -866,7 +986,7 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 		if !ok {
 			return nil, ErrPendingPermissionsUnresolved
 		}
-		if tc.Name == "ask_question" {
+		if tc.Name == "ask_question" || tc.Name == "exit_plan_mode" {
 			dec, ok := lookupDecision(decisions, req)
 			if !ok {
 				return nil, ErrPendingPermissionsUnresolved
@@ -881,11 +1001,19 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 				toolMsgs = append(toolMsgs, msg)
 				continue
 			}
-			question, err := newQuestionRequest(tc)
-			if err != nil {
-				return nil, err
+			if tc.Name == "exit_plan_mode" {
+				pr, err := newPlanReviewRequest(tc, plans[tc.ID])
+				if err != nil {
+					return nil, err
+				}
+				nextPlanReviews = append(nextPlanReviews, pr)
+			} else {
+				question, err := newQuestionRequest(tc)
+				if err != nil {
+					return nil, err
+				}
+				nextQuestions = append(nextQuestions, question)
 			}
-			nextQuestions = append(nextQuestions, question)
 			continue
 		}
 		var planReadOnly bool
@@ -910,10 +1038,11 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 		}
 	}
 
-	if len(nextQuestions) > 0 {
+	if len(nextQuestions) > 0 || len(nextPlanReviews) > 0 {
 		return graph.InterruptUpdate[State](func(s State) State {
 			s = n.appendToolMessagesUpdate(ctx, toolMsgs, unfulfilled, plans, updatedTodos, hasTodos, newTools)(s)
 			s.PendingQuestions = cloneQuestionRequests(nextQuestions)
+			s.PendingPlanReviews = clonePlanReviewRequests(nextPlanReviews)
 			return s
 		}), nil
 	}
@@ -955,6 +1084,8 @@ func clearPermissionsUpdate() graph.Update[State] {
 		s.PermissionDecisions = nil
 		s.PendingQuestions = nil
 		s.QuestionResponses = nil
+		s.PendingPlanReviews = nil
+		s.PlanReviewDecisions = nil
 		return s
 	}
 }
@@ -966,11 +1097,14 @@ func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs messa
 		s.PermissionDecisions = nil
 		s.PendingQuestions = nil
 		s.QuestionResponses = nil
+		s.PendingPlanReviews = nil
+		s.PlanReviewDecisions = nil
 		if hasTodos {
 			s.Todos = slices.Clone(todos)
 		}
 		s = s.RecordLoadedTools(newTools...)
 		toolResults := toolToolMessages(toolMsgs)
+		s = applyPlanToolStateUpdates(s, toolResults)
 		s = s.RecordLoadedSkills(loadedSkillsFromToolResults(toolResults)...)
 		// Smart rule matching after tool results are appended: tool-name and
 		// path triggers auto-inject matching conditional rules as reminders.
@@ -1023,6 +1157,14 @@ func lookupQuestionResponse(answers map[string]api.QuestionResponse, req api.Que
 	}
 	response, ok := answers[req.ToolCallID]
 	return response, ok
+}
+
+func lookupPlanReviewDecision(decisions map[string]api.PlanReviewDecision, req api.PlanReviewRequest) (api.PlanReviewDecision, bool) {
+	if dec, ok := decisions[req.ID]; ok {
+		return dec, true
+	}
+	dec, ok := decisions[req.ToolCallID]
+	return dec, ok
 }
 
 func lookupDecision(decisions map[string]api.PermissionDecision, req api.PermissionRequest) (api.PermissionDecision, bool) {

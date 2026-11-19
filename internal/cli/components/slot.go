@@ -35,6 +35,12 @@ var Slot = trail.SimpleFC("Slot", func() trail.Node {
 		} else if req, ok := active.Data.(api.QuestionRequest); ok {
 			child = QuestionPrompt(QuestionPromptProps{Request: req, OnSubmit: store.SubmitQuestion})
 		}
+	case store.SlotKindPlanReview:
+		if props, ok := active.Data.(PlanReviewPromptProps); ok {
+			child = PlanReviewPrompt(props)
+		} else if req, ok := active.Data.(api.PlanReviewRequest); ok {
+			child = PlanReviewPrompt(PlanReviewPromptProps{Request: req, OnSubmit: store.SubmitPlanReview})
+		}
 	case store.SlotKindPicker:
 		switch v := active.Data.(type) {
 		case PickerProps:

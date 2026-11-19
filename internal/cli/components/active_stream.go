@@ -41,7 +41,7 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 		return s.Streaming
 	})
 	waitingPerm := store.UseStream(func(s store.StreamState) bool {
-		return s.WaitingPermission || s.WaitingQuestion
+		return s.WaitingPermission || s.WaitingQuestion || s.WaitingPlanReview
 	})
 	status := store.UseStream(func(s store.StreamState) api.SessionStatus {
 		return s.Status

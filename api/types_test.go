@@ -1371,3 +1371,66 @@ func TestSandboxModeIsValid(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanReviewTypesAndEventRoundTrip(t *testing.T) {
+	req := PlanReviewRequest{
+		ID:         "pr-1",
+		ToolCallID: "tc-exit-1",
+		Path:       "plans/feature.md",
+		Content:    "# Feature\n",
+	}
+	clonedReq := req.Clone()
+	if clonedReq == nil || *clonedReq != req {
+		t.Fatalf("PlanReviewRequest.Clone() = %+v, want %+v", clonedReq, req)
+	}
+	clonedReq.Path = "mutated"
+	if req.Path != "plans/feature.md" {
+		t.Fatal("PlanReviewRequest.Clone mutated original")
+	}
+
+	dec := PlanReviewDecision{
+		RequestID:  "pr-1",
+		ToolCallID: "tc-exit-1",
+		Approved:   true,
+		Mode:       ModeAcceptEdits,
+		Feedback:   "",
+	}
+	clonedDec := dec.Clone()
+	if clonedDec == nil || *clonedDec != dec {
+		t.Fatalf("PlanReviewDecision.Clone() = %+v, want %+v", clonedDec, dec)
+	}
+
+	ev := Event{
+		Type:  EventPlanReviewRequested,
+		Topic: SessionStreamTopic("s1"),
+		Payload: PlanReviewRequestedEvent{
+			SessionID:   "s1",
+			PlanReviews: []PlanReviewRequest{req},
+		},
+	}
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal PlanReviewRequestedEvent: %v", err)
+	}
+	var decoded Event
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("Unmarshal PlanReviewRequestedEvent: %v", err)
+	}
+	payload, ok := decoded.Payload.(PlanReviewRequestedEvent)
+	if !ok || payload.SessionID != "s1" || len(payload.PlanReviews) != 1 || payload.PlanReviews[0] != req {
+		t.Fatalf("decoded PlanReviewRequestedEvent = %#v", decoded.Payload)
+	}
+
+	testJSONRoundTrip(t, SendRequest{PlanReview: &dec})
+	testJSONRoundTrip(t, TimelineEntry{
+		ID:         "tl-pr-1",
+		SessionID:  "s1",
+		Kind:       TimelineKindPlanReview,
+		PlanReview: &PlanReviewRecord{Request: req, Decision: dec},
+	})
+	testJSONRoundTrip(t, Session{
+		ID:                 "s1",
+		Status:             StatusWaitingPlanReview,
+		PendingPlanReviews: []PlanReviewRequest{req},
+	})
+}

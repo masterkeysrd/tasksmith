@@ -9,7 +9,22 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 )
+
+func (s *session) isSessionWritePath(absPath string) bool {
+	if len(s.sessionWriteDirs) == 0 || absPath == "" {
+		return false
+	}
+	clean := filepath.Clean(absPath)
+	for _, dir := range s.sessionWriteDirs {
+		if fsutils.IsConfinedInsideDir(clean, dir) {
+			return true
+		}
+	}
+	return false
+}
 
 // sandboxFS implements the FS interface backed by Go's os.Root.
 type sandboxFS struct {
@@ -97,6 +112,18 @@ func (f *sandboxFS) checkPreconditions(ctx context.Context, writeOp bool) error 
 	return nil
 }
 
+func (f *sandboxFS) checkWriteTarget(ctx context.Context, target targetPathInfo) error {
+	if err := f.checkPreconditions(ctx, false); err != nil {
+		return err
+	}
+	if f.s.readOnly.Load() {
+		if target.isRel || !f.s.isSessionWritePath(target.abs) {
+			return ErrReadOnly
+		}
+	}
+	return nil
+}
+
 type targetPathInfo struct {
 	rel   string
 	abs   string
@@ -160,11 +187,11 @@ func (f *sandboxFS) ReadFile(ctx context.Context, path string) ([]byte, error) {
 }
 
 func (f *sandboxFS) WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error {
-	if err := f.checkPreconditions(ctx, true); err != nil {
-		return err
-	}
 	target, err := f.resolveTarget(path)
 	if err != nil {
+		return err
+	}
+	if err := f.checkWriteTarget(ctx, target); err != nil {
 		return err
 	}
 	if target.isRel {
@@ -175,11 +202,15 @@ func (f *sandboxFS) WriteFile(ctx context.Context, path string, data []byte, per
 
 func (f *sandboxFS) OpenFile(ctx context.Context, path string, flag int, perm fs.FileMode) (File, error) {
 	isWrite := flag&(os.O_WRONLY|os.O_RDWR|os.O_APPEND|os.O_CREATE|os.O_TRUNC) != 0
-	if err := f.checkPreconditions(ctx, isWrite); err != nil {
-		return nil, err
-	}
 	target, err := f.resolveTarget(path)
 	if err != nil {
+		return nil, err
+	}
+	if isWrite {
+		if err := f.checkWriteTarget(ctx, target); err != nil {
+			return nil, err
+		}
+	} else if err := f.checkPreconditions(ctx, false); err != nil {
 		return nil, err
 	}
 	if target.isRel {
@@ -193,7 +224,8 @@ func (f *sandboxFS) OpenFile(ctx context.Context, path string, flag int, perm fs
 	if err != nil {
 		return nil, err
 	}
-	return &sandboxFile{File: file, readOnly: f.s.readOnly.Load() || !isWrite}, nil
+	readOnlyHandle := !isWrite || (f.s.readOnly.Load() && !f.s.isSessionWritePath(target.abs))
+	return &sandboxFile{File: file, readOnly: readOnlyHandle}, nil
 }
 
 func (f *sandboxFS) Stat(ctx context.Context, path string) (fs.FileInfo, error) {
@@ -266,11 +298,11 @@ func (f *sandboxFS) ReadDir(ctx context.Context, path string) ([]fs.DirEntry, er
 }
 
 func (f *sandboxFS) MkdirAll(ctx context.Context, path string, perm fs.FileMode) error {
-	if err := f.checkPreconditions(ctx, true); err != nil {
-		return err
-	}
 	target, err := f.resolveTarget(path)
 	if err != nil {
+		return err
+	}
+	if err := f.checkWriteTarget(ctx, target); err != nil {
 		return err
 	}
 	if target.isRel {
@@ -286,11 +318,11 @@ func (f *sandboxFS) MkdirAll(ctx context.Context, path string, perm fs.FileMode)
 }
 
 func (f *sandboxFS) Remove(ctx context.Context, path string) error {
-	if err := f.checkPreconditions(ctx, true); err != nil {
-		return err
-	}
 	target, err := f.resolveTarget(path)
 	if err != nil {
+		return err
+	}
+	if err := f.checkWriteTarget(ctx, target); err != nil {
 		return err
 	}
 	if target.isRel {
@@ -306,11 +338,11 @@ func (f *sandboxFS) Remove(ctx context.Context, path string) error {
 }
 
 func (f *sandboxFS) RemoveAll(ctx context.Context, path string) error {
-	if err := f.checkPreconditions(ctx, true); err != nil {
-		return err
-	}
 	target, err := f.resolveTarget(path)
 	if err != nil {
+		return err
+	}
+	if err := f.checkWriteTarget(ctx, target); err != nil {
 		return err
 	}
 	if target.isRel {
@@ -326,15 +358,18 @@ func (f *sandboxFS) RemoveAll(ctx context.Context, path string) error {
 }
 
 func (f *sandboxFS) Rename(ctx context.Context, oldpath, newpath string) error {
-	if err := f.checkPreconditions(ctx, true); err != nil {
-		return err
-	}
 	targetOld, err := f.resolveTarget(oldpath)
 	if err != nil {
 		return err
 	}
 	targetNew, err := f.resolveTarget(newpath)
 	if err != nil {
+		return err
+	}
+	if err := f.checkWriteTarget(ctx, targetOld); err != nil {
+		return err
+	}
+	if err := f.checkWriteTarget(ctx, targetNew); err != nil {
 		return err
 	}
 	if targetOld.isRel && targetNew.isRel {
@@ -352,11 +387,11 @@ func (f *sandboxFS) Rename(ctx context.Context, oldpath, newpath string) error {
 }
 
 func (f *sandboxFS) Chmod(ctx context.Context, path string, perm fs.FileMode) error {
-	if err := f.checkPreconditions(ctx, true); err != nil {
-		return err
-	}
 	target, err := f.resolveTarget(path)
 	if err != nil {
+		return err
+	}
+	if err := f.checkWriteTarget(ctx, target); err != nil {
 		return err
 	}
 	if target.isRel {

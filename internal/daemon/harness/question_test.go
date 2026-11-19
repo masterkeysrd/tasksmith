@@ -39,7 +39,7 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				perms.SetMode(api.ModeAsk)
+				perms.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Ask: []string{"ask_question"}}})
 			}
 			provider := &fakeProvider{
 				stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
@@ -136,7 +136,7 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
 	ctx := context.Background()
 	_, registry, perms := newTestToolsRegistry(t)
-	perms.SetMode(api.ModeAsk)
+	perms.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Ask: []string{"ask_question"}}})
 	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
 		if turn == 1 {
 			return []message.AssistantChunk{{Content: []message.Block{
@@ -385,7 +385,7 @@ func TestQuestionResumeDuplicateText(t *testing.T) {
 		{Question: "Other?", Text: "detail"},
 	}}
 	node := &ToolsNode{}
-	cmd, err := node.resumeCalls(context.Background(), []*message.ToolCall{call}, nil, nil, []api.QuestionRequest{request}, map[string]api.QuestionResponse{request.ID: answers}, nil)
+	cmd, err := node.resumeCalls(context.Background(), []*message.ToolCall{call}, nil, nil, []api.QuestionRequest{request}, map[string]api.QuestionResponse{request.ID: answers}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

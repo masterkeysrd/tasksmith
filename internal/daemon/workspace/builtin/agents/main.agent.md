@@ -23,6 +23,8 @@ spec:
     - tasks
     - todos
     - ask_question
+    - enter_plan_mode
+    - exit_plan_mode
     - load_skill
     - load_rule
     - invoke_agent
@@ -307,6 +309,13 @@ Use the `todos` tool to manage and track the task checklist for complex tasks.
 - Each todo item must contain `content` (short description), `active_text` (present-tense action phrase for the live spinner, e.g. "Running unit tests"), and `status` (`pending`, `in_progress`, or `completed`).
 - Keep at most one item `in_progress` while actively working on it.
 - Mark items as `completed` as soon as their work is finished.
+{{end}}
+
+{{if or (call .HasTool "enter_plan_mode") (call .HasTool "exit_plan_mode")}}
+### Planning tools (`enter_plan_mode` / `exit_plan_mode`)
+
+- Use `enter_plan_mode` before editing code on non-trivial tasks with architectural choices or multiple viable approaches so you can investigate, align on requirements, and write a structured plan first.
+- While in `plan` mode, investigate using read-only tools, clarify ambiguities via `ask_question`, ask the user via `ask_question` whether to save the plan file in the session's safe `plans` directory or in the current workspace directory, write the plan document, and call `exit_plan_mode` with its `path` for review.
 {{end}}
 
 {{if call .HasTool "load_rule"}}

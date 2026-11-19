@@ -101,6 +101,31 @@ type EditOutput struct {
 	Diff         string `json:"diff,omitempty" jsonschema:"Unified diff of the edit."`
 }
 
+// EnterPlanModeInput defines the input parameters for the enter_plan_mode tool.
+type EnterPlanModeInput struct {
+}
+
+// EnterPlanModeOutput defines the structured output of the enter_plan_mode tool.
+type EnterPlanModeOutput struct {
+	Mode          string `json:"mode" jsonschema:"Active session permission mode after entering plan mode."`
+	PlansDir      string `json:"plans_dir" jsonschema:"Session-scoped safe directory for storing plan documents."`
+	Instructions  string `json:"instructions" jsonschema:"Behavioral contract and guidance for plan mode."`
+	AlreadyActive bool   `json:"already_active,omitempty" jsonschema:"True if the session was already in plan mode."`
+}
+
+// ExitPlanModeInput defines the input parameters for the exit_plan_mode tool.
+type ExitPlanModeInput struct {
+	Path string `json:"path" jsonschema:"Path to the finished plan file inside the workspace or session plans directory."`
+}
+
+// ExitPlanModeOutput defines the structured output of the exit_plan_mode tool.
+type ExitPlanModeOutput struct {
+	Approved bool   `json:"approved" jsonschema:"True if the user approved the plan and exited plan mode."`
+	Mode     string `json:"mode" jsonschema:"Resulting session permission mode after plan review."`
+	PlanPath string `json:"plan_path" jsonschema:"Normalized path of the reviewed plan document."`
+	Feedback string `json:"feedback,omitempty" jsonschema:"Optional revision feedback if the user chose to keep planning."`
+}
+
 // GlobInput defines the input parameters for the glob tool.
 type GlobInput struct {
 	Pattern       string   `json:"pattern" jsonschema:"Wildcard glob expression to match file paths."`

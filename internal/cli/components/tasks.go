@@ -144,6 +144,8 @@ func subagentActivityText(sub api.Session) string {
 		return "Waiting for permission"
 	case api.StatusWaitingQuestion:
 		return "Waiting for answer"
+	case api.StatusWaitingPlanReview:
+		return "Waiting for plan review"
 	case api.StatusThinking:
 		return "Thinking..."
 	case api.StatusGenerating:

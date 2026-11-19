@@ -53,7 +53,7 @@ func (r *run) applyFrame(frame api.ExecInputFrame) error {
 		// dispatcher as the initial prompt so local slash commands and @mentions
 		// behave identically mid-session.
 		if (targetSession == "" || targetSession == r.sess.ID) &&
-			payload.Command == "" && payload.Decision == nil && payload.Question == nil &&
+			payload.Command == "" && payload.Decision == nil && payload.Question == nil && payload.PlanReview == nil &&
 			payload.Compact == nil && len(payload.Blocks) == 0 && len(payload.Attachments) == 0 {
 			return r.submit(payload.Content, payload.Content)
 		}
@@ -88,6 +88,13 @@ func (r *run) applyFrame(frame api.ExecInputFrame) error {
 		}
 		sid := cmp.Or(targetSession, r.questionSessionID(frame.Question), r.sess.ID)
 		return r.c.Send(r.ctx, sid, api.SendRequest{Question: frame.Question})
+
+	case api.ExecInputPlanReview:
+		if frame.PlanReview == nil {
+			return fmt.Errorf("plan_review frame carries no decision")
+		}
+		sid := cmp.Or(targetSession, r.planReviewSessionID(frame.PlanReview), r.sess.ID)
+		return r.c.Send(r.ctx, sid, api.SendRequest{PlanReview: frame.PlanReview})
 
 	case api.ExecInputConfig:
 		if frame.Config == nil {

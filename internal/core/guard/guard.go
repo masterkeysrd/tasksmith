@@ -287,15 +287,43 @@ type PathConfig struct {
 	WriteDirs     []string
 }
 
+// isExactTasksmithConfigPath reports whether cleaned matches one of the
+// protected TaskSmith configuration roots itself (such as sandbox.json or the
+// top-level workspaces store directory) rather than an explicitly delegated
+// session subdirectory beneath it.
+func isExactTasksmithConfigPath(cleaned string) bool {
+	c := filepath.Clean(cleaned)
+	canon := fsutils.ResolveDeepestExisting(c)
+	for _, cp := range TasksmithConfigPaths() {
+		cpClean := filepath.Clean(cp)
+		if c == cpClean || canon == fsutils.ResolveDeepestExisting(cpClean) {
+			return true
+		}
+	}
+	return false
+}
+
+// isInsideWriteDir reports whether resolved resides inside wd without escaping
+// via symlinks or pointing to a sensitive path.
+func isInsideWriteDir(resolved, wd, homeDir string) bool {
+	if wd == "" || isExactTasksmithConfigPath(wd) {
+		return false
+	}
+	if !fsutils.IsConfinedInsideDir(resolved, wd) {
+		return false
+	}
+	return !IsSensitivePath(fsutils.ResolveDeepestExisting(resolved), homeDir)
+}
+
 // EvaluatePathWithConfig resolves targetPath against cfg.WorkspaceDir (and expands ~ with cfg.HomeDir)
 // and classifies its SafetyLevel for the given ActionType:
 //   - Sensitive system or credential paths always return SafetyUnsafe.
+//   - Paths inside cfg.WriteDirs (with symlink confinement) return SafetySafe for
+//     ActionRead, ActionWrite, ActionDelete, and SafetyUnsafe for other actions.
 //   - TaskSmith's own sandbox.json and workspace config store return
 //     SafetyUnsafe for any non-read action (reads stay permitted).
 //   - Paths inside cfg.WorkspaceDir return SafetyUnsafe if targeting a protected directory
 //     with a non-read action, or SafetySafe otherwise.
-//   - Paths inside cfg.WriteDirs return SafetySafe for ActionRead, ActionWrite, ActionDelete,
-//     and SafetyUnsafe for other actions.
 //   - Paths inside cfg.ReadDirs return SafetySafe for ActionRead, and SafetyUnsafe for other actions.
 //   - Otherwise (outside cfg.WorkspaceDir, cfg.WriteDirs, cfg.ReadDirs):
 //     returns SafetyOutside for ActionRead, or SafetyUnsafe for non-read actions.
@@ -303,6 +331,14 @@ func EvaluatePathWithConfig(targetPath string, action api.ActionType, cfg PathCo
 	resolved := fsutils.ExpandAndCleanPath(targetPath, cfg.WorkspaceDir, cfg.HomeDir)
 	if IsSensitivePath(resolved, cfg.HomeDir) {
 		return resolved, api.SafetyUnsafe
+	}
+	for _, wd := range cfg.WriteDirs {
+		if isInsideWriteDir(resolved, wd, cfg.HomeDir) {
+			if action == api.ActionRead || action == api.ActionWrite || action == api.ActionDelete {
+				return resolved, api.SafetySafe
+			}
+			return resolved, api.SafetyUnsafe
+		}
 	}
 	if action != api.ActionRead && insideTasksmithConfigPath(resolved) {
 		return resolved, api.SafetyUnsafe
@@ -330,14 +366,6 @@ func EvaluatePathWithConfig(targetPath string, action api.ActionType, cfg PathCo
 			return resolved, api.SafetyUnsafe
 		}
 		return resolved, api.SafetySafe
-	}
-	for _, wd := range cfg.WriteDirs {
-		if fsutils.IsInsideDir(resolved, wd) {
-			if action == api.ActionRead || action == api.ActionWrite || action == api.ActionDelete {
-				return resolved, api.SafetySafe
-			}
-			return resolved, api.SafetyUnsafe
-		}
 	}
 	if action == api.ActionRead {
 		return resolved, api.SafetyOutside

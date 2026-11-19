@@ -163,3 +163,26 @@ func TestExecResultEnvelope(t *testing.T) {
 		t.Fatalf("empty error must be omitted, got %s", data)
 	}
 }
+
+func TestExecInputPlanReviewRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	in := ExecInputFrame{
+		Type: ExecInputPlanReview,
+		PlanReview: &PlanReviewDecision{
+			RequestID:  "pr-1",
+			ToolCallID: "tc-1",
+			Approved:   true,
+			Mode:       ModeAcceptEdits,
+		},
+	}
+	if err := WriteNDJSON(&buf, in); err != nil {
+		t.Fatalf("WriteNDJSON: %v", err)
+	}
+	out, err := NewExecFrameReader(bytes.NewReader(buf.Bytes())).NextInputFrame()
+	if err != nil {
+		t.Fatalf("NextInputFrame: %v", err)
+	}
+	if out.Type != ExecInputPlanReview || out.PlanReview == nil || !out.PlanReview.Approved || out.PlanReview.Mode != ModeAcceptEdits {
+		t.Fatalf("round-trip mismatch: %+v", out)
+	}
+}

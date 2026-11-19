@@ -562,6 +562,7 @@ const (
 	StatusCompacting        SessionStatus = "compacting"
 	StatusWaitingPermission SessionStatus = "waiting_permission"
 	StatusWaitingQuestion   SessionStatus = "waiting_question"
+	StatusWaitingPlanReview SessionStatus = "waiting_plan_review"
 )
 
 // SandboxMode identifies the OS isolation backend enforced by a session sandbox.
@@ -796,6 +797,44 @@ const (
 	QuestionTypeConfirm QuestionType = "confirm"
 )
 
+// PlanReviewRequest carries the plan document path and Markdown preview for
+// exit_plan_mode user review prompts.
+type PlanReviewRequest struct {
+	ID         string `json:"id"`
+	ToolCallID string `json:"tool_call_id"`
+	Path       string `json:"path"`
+	Content    string `json:"content,omitempty"`
+}
+
+// Clone returns a deep copy of PlanReviewRequest.
+func (r *PlanReviewRequest) Clone() *PlanReviewRequest {
+	if r == nil {
+		return nil
+	}
+	cp := *r
+	return &cp
+}
+
+// PlanReviewDecision carries the user's approval decision or keep-planning
+// feedback for a pending PlanReviewRequest.
+type PlanReviewDecision struct {
+	RequestID  string         `json:"request_id,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Approved   bool           `json:"approved"`
+	Mode       PermissionMode `json:"mode,omitempty"`
+	Feedback   string         `json:"feedback,omitempty"`
+	Canceled   bool           `json:"canceled,omitempty"`
+}
+
+// Clone returns a deep copy of PlanReviewDecision.
+func (d *PlanReviewDecision) Clone() *PlanReviewDecision {
+	if d == nil {
+		return nil
+	}
+	cp := *d
+	return &cp
+}
+
 type QuestionRequest struct {
 	ID          string     `json:"id"`
 	ToolCallID  string     `json:"tool_call_id"`
@@ -881,6 +920,7 @@ type Session struct {
 	Context            ContextState        `json:"context"`
 	PendingPermissions []PermissionRequest `json:"pending_permissions,omitempty"`
 	PendingQuestions   []QuestionRequest   `json:"pending_questions,omitempty"`
+	PendingPlanReviews []PlanReviewRequest `json:"pending_plan_reviews,omitempty"`
 	Tasks              []Task              `json:"tasks,omitempty"`
 	Todos              []TodoItem          `json:"todos,omitempty"`
 	Queue              []QueueItem         `json:"queue,omitempty"`
@@ -1037,6 +1077,7 @@ type SendRequest struct {
 	Command     string              `json:"command,omitempty"`
 	Decision    *PermissionDecision `json:"decision,omitempty"`
 	Question    *QuestionResponse   `json:"question,omitempty"`
+	PlanReview  *PlanReviewDecision `json:"plan_review,omitempty"`
 	Compact     *CompactRequest     `json:"compact,omitempty"`
 	Attachments []Attachment        `json:"attachments,omitempty"`
 }

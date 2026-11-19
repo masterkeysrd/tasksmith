@@ -62,15 +62,16 @@ type run struct {
 	watchCancel context.CancelFunc
 
 	// Loop-owned turn state.
-	tracker        *turnTracker
-	permOwners     map[string]string
-	questionOwners map[string]string
-	pendingSends   int
-	turnsDone      int
-	cancelPending  bool
-	lastStatus     string
-	lastError      string
-	guardReason    string
+	tracker          *turnTracker
+	permOwners       map[string]string
+	questionOwners   map[string]string
+	planReviewOwners map[string]string
+	pendingSends     int
+	turnsDone        int
+	cancelPending    bool
+	lastStatus       string
+	lastError        string
+	guardReason      string
 }
 
 func newRun(ctx context.Context, opts *Options) (*run, error) {
@@ -92,19 +93,20 @@ func newRun(ctx context.Context, opts *Options) (*run, error) {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	r := &run{
-		ctx:            runCtx,
-		cancel:         cancel,
-		opts:           opts,
-		tracker:        newTurnTracker(),
-		watchedSubs:    make(map[string]struct{}),
-		permOwners:     make(map[string]string),
-		questionOwners: make(map[string]string),
-		lastStatus:     api.ExecResultCompleted,
-		events:         make(chan api.Event),
-		streamErr:      make(chan error, 1),
-		actions:        make(chan api.ExecInputFrame, 16),
-		interrupt:      make(chan struct{}, 1),
-		quit:           make(chan struct{}, 1),
+		ctx:              runCtx,
+		cancel:           cancel,
+		opts:             opts,
+		tracker:          newTurnTracker(),
+		watchedSubs:      make(map[string]struct{}),
+		permOwners:       make(map[string]string),
+		questionOwners:   make(map[string]string),
+		planReviewOwners: make(map[string]string),
+		lastStatus:       api.ExecResultCompleted,
+		events:           make(chan api.Event),
+		streamErr:        make(chan error, 1),
+		actions:          make(chan api.ExecInputFrame, 16),
+		interrupt:        make(chan struct{}, 1),
+		quit:             make(chan struct{}, 1),
 	}
 	r.w = newTextWriter(opts.Stdout, opts.OutputFormat, opts.OutputFormat == OutputText)
 	return r, nil
@@ -456,6 +458,10 @@ func (r *run) submit(text, userText string) error {
 		}
 		return nil
 	}
+	return r.sendPrompt(trimmed, userText)
+}
+
+func (r *run) sendPrompt(trimmed, userText string) error {
 	req := api.SendRequest{Content: trimmed}
 	if strings.HasPrefix(trimmed, "!") {
 		req = api.SendRequest{Command: strings.TrimLeft(trimmed, "!")}
@@ -619,6 +625,13 @@ func (r *run) handleEvent(ev api.Event) bool {
 			r.settleNeedsInput()
 			return true
 		}
+	case api.PlanReviewRequestedEvent:
+		r.recordPlanReviewOwners(p.SessionID, p.PlanReviews)
+		if !r.opts.Interactive() && len(p.PlanReviews) > 0 {
+			r.guardReason = planReviewSummary(p.PlanReviews)
+			r.settleNeedsInput()
+			return true
+		}
 	case api.ErrorEvent:
 		if !isRoot {
 			return false
@@ -736,6 +749,11 @@ func (r *run) checkNonInteractiveSession(sess *api.Session) bool {
 		r.settleNeedsInput()
 		return true
 	}
+	if len(sess.PendingPlanReviews) > 0 {
+		r.guardReason = planReviewSummary(sess.PendingPlanReviews)
+		r.settleNeedsInput()
+		return true
+	}
 	return false
 }
 
@@ -752,6 +770,7 @@ func (r *run) seedSessionPending(sess *api.Session) {
 func (r *run) seedSingleSessionPending(sess *api.Session) {
 	r.recordPermissionOwners(sess.ID, sess.PendingPermissions)
 	r.recordQuestionOwners(sess.ID, sess.PendingQuestions)
+	r.recordPlanReviewOwners(sess.ID, sess.PendingPlanReviews)
 }
 
 func (r *run) recordPermissionOwners(sessionID string, reqs []api.PermissionRequest) {
@@ -804,6 +823,34 @@ func (r *run) questionSessionID(resp *api.QuestionResponse) string {
 	}
 	if resp.ToolCallID != "" {
 		if sid, ok := r.questionOwners["call:"+resp.ToolCallID]; ok {
+			return sid
+		}
+	}
+	return ""
+}
+
+func (r *run) recordPlanReviewOwners(sessionID string, reqs []api.PlanReviewRequest) {
+	if sessionID == "" {
+		return
+	}
+	for _, req := range reqs {
+		if req.ID != "" {
+			r.planReviewOwners[req.ID] = sessionID
+		}
+		if req.ToolCallID != "" {
+			r.planReviewOwners["call:"+req.ToolCallID] = sessionID
+		}
+	}
+}
+
+func (r *run) planReviewSessionID(dec *api.PlanReviewDecision) string {
+	if dec.RequestID != "" {
+		if sid, ok := r.planReviewOwners[dec.RequestID]; ok {
+			return sid
+		}
+	}
+	if dec.ToolCallID != "" {
+		if sid, ok := r.planReviewOwners["call:"+dec.ToolCallID]; ok {
 			return sid
 		}
 	}
@@ -992,4 +1039,17 @@ func questionSummary(reqs []api.QuestionRequest) string {
 		parts = append(parts, label)
 	}
 	return fmt.Sprintf("run needs an answer it cannot provide: %s", strings.Join(parts, "; "))
+}
+
+// planReviewSummary names the pending plan review requests for the guard.
+func planReviewSummary(reqs []api.PlanReviewRequest) string {
+	parts := make([]string, 0, len(reqs))
+	for _, req := range reqs {
+		if req.Path != "" {
+			parts = append(parts, "Review plan: "+req.Path)
+		} else {
+			parts = append(parts, "Review plan")
+		}
+	}
+	return fmt.Sprintf("run needs a plan review decision it cannot provide: %s", strings.Join(parts, "; "))
 }

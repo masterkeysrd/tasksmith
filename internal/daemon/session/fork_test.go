@@ -222,7 +222,7 @@ func TestSessionForkRejectsWaitingSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	for _, status := range []api.SessionStatus{api.StatusWaitingPermission, api.StatusWaitingQuestion} {
+	for _, status := range []api.SessionStatus{api.StatusWaitingPermission, api.StatusWaitingQuestion, api.StatusWaitingPlanReview} {
 		source.Lock()
 		source.Status = status
 		source.Unlock()

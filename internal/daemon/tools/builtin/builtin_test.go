@@ -197,6 +197,8 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 		builtin.ToolBash,
 		builtin.ToolDownload,
 		builtin.ToolEdit,
+		builtin.ToolEnterPlanMode,
+		builtin.ToolExitPlanMode,
 		builtin.ToolGlob,
 		builtin.ToolGrep,
 		builtin.ToolInvokeAgent,

@@ -57,14 +57,18 @@
 //     matching user allow rule grants it.
 //  2. Deny rules take precedence: any matching deny rule (session, project, or
 //     global) yields a denial.
-//  3. The active mode and matching allow rules decide auto-approval:
+//  3. Restricted (untrusted) workspaces deny non-read-only plans (except safe
+//     writes inside the session's plans directory).
+//  4. Safe writes inside `<session-dir>/plans/` are auto-allowed.
+//  5. The active mode and matching allow rules decide auto-approval:
 //     [github.com/masterkeysrd/tasksmith/api.ModeAuto] allows everything;
-//     [github.com/masterkeysrd/tasksmith/api.ModePlan] allows only read-only
-//     safe plans; [github.com/masterkeysrd/tasksmith/api.ModeAsk] and
-//     [github.com/masterkeysrd/tasksmith/api.ModeDefault] allow matching safe
-//     plans; and [github.com/masterkeysrd/tasksmith/api.ModeAcceptEdits]
+//     [github.com/masterkeysrd/tasksmith/api.ModeDefault],
+//     [github.com/masterkeysrd/tasksmith/api.ModePlan], and
+//     [github.com/masterkeysrd/tasksmith/api.ModeAsk] share the same base
+//     permission gate (safe read-only plans and matching safe allow rules);
+//     and [github.com/masterkeysrd/tasksmith/api.ModeAcceptEdits]
 //     additionally auto-approves non-unsafe write actions.
-//  4. Otherwise a UUIDv7 [github.com/masterkeysrd/tasksmith/api.PermissionRequest]
+//  6. Otherwise a UUIDv7 [github.com/masterkeysrd/tasksmith/api.PermissionRequest]
 //     is minted and an "ask" decision is returned.
 //
 // # Decisions

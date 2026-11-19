@@ -1,6 +1,6 @@
 # Built-in Tools Reference
 
-TaskSmith provides 20 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, child subagent delegators, and interactive user prompts. Built-ins are documented below; command-backed custom tools declared as `*.tool.md` manifests and tools discovered from [MCP](manifests.md#10-mcp-server-manifest-mcpyaml) servers share the same registry, safety annotations, and permission pipeline, and are covered in [Custom Tool Execution Model](#4-custom-tool-execution-model) and [MCP Tool Execution Model](#6-mcp-tool-execution-model).
+TaskSmith provides 22 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, child subagent delegators, planning transitions, and interactive user prompts. Built-ins are documented below; command-backed custom tools declared as `*.tool.md` manifests and tools discovered from [MCP](manifests.md#10-mcp-server-manifest-mcpyaml) servers share the same registry, safety annotations, and permission pipeline, and are covered in [Custom Tool Execution Model](#4-custom-tool-execution-model) and [MCP Tool Execution Model](#6-mcp-tool-execution-model).
 
 ---
 
@@ -22,6 +22,8 @@ TaskSmith provides 20 core built-in system tools backed by virtualized OS sandbo
 | **`tasks`** | `Proc`, `Session` | Safe / Auto-allowed | Lists, inspects, feeds input to, or terminates running background tasks. |
 | **`todos`** | `Session` | Safe / Auto-allowed | Manages the session progress checklist, tracking pending and completed items. |
 | **`ask_question`** | `Session` | Safe / Auto-allowed | Prompts the user with structured interactive questions (`single`, `multi`, `text`, `confirm`). |
+| **`enter_plan_mode`** | `Session` | Safe / Auto-allowed | Transitions a top-level session into `plan` mode and returns the session's safe `<session-dir>/plans/` directory. |
+| **`exit_plan_mode`** | `Session` | Safe / Auto-allowed | Submits an existing plan document for user review and exits `plan` mode upon approval. |
 | **`load_skill`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads domain guidelines, coding conventions, or workflows for a specified skill on demand. |
 | **`load_rule`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads the full instructions of a conditional workspace rule by name. Auto-activated when the agent has at least one conditional rule. |
 | **`read_mcp_resource`** | `Net`, `Workspace` | Safe & Read-Only / Auto-allowed | Reads one resource URI from a configured MCP server. Auto-activated when a connected server exposes a permitted resource. |
@@ -47,12 +49,12 @@ Every built-in tool defines safety properties in its manifest:
 
 ### Behavior Across Permission Modes
 
-| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `load_rule`, `read_mcp_resource`, `invoke_agent`, `tool_search`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `web_search`, `download`) |
+| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `enter_plan_mode`, `exit_plan_mode`, `load_skill`, `load_rule`, `read_mcp_resource`, `invoke_agent`, `tool_search`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `web_search`, `download`) |
 | :--- | :--- | :--- | :--- |
-| **`default`** | Auto-allowed | Prompts user for approval | Prompts user for approval |
+| **`default`** | Auto-allowed | Prompts user for approval (`<session-dir>/plans/` auto-allowed) | Prompts user for approval |
 | **`accept_edits`** | Auto-allowed | Auto-allowed (unified diff recorded) | Prompts user for approval |
-| **`plan`** | Auto-allowed | Denied (`AccessDeny`) | Denied (`AccessDeny`) |
-| **`ask`** | Prompts user for approval | Prompts user for approval | Prompts user for approval |
+| **`plan`** | Auto-allowed | Prompts user for approval (`<session-dir>/plans/` auto-allowed) | Prompts user for approval |
+| **`ask`** | Auto-allowed | Prompts user for approval (`<session-dir>/plans/` auto-allowed) | Prompts user for approval |
 | **`auto`** | Auto-allowed | Auto-allowed | Auto-allowed |
 
 ---
@@ -543,7 +545,7 @@ Maintains the agent's task checklist and milestone tracking throughout a multi-s
 
 ### `ask_question`
 
-Prompts the user with structured interactive questions to resolve ambiguities or confirm architectural choices. Permission rules and workspace policies apply; in `ask` mode, approval is required before the question is shown unless an allow rule matches.
+Prompts the user with structured interactive questions to resolve ambiguities or confirm architectural choices. Permission rules and workspace policies apply; an `ask` policy ceiling requires approval before the question is shown unless an allow rule matches.
 
 - **Annotations**: `isReadOnly: true`, `isIdempotent: false`, `isDangerous: false`, `isOpenWorld: false`
 - **User Hint**: `"Ask user: %s"`
@@ -595,6 +597,52 @@ Each item in `questions` includes:
   ]
 }
 ```
+
+---
+
+### `enter_plan_mode`
+
+Transitions a top-level session into `plan` mode (idempotent if already in `plan` mode) and returns the session's safe `<session-dir>/plans/` directory alongside the planning behavioral contract. Omitted from delegated subagents.
+
+- **Annotations**: `isReadOnly: true`, `isIdempotent: true`, `isDangerous: false`, `isOpenWorld: false`
+- **User Hint**: `"Enter plan mode"`
+
+#### Input Parameters
+
+*(None)*
+
+#### Output Fields
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `mode` | string | Active session permission mode (`"plan"`). |
+| `already_active` | boolean | `true` if the session was already in `plan` mode. |
+| `plans_dir` | string | Session-scoped safe directory (`<session-dir>/plans`) where plan writes and edits auto-allow. |
+| `instructions` | string | Behavioral contract and guidance for `plan` mode. |
+
+---
+
+### `exit_plan_mode`
+
+Submits a finished plan document for user review and suspends the turn until the user approves (switching to `accept_edits`, `default`, or `auto`) or asks to keep planning with optional feedback. Omitted from delegated subagents.
+
+- **Annotations**: `isReadOnly: true`, `isIdempotent: false`, `isDangerous: false`, `isOpenWorld: false`
+- **User Hint**: `"Submit plan: %s"`
+
+#### Input Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `path` | string | **Yes** | Path to the finished plan file inside the workspace or `<session-dir>/plans/`. |
+
+#### Output Fields
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `approved` | boolean | `true` if the user approved the plan and exited `plan` mode. |
+| `mode` | string | Resulting session permission mode after review. |
+| `plan_path` | string | Normalized path of the reviewed plan document. |
+| `feedback` | string | Optional revision feedback when the user chose to keep planning. |
 
 ---
 

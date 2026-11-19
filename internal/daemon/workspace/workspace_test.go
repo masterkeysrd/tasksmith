@@ -890,9 +890,10 @@ Builtin %s tool.
 // builtinToolNames is the set of built-in system tools referenced by the
 // embedded built-in agents' spec.tools.
 var builtinToolNames = []string{
-	"ask_question", "bash", "download", "edit", "glob", "grep", "invoke_agent",
-	"load_rule", "load_skill", "ls", "manage_agents", "remove", "tasks", "todos",
-	"tool_search", "view", "web_fetch", "web_search", "write",
+	"ask_question", "bash", "download", "edit", "enter_plan_mode", "exit_plan_mode",
+	"glob", "grep", "invoke_agent", "load_rule", "load_skill", "ls",
+	"manage_agents", "remove", "tasks", "todos", "tool_search", "view",
+	"web_fetch", "web_search", "write",
 }
 
 // TestCatalogValidationWarnings verifies that warp.Registry.Validate() failures

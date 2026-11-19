@@ -17,7 +17,7 @@ flowchart LR
     Rules -->|ask| Prompt["CLI Approval Prompt"]
     Prompt -->|Approve| Exec
 
-    Mode -.->|Plan mutation| Deny(["Access Denied"])
+    Mode -.->|Restricted / readOnly| Deny(["Access Denied"])
     Path -.->|Path escape| Deny
     Shell -.->|Unsafe AST| Deny
     Rules -.->|deny| Deny
@@ -30,7 +30,7 @@ flowchart LR
 
 ### 1. Layered Evaluation Pipeline
 Every tool call issued by an agent passes through a multi-stage security pipeline before reaching the execution environment:
-- **Session Mode Enforcement**: Evaluates the tool against the active session mode. In **Plan Mode** (`plan`), all mutating tools (`write`, `edit`, `bash`) are automatically blocked. In **Auto Mode** (`auto`), pre-approved non-destructive operations execute autonomously.
+- **Session Mode & Trust Enforcement**: Separates permission gates (`default`, `accept_edits`, `auto`) from behavioral postures (`plan`, `ask`). `default`, `plan`, and `ask` share the same permission gate (safe read-only tools auto-run; mutating actions prompt), while writes/edits inside `<session-dir>/plans/` always auto-allow. Restricted (untrusted) workspaces start in `default` mode and deny all mutating actions outside `<session-dir>/plans/` regardless of mode. In **Auto Mode** (`auto`), allowed operations execute autonomously (except explicit `deny` rules, policy `ask` ceilings, `bypass_sandbox` retries, and unlisted proxy hosts).
 - **Hierarchical Rule Engine**: Custom permission rules are evaluated in strict priority order: **`deny` $\to$ `allow` $\to$ `ask`**. A matching `deny` rule immediately terminates execution with an error, taking precedence over all other settings.
 
 ### 2. Shell AST Inspection (`shellguard`)

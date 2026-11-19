@@ -25,6 +25,7 @@ func TestSlotRender(t *testing.T) {
 	kinds := []store.SlotKind{
 		store.SlotKindPermission,
 		store.SlotKindQuestion,
+		store.SlotKindPlanReview,
 		store.SlotKindPicker,
 		store.SlotKindAutocomplete,
 		store.SlotKind("unknown"),
@@ -90,5 +91,33 @@ func TestSlotRendersPermissionPrompt(t *testing.T) {
 	}
 	if !strings.Contains(out, "Keyboard:") {
 		t.Errorf("expected KeyboardHint in rendered Slot output, got:\n%s", out)
+	}
+}
+
+func TestSlotRendersPlanReviewPrompt(t *testing.T) {
+	store.ClearSlot()
+	defer store.ClearSlot()
+
+	req := samplePlanReviewRequest()
+	store.EnqueueSlot(store.SlotItem{
+		ID:   "plan_review-" + req.ID,
+		Kind: store.SlotKindPlanReview,
+		Data: req,
+	})
+
+	b := mock.New(90, 30)
+	app := trail.SimpleFC("TestSlotPlanApp", func() kitex.Node {
+		return Slot()
+	})
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	defer inst.Unmount()
+	inst.Frame()
+
+	out := testutils.SurfaceText(b)
+	if !strings.Contains(out, "Plan review · plans/feature.md") || !strings.Contains(out, "Approve & auto-accept edits") {
+		t.Errorf("expected PlanReviewPrompt in rendered Slot output, got:\n%s", out)
 	}
 }

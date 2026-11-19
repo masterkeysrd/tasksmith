@@ -51,6 +51,7 @@ type streamKey struct {
 	Streaming         bool
 	WaitingPermission bool
 	WaitingQuestion   bool
+	WaitingPlanReview bool
 	TurnFailed        bool
 }
 
@@ -66,7 +67,7 @@ func liveTerminalState(stream streamKey, onboardingActive bool) terminalState {
 		return stateBlocked
 	case stream.WaitingPermission:
 		return stateBlocked
-	case stream.WaitingQuestion:
+	case stream.WaitingQuestion, stream.WaitingPlanReview:
 		return stateBlocked
 	case stream.Streaming:
 		return stateWorking
@@ -81,7 +82,7 @@ func blockedKind(stream streamKey, onboardingActive bool) terminal.ProgramStatus
 	switch {
 	case stream.WaitingPermission:
 		return terminal.ProgramStatusKindPermission
-	case stream.WaitingQuestion:
+	case stream.WaitingQuestion, stream.WaitingPlanReview:
 		return terminal.ProgramStatusKindQuestion
 	case onboardingActive:
 		return terminal.ProgramStatusKindAuth
@@ -206,6 +207,7 @@ var TerminalStatus = trail.SimpleFC("TerminalStatus", func() trail.Node {
 			Streaming:         s.Streaming,
 			WaitingPermission: s.WaitingPermission,
 			WaitingQuestion:   s.WaitingQuestion,
+			WaitingPlanReview: s.WaitingPlanReview,
 			TurnFailed:        s.TurnFailed,
 		}
 	})

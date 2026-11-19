@@ -19,6 +19,7 @@ type State struct {
 	Running            bool                    `json:"running"`
 	PendingPermissions []api.PermissionRequest `json:"pending_permissions,omitempty"`
 	PendingQuestions   []api.QuestionRequest   `json:"pending_questions,omitempty"`
+	PendingPlanReviews []api.PlanReviewRequest `json:"pending_plan_reviews,omitempty"`
 	Tasks              []api.Task              `json:"tasks,omitempty"`
 	Todos              []api.TodoItem          `json:"todos,omitempty"`
 	Context            api.ContextState        `json:"context"`
@@ -32,6 +33,7 @@ type State struct {
 	err                error                             `json:"-"`
 	decisions          map[string]api.PermissionDecision `json:"-"`
 	answers            map[string]api.QuestionResponse   `json:"-"`
+	planReviews        map[string]api.PlanReviewDecision `json:"-"`
 	hostApprovals      map[string]*hostApproval          `json:"-"`
 	hostApprovalActive int                               `json:"-"`
 	closing            bool                              `json:"-"`
@@ -42,9 +44,10 @@ type State struct {
 // NewState constructs a new [State] initialized to [api.StatusIdle].
 func NewState() *State {
 	return &State{
-		Status:    api.StatusIdle,
-		decisions: make(map[string]api.PermissionDecision),
-		answers:   make(map[string]api.QuestionResponse),
+		Status:      api.StatusIdle,
+		decisions:   make(map[string]api.PermissionDecision),
+		answers:     make(map[string]api.QuestionResponse),
+		planReviews: make(map[string]api.PlanReviewDecision),
 	}
 }
 
@@ -75,6 +78,10 @@ func (s *State) Clone() *State {
 	for i := range s.PendingQuestions {
 		questions = append(questions, *s.PendingQuestions[i].Clone())
 	}
+	var planReviews []api.PlanReviewRequest
+	for i := range s.PendingPlanReviews {
+		planReviews = append(planReviews, *s.PendingPlanReviews[i].Clone())
+	}
 	var q []queueItem
 	if len(s.queue) > 0 {
 		q = make([]queueItem, len(s.queue))
@@ -90,6 +97,7 @@ func (s *State) Clone() *State {
 		Running:            s.Running,
 		PendingPermissions: perms,
 		PendingQuestions:   questions,
+		PendingPlanReviews: planReviews,
 		Tasks:              slices.Clone(s.Tasks),
 		Todos:              slices.Clone(s.Todos),
 		Context:            s.Context,
@@ -99,6 +107,7 @@ func (s *State) Clone() *State {
 		FinishedAt:         s.FinishedAt,
 		decisions:          make(map[string]api.PermissionDecision),
 		answers:            make(map[string]api.QuestionResponse),
+		planReviews:        make(map[string]api.PlanReviewDecision),
 		queue:              q,
 	}
 }

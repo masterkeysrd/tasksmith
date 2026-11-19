@@ -111,7 +111,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 }
 
 func TestWaitingStatusProtectsResponseHandoff(t *testing.T) {
-	for _, status := range []api.SessionStatus{api.StatusWaitingPermission, api.StatusWaitingQuestion} {
+	for _, status := range []api.SessionStatus{api.StatusWaitingPermission, api.StatusWaitingQuestion, api.StatusWaitingPlanReview} {
 		s := &Session{State: &State{Status: status}}
 		if err := s.startTurn(harness.Input{Compact: &api.CompactRequest{}}); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("status %s: compact error %v", status, err)

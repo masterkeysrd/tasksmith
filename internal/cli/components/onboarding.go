@@ -604,12 +604,12 @@ func renderModeStep(props OnboardingWizardProps) trail.Node {
 		{
 			Value:       string(api.ModePlan),
 			Label:       "Plan",
-			Description: "Read-only; mutating tools blocked",
+			Description: "Investigate and draft plans without editing code; mutations ask",
 		},
 		{
 			Value:       string(api.ModeAsk),
 			Label:       "Ask",
-			Description: "Ask before almost every tool call",
+			Description: "Answer questions without modifying code; mutations ask",
 		},
 		{
 			Value:       string(api.ModeAuto),

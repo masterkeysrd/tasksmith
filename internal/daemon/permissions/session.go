@@ -2,12 +2,14 @@ package permissions
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
@@ -23,6 +25,10 @@ type SessionManager interface {
 	SetPolicies(p *warp.Policies)
 	AgentPolicies() *warp.Policies
 	SetAgentPolicies(p *warp.Policies)
+	// SetPlansDir registers the session-scoped safe plans directory
+	// (<session-dir>/plans/) where agent write/edit/remove operations are
+	// auto-allowed and remain writable even in restricted workspaces.
+	SetPlansDir(dir string)
 	// SetRuntimePolicy installs the live sandbox posture consulted while
 	// evaluating bash plans (autoAllowBash). A nil policy clears it, which
 	// disables autoAllowBash widening.
@@ -54,6 +60,7 @@ type sessionState struct {
 	mu          sync.RWMutex
 	manager     Manager
 	ws          *workspace.Workspace
+	plansDir    string
 	mode        api.PermissionMode
 	permissions api.Permissions
 	policies    *warp.Policies
@@ -142,6 +149,35 @@ func (s *sessionManager) SetAgentPolicies(p *warp.Policies) {
 	s.agentMu.Lock()
 	defer s.agentMu.Unlock()
 	s.agentPolicies = p
+}
+
+// SetPlansDir registers the session-scoped safe plans directory where agent
+// write, edit, and remove operations are auto-allowed.
+func (s *sessionManager) SetPlansDir(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		s.plansDir = ""
+		return
+	}
+	s.plansDir = filepath.Clean(dir)
+}
+
+func (s *sessionState) isPlanDirMutation(plan *tools.Plan) bool {
+	if plan == nil || plan.Safety != api.SafetySafe || plan.Target == "" {
+		return false
+	}
+	if plan.Action != api.ActionWrite && plan.Action != api.ActionDelete {
+		return false
+	}
+	s.mu.RLock()
+	plansDir := s.plansDir
+	s.mu.RUnlock()
+	if plansDir == "" {
+		return false
+	}
+	return fsutils.IsInsideDir(filepath.Clean(plan.Target), plansDir)
 }
 
 // SetRuntimePolicy installs the live sandbox posture consulted while
@@ -420,9 +456,18 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 
 	mode := s.Mode()
 
-	// Plan mode denies any plan that is not read-only.
-	if mode == api.ModePlan && !plan.ReadOnly {
+	// Restricted (untrusted) workspaces deny all mutating or side-effecting
+	// actions regardless of mode, while keeping the session-scoped plans
+	// directory writable.
+	if s.ws != nil && s.ws.IsRestricted() && !plan.ReadOnly && !s.isPlanDirMutation(plan) {
 		return tools.AccessDeny, nil, nil
+	}
+
+	// Agent write, edit, and remove operations inside <session-dir>/plans/ are
+	// session-scoped and safe, so they auto-allow without prompting (unless
+	// blocked above by policy or an explicit deny rule).
+	if s.isPlanDirMutation(plan) {
+		return tools.AccessAllow, nil, nil
 	}
 
 	// A policy "ask" ceiling forces user confirmation unless the mode is auto or
@@ -448,20 +493,9 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 		}
 	} else {
 		switch mode {
-		case api.ModePlan:
-			if plan.Safety == api.SafetySafe {
-				return tools.AccessAllow, nil, nil
-			}
-			if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
-				return tools.AccessAllow, nil, nil
-			}
-		case api.ModeAsk:
-			if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
-				return tools.AccessAllow, nil, nil
-			}
 		case api.ModeAuto:
 			return tools.AccessAllow, nil, nil
-		default: // ModeDefault, ModeAcceptEdits
+		default: // ModeDefault, ModeAcceptEdits, ModePlan, ModeAsk
 			if plan.ReadOnly && plan.Safety == api.SafetySafe {
 				return tools.AccessAllow, nil, nil
 			}
@@ -469,12 +503,14 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 				return tools.AccessAllow, nil, nil
 			}
 			// autoAllowBash widens exactly one case: a safe, sandboxed bash
-			// command inside a native kernel sandbox. Unsafe, outside,
-			// unsandboxed, denied, and policy-asked plans still prompt, and
-			// plan/ask modes are untouched above.
-			if rt := s.runtimePolicy(); rt != nil && rt.AutoAllowBash && rt.SandboxNative &&
-				plan.ToolName == "bash" && !plan.Unsandboxed && plan.Safety == api.SafetySafe {
-				return tools.AccessAllow, nil, nil
+			// command inside a native kernel sandbox in default or accept_edits
+			// modes. Unsafe, outside, unsandboxed, denied, and policy-asked plans
+			// still prompt, and plan/ask modes keep standard prompting.
+			if mode == api.ModeDefault || mode == api.ModeAcceptEdits {
+				if rt := s.runtimePolicy(); rt != nil && rt.AutoAllowBash && rt.SandboxNative &&
+					plan.ToolName == "bash" && !plan.Unsandboxed && plan.Safety == api.SafetySafe {
+					return tools.AccessAllow, nil, nil
+				}
 			}
 			if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
 				return tools.AccessAllow, nil, nil

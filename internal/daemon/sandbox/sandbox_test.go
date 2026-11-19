@@ -1295,3 +1295,39 @@ func TestAvailabilityMatchesProbe(t *testing.T) {
 		t.Errorf("Availability must be cached: first=%+v second=%+v", avail, second)
 	}
 }
+
+func TestReadOnlyAllowsSessionWriteDirs(t *testing.T) {
+	ctx := context.Background()
+	workDir := t.TempDir()
+	plansDir := filepath.Join(t.TempDir(), "sessions", "s1", "plans")
+	otherOutside := filepath.Join(t.TempDir(), "other.txt")
+
+	sbx, err := New(Config{
+		WorkDir:          workDir,
+		Mode:             ModeLocal,
+		ReadOnly:         true,
+		SessionWriteDirs: []string{plansDir},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	if err := sbx.FS().WriteFile(ctx, "repo.txt", []byte("nope"), 0o644); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("repo write in read-only sandbox = %v, want ErrReadOnly", err)
+	}
+	if err := sbx.FS().WriteFile(ctx, otherOutside, []byte("nope"), 0o644); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("outside write in read-only sandbox = %v, want ErrReadOnly", err)
+	}
+	if err := sbx.FS().MkdirAll(ctx, plansDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll plansDir: %v", err)
+	}
+	planFile := filepath.Join(plansDir, "plan.md")
+	if err := sbx.FS().WriteFile(ctx, planFile, []byte("# Plan\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile in plansDir: %v", err)
+	}
+	data, err := sbx.FS().ReadFile(ctx, planFile)
+	if err != nil || string(data) != "# Plan\n" {
+		t.Fatalf("ReadFile in plansDir = %q, %v", data, err)
+	}
+}

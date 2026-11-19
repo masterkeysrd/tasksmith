@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -99,23 +98,23 @@ func (m *RuleMatcher) lookupRule(name string) (*warp.Rule, bool) {
 }
 
 // SuggestUserRules inspects a genuine user message for keyword triggers on the
-// agent's conditional rules, returning a formatted suggestion section (when any
-// rule matched) and the names of the newly suggested rules.
-func (m *RuleMatcher) SuggestUserRules(msg message.Message, state State) (string, []string) {
+// agent's conditional rules, returning a [RuleSuggestionsReminder] and the names
+// of the newly suggested rules.
+func (m *RuleMatcher) SuggestUserRules(msg message.Message, state State) (RuleSuggestionsReminder, []string) {
 	if m == nil {
-		return "", nil
+		return RuleSuggestionsReminder{}, nil
 	}
 	user, ok := msg.(*message.User)
 	if !ok || user == nil || SystemKindOf(user) != "" {
-		return "", nil
+		return RuleSuggestionsReminder{}, nil
 	}
 	text := user.GetContent().Text()
 	if strings.TrimSpace(text) == "" {
-		return "", nil
+		return RuleSuggestionsReminder{}, nil
 	}
 
 	var suggested []string
-	var bullets []string
+	var suggestions []RuleSuggestion
 	seenSuggested := make(map[string]struct{})
 	lower := strings.ToLower(text)
 
@@ -136,19 +135,18 @@ func (m *RuleMatcher) SuggestUserRules(msg message.Message, state State) (string
 			continue
 		}
 		seenSuggested[key] = struct{}{}
-		bullet := fmt.Sprintf("- **%s**: %s", name, rl.Metadata.Description)
-		if useWhen := strings.TrimSpace(rl.Spec.Triggers.UseWhen); useWhen != "" {
-			bullet += fmt.Sprintf(" (Use when: %s)", useWhen)
-		}
-		bullets = append(bullets, bullet)
+		suggestions = append(suggestions, RuleSuggestion{
+			Name:        name,
+			Description: rl.Metadata.Description,
+			UseWhen:     rl.Spec.Triggers.UseWhen,
+		})
 		suggested = append(suggested, name)
 	}
 
-	if len(bullets) == 0 {
-		return "", nil
+	if len(suggestions) == 0 {
+		return RuleSuggestionsReminder{}, nil
 	}
-	section := "The following workspace rules may be relevant to your current task. Call load_rule to apply any that match:\n" + strings.Join(bullets, "\n")
-	return section, suggested
+	return RuleSuggestionsReminder{Rules: suggestions}, suggested
 }
 
 // MatchToolBatch inspects a batch of executed tool calls and their results for
@@ -260,22 +258,20 @@ func (m *RuleMatcher) MatchToolBatch(calls []*message.ToolCall, plans map[string
 		return nil, loaded
 	}
 
-	var sb strings.Builder
-	sb.WriteString("<system_reminders>\n")
+	items := make([]ReminderItem, 0, len(rendered))
 	for _, ev := range rendered {
 		rl, _ := m.lookupRule(ev.Rule)
-		fmt.Fprintf(&sb, "<rule name=%q path=%q>\n%s\n</rule>\n", ev.Rule, ev.Path, m.render(rl))
+		items = append(items, RuleReminder{
+			Name:    ev.Rule,
+			Path:    ev.Path,
+			Content: m.render(rl),
+		})
 	}
-	sb.WriteString("</system_reminders>")
 
-	names := make([]string, 0, len(loaded))
-	for _, ev := range loaded {
-		names = append(names, ev.Rule)
-	}
-	reminder := message.NewUserTextMeta(sb.String(), map[string]any{
-		MetaSystemKind: SystemKindReminder,
-		MetaRuleNames:  names,
-	})
+	reminder := (SystemReminder{
+		Items:     items,
+		RuleNames: ruleLoadedNames(loaded),
+	}).Message()
 	return reminder, loaded
 }
 

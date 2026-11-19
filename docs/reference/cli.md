@@ -83,6 +83,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | :--- | :--- | :--- | :--- |
 | **`/help`** | `/h`, `/?` | *(none)* | Opens the interactive slash command browser and help viewer. |
 | **`/mode`** | | `[mode]` (`default`, `accept_edits`, `plan`, `ask`, `auto`) | Inspects current permission mode or switches to the specified mode. |
+| **`/plan`** | | `[prompt]` | Switches to `plan` mode, and optionally submits `prompt` immediately as a planning turn. |
 | **`/model`** | | `[--force] [model_id]` | Switches to `model_id`, or opens the interactive model picker if no argument is provided. Prompts for confirmation (or requires `--force`) when switching drops modalities active in the session. See [Model Picker](#model-picker-model). |
 | **`/agent`** | | `[agent_name]` | Displays active agent, switches to `agent_name`, or opens the interactive agent picker if no argument is provided. |
 | **`/effort`** | | `[level\|default]` | Set an allowed model-specific effort or open the picker, which shows available descriptions. |
@@ -410,6 +411,22 @@ While browsing history, the composer's bottom border is replaced by a centered r
 | `Enter` | Modals & Pickers | Confirm and activate highlighted item. |
 | `Esc` | Modals & Pickers | Dismiss and close modal without applying changes. |
 | *Character keys* | Modals & Pickers | Dynamically filter list items with live search. |
+
+### Plan Review Prompt (`exit_plan_mode`)
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `k` / `Ctrl+P` | Plan Review | Move option cursor up. |
+| `↓` / `j` / `Ctrl+N` | Plan Review | Move option cursor down. |
+| `p` | Plan Review | Open scrollable Markdown plan viewer. |
+| `1` / `2` / `3` | Plan Review | Approve plan and switch to `accept_edits`, `default`, or `auto` mode. |
+| `4` / `r` | Plan Review | Open inline feedback input for **Keep planning**. |
+| `Enter` | Plan Review | Confirm highlighted choice (or submit feedback when editing). |
+| `Esc` | Plan Review | Cancel review and stay in `plan` mode (or leave feedback input). |
+| `↑` / `↓` or `j` / `k` / `Ctrl+P` / `Ctrl+N` | Plan Viewer | Scroll plan Markdown one line up or down. |
+| `PgUp` / `PgDn` / `Space` / `b` / `f` / `Ctrl+U` / `Ctrl+D` / `Ctrl+B` / `Ctrl+F` | Plan Viewer | Scroll plan Markdown one page up or down. |
+| `g` / `Home` / `G` / `End` | Plan Viewer | Jump to top (`g` / `Home`) or bottom (`G` / `End`) of plan. |
+| `p` / `q` / `Esc` / `Enter` | Plan Viewer | Return to the Plan Review options without canceling. |
 
 ### Session Browser (`/sessions`)
 

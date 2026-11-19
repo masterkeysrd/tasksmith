@@ -238,6 +238,36 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 			},
 		},
 		{
+			name: "plan review record",
+			makeEntry: func() *Entry {
+				return NewPlanReviewEntry(api.PlanReviewRecord{
+					Request: api.PlanReviewRequest{
+						ID:         "pr-1",
+						ToolCallID: "call-exit-1",
+						Path:       "plans/feature.md",
+						Content:    "# Plan\n",
+					},
+					Decision: api.PlanReviewDecision{
+						RequestID:  "pr-1",
+						ToolCallID: "call-exit-1",
+						Approved:   true,
+						Mode:       api.ModeAcceptEdits,
+					},
+				})
+			},
+			verify: func(t *testing.T, original, loaded *Entry) {
+				if loaded.Kind != api.TimelineKindPlanReview {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindPlanReview)
+				}
+				if loaded.PlanReview == nil {
+					t.Fatal("loaded.PlanReview is nil")
+				}
+				if loaded.PlanReview.Request != original.PlanReview.Request || loaded.PlanReview.Decision != original.PlanReview.Decision {
+					t.Errorf("loaded.PlanReview = %+v, want %+v", *loaded.PlanReview, *original.PlanReview)
+				}
+			},
+		},
+		{
 			name: "compacted record",
 			makeEntry: func() *Entry {
 				return NewCompactedEntry(api.CompactedRecord{
@@ -671,6 +701,10 @@ func TestErrorCases(t *testing.T) {
 		{
 			name:  "api.TimelineKindPermission nil",
 			entry: &Entry{TimelineEntry: api.TimelineEntry{SessionID: validSession, Kind: api.TimelineKindPermission, Permission: nil}},
+		},
+		{
+			name:  "api.TimelineKindPlanReview nil",
+			entry: &Entry{TimelineEntry: api.TimelineEntry{SessionID: validSession, Kind: api.TimelineKindPlanReview, PlanReview: nil}},
 		},
 		{
 			name:  "api.TimelineKindCompacted nil",

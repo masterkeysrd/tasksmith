@@ -51,6 +51,12 @@ func (e Entry) Clone() Entry {
 			Response: *e.Question.Response.Clone(),
 		}
 	}
+	if e.PlanReview != nil {
+		cp.PlanReview = &api.PlanReviewRecord{
+			Request:  *e.PlanReview.Request.Clone(),
+			Decision: *e.PlanReview.Decision.Clone(),
+		}
+	}
 	cp.Compacted = ptr.Clone(e.Compacted)
 	cp.CacheBroken = ptr.Clone(e.CacheBroken)
 	cp.TurnCompleted = ptr.Clone(e.TurnCompleted)
@@ -143,6 +149,16 @@ func NewQuestionEntry(record api.QuestionRecord) *Entry {
 		TimelineEntry: api.TimelineEntry{
 			Kind:     api.TimelineKindQuestion,
 			Question: &record,
+		},
+	}
+}
+
+// NewPlanReviewEntry creates an Entry initialized with a PlanReviewRecord payload.
+func NewPlanReviewEntry(record api.PlanReviewRecord) *Entry {
+	return &Entry{
+		TimelineEntry: api.TimelineEntry{
+			Kind:       api.TimelineKindPlanReview,
+			PlanReview: &record,
 		},
 	}
 }

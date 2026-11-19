@@ -47,7 +47,7 @@ func newTestMatcher(t *testing.T, rules ...*warp.Rule) *RuleMatcher {
 
 func TestRuleMatcherNilIsNoOp(t *testing.T) {
 	var m *RuleMatcher
-	if sec, suggested := m.SuggestUserRules(message.NewUserText("hello"), State{}); sec != "" || suggested != nil {
+	if rem, suggested := m.SuggestUserRules(message.NewUserText("hello"), State{}); rem.FormatReminder() != "" || suggested != nil {
 		t.Error("nil matcher should return empty suggestions")
 	}
 	if _, loaded := m.MatchToolBatch(nil, nil, nil, State{}); loaded != nil {
@@ -73,7 +73,8 @@ func TestRuleMatcherUserMessageKeywordSuggests(t *testing.T) {
 	m := newTestMatcher(t, rule)
 
 	// "error" appears as a whole word; keyword matching is case-insensitive.
-	section, suggested := m.SuggestUserRules(message.NewUserText("I need to fix the ERROR handling here."), State{})
+	rem, suggested := m.SuggestUserRules(message.NewUserText("I need to fix the ERROR handling here."), State{})
+	section := rem.FormatReminder()
 	if section == "" {
 		t.Fatalf("expected a suggestion section for keyword match")
 	}
@@ -368,11 +369,11 @@ func TestRuleMatcherGenuineUserOnly(t *testing.T) {
 
 	// A synthetic reminder message (SystemKindOf != "") must be ignored.
 	reminder := message.NewUserTextMeta("error", map[string]any{MetaSystemKind: SystemKindReminder})
-	if sec, _ := m.SuggestUserRules(reminder, State{}); sec != "" {
+	if rem, _ := m.SuggestUserRules(reminder, State{}); rem.FormatReminder() != "" {
 		t.Error("synthetic reminder should not be re-matched")
 	}
 	// A non-user message must be ignored.
-	if sec, _ := m.SuggestUserRules(&message.Assistant{Content: message.Content{&message.TextBlock{Text: "error"}}}, State{}); sec != "" {
+	if rem, _ := m.SuggestUserRules(&message.Assistant{Content: message.Content{&message.TextBlock{Text: "error"}}}, State{}); rem.FormatReminder() != "" {
 		t.Error("non-user message should not be matched")
 	}
 }

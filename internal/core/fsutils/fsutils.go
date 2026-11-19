@@ -79,6 +79,57 @@ func IsInsideDir(targetPath, dir string) bool {
 	return strings.HasPrefix(resClean, dirClean+string(filepath.Separator))
 }
 
+// HasDanglingSymlinkUnder reports whether any existing path component at or
+// below baseDir along targetPath is a symlink that cannot be resolved cleanly
+// inside baseDir.
+func HasDanglingSymlinkUnder(targetPath, baseDir string) bool {
+	rel, err := filepath.Rel(baseDir, targetPath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	cur := baseDir
+	for part := range strings.SplitSeq(filepath.ToSlash(rel), "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if err != nil {
+			return false
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if _, evalErr := filepath.EvalSymlinks(cur); evalErr != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsConfinedInsideDir reports whether targetPath resides inside baseDir without
+// escaping via a dangling symlink, and its canonical (symlink-resolved) form
+// stays inside the canonical baseDir. When baseDir does not exist yet, a
+// canonical base nested inside the canonical target (a not-yet-created
+// intermediate directory) is still considered confined.
+func IsConfinedInsideDir(targetPath, baseDir string) bool {
+	if baseDir == "" {
+		return false
+	}
+	cleanBase := filepath.Clean(baseDir)
+	if !IsInsideDir(targetPath, cleanBase) {
+		return false
+	}
+	if HasDanglingSymlinkUnder(targetPath, cleanBase) {
+		return false
+	}
+	canonBase := ResolveDeepestExisting(cleanBase)
+	canonTarget := ResolveDeepestExisting(targetPath)
+	if _, err := os.Stat(cleanBase); err == nil {
+		return IsInsideDir(canonTarget, canonBase)
+	}
+	return IsInsideDir(canonTarget, canonBase) || IsInsideDir(canonBase, canonTarget)
+}
+
 // PortablePath converts targetPath into a portable representation. If targetPath
 // is located within rootDir, it returns the relative path from rootDir. Otherwise,
 // if located within homeDir, it returns the path prefixed with "~". If it cannot

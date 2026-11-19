@@ -61,7 +61,7 @@ func UseWaitingSubagents() []api.Session {
 	all := UseSubagents()
 	var waiting []api.Session
 	for _, s := range all {
-		if s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion || len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 {
+		if s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion || s.Status == api.StatusWaitingPlanReview || len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 || len(s.PendingPlanReviews) > 0 {
 			waiting = append(waiting, s)
 		}
 	}
@@ -94,7 +94,7 @@ func GetWaitingSubagents() []api.Session {
 	all := GetSubagents()
 	var waiting []api.Session
 	for _, s := range all {
-		if s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion || len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 {
+		if s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion || s.Status == api.StatusWaitingPlanReview || len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 || len(s.PendingPlanReviews) > 0 {
 			waiting = append(waiting, s)
 		}
 	}
@@ -332,7 +332,7 @@ func (s *SubagentConversation) SessionStatus() api.SessionStatus {
 func (s *SubagentConversation) IsStreaming() bool {
 	s.acc.mu.Lock()
 	defer s.acc.mu.Unlock()
-	return s.acc.status == StreamRunning || s.acc.status == StreamWaitingPermission || s.acc.status == StreamWaitingQuestion || s.acc.pendingUser != nil || (s.acc.draft >= 0 && s.acc.status != StreamIdle && s.acc.status != StreamCompleted && s.acc.status != StreamFailed)
+	return s.acc.status == StreamRunning || s.acc.status == StreamWaitingPermission || s.acc.status == StreamWaitingQuestion || s.acc.status == StreamWaitingPlanReview || s.acc.pendingUser != nil || (s.acc.draft >= 0 && s.acc.status != StreamIdle && s.acc.status != StreamCompleted && s.acc.status != StreamFailed)
 }
 
 // Todos returns a snapshot of active checklist items for the subagent.

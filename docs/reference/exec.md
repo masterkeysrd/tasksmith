@@ -65,7 +65,7 @@ git diff | tasksmith -p "Review this diff for bugs"
 
 ### `jsonl` (bidirectional)
 
-stdin is a stream of newline-delimited JSON **control frames** (`api.ExecInputFrame`, one object per line). The run stays open across turns until a `close` frame or stdin EOF. A prompt argument is optional; when present it's submitted as the first turn. Every control frame also accepts an optional `"session_id"` field when explicitly targeting a child subagent; for `permission` and `question` replies, `exec` automatically routes to the owning parent or subagent by `request_id` / `tool_call_id` when `"session_id"` is omitted.
+stdin is a stream of newline-delimited JSON **control frames** (`api.ExecInputFrame`, one object per line). The run stays open across turns until a `close` frame or stdin EOF. A prompt argument is optional; when present it's submitted as the first turn. Every control frame also accepts an optional `"session_id"` field when explicitly targeting a child subagent; for `permission`, `question`, and `plan_review` replies, `exec` automatically routes to the owning parent or subagent by `request_id` / `tool_call_id` when `"session_id"` is omitted.
 
 | Frame | Payload field | Maps to | Effect |
 | :--- | :--- | :--- | :--- |
@@ -73,22 +73,24 @@ stdin is a stream of newline-delimited JSON **control frames** (`api.ExecInputFr
 | `{"type":"send","send":{...}}` | `send` | `api.SendRequest` | Full send: `content`, `attachments`, `command`, `compact`, etc. |
 | `{"type":"permission","permission":{...}}` | `permission` | `api.PermissionDecision` | Answer a live `permission_requested` prompt. |
 | `{"type":"question","question":{...}}` | `question` | `api.QuestionResponse` | Answer a live `question_requested` prompt. |
+| `{"type":"plan_review","plan_review":{...}}` | `plan_review` | `api.PlanReviewDecision` | Answer a live `plan_review_requested` prompt from `exit_plan_mode`. |
 | `{"type":"config","config":{...}}` | `config` | `api.UpdateSessionRequest` | Change `mode`, `model`, `agent`, `title`, or `thinking` mid-session. |
 | `{"type":"cancel"}` | — | `client.Cancel` | Abort the in-flight turn; the session stays open for more frames. |
 | `{"type":"close"}` | — | — | Drain pending turns, print the terminal result, exit. |
 
 Payload field names (all snake_case, from the canonical `api/` structs):
 
-- **`send`** (`api.SendRequest`): `id`, `content`, `blocks`, `command`, `decision`, `question`, `compact`, `attachments`.
+- **`send`** (`api.SendRequest`): `id`, `content`, `blocks`, `command`, `decision`, `question`, `plan_review`, `compact`, `attachments`.
 - **`permission`** (`api.PermissionDecision`): `request_id` and `tool_call_id` (copy both from the request you're answering), `kind` (`allow_once` / `allow_session` / `reject`), optional `grant_pattern`, `scope` (`session` / `project` / `global`), `feedback`.
 - **`question`** (`api.QuestionResponse`): `request_id`, `tool_call_id`, optional `canceled`, and `answers[]` — each `{question, confirmed?, selected?[], text?}`.
+- **`plan_review`** (`api.PlanReviewDecision`): `request_id`, `tool_call_id`, `approved` (`bool`), optional `mode` (`accept_edits` / `default` / `auto` when approved), `feedback` (when keeping planning), and `canceled`.
 - **`config`** (`api.UpdateSessionRequest`): `title` plus a `config` object (`agent`, `model`, `mode`, `thinking`).
 
 Blank lines between frames are ignored; a single frame may not exceed 8 MiB.
 
 ### Non-Interactive Guard
 
-In `text` input mode nothing can answer a permission or question prompt. Rather than hang, the run terminates immediately: final status `needs_input`, exit `4`, and the in-flight turn is canceled in the background. If your automation may touch tools under `--mode ask`, use `--input-format jsonl`.
+In `text` input mode nothing can answer a permission, question, or plan review prompt. Rather than hang, the run terminates immediately: final status `needs_input`, exit `4`, and the in-flight turn is canceled in the background. If your automation may touch tools under `--mode ask`, use `--input-format jsonl`.
 
 ---
 
@@ -150,6 +152,7 @@ Event frames share the SSE envelope: `{"id":..., "type":..., "topic":..., "paylo
 | `status_changed` | session status (`thinking`, `executing`, `waiting_permission`, `idle`, ...) | Turn progress; `idle` also confirms a cancel finished. |
 | `permission_requested` | `permissions[]` (`id`, `tool_call_id`, `tool_name`, `summary`, `diff`, `grant_patterns`, `unsandboxed`) | Tool call awaiting a decision — answer with a `permission` frame. |
 | `question_requested` | `questions[]` | `ask_question` awaiting answers — reply with a `question` frame. |
+| `plan_review_requested` | `plan_reviews[]` (`id`, `tool_call_id`, `path`, `content`) | `exit_plan_mode` awaiting approval or feedback — reply with a `plan_review` frame. |
 | `usage_updated` | session usage totals | After each LLM call. |
 | `quota_updated` | provider quota windows | Subscription-billed providers. |
 | `completed` | `session_id` | A turn (or a batch of queued turns) finished. |
@@ -168,6 +171,7 @@ Other REPL-oriented events (`task_updated`, `todos_updated`, `queue_updated`, `c
 | `/model` | `[--force] [model_id]` | Shows the active model, or switches (id or alias; unknown ids rejected without a turn). Fails on `capability_mismatch` unless `--force` is passed when switching drops active-context modalities. |
 | `/models` | — | Lists chat-capable models, marking the active one. |
 | `/mode` | `[mode]` | Shows or sets the permission mode. |
+| `/plan` | `[prompt]` | Switches to `plan` mode and optionally submits `prompt` as a planning turn. |
 | `/agent` | `[name]` | Shows or sets the session agent. |
 | `/agents` | — | Lists workspace agents (`data` carries `[]api.Agent`). |
 | `/effort` | `[level\|default]` | Shows or sets reasoning effort on the active model. |

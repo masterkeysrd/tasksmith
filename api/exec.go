@@ -36,6 +36,9 @@ const (
 	// ExecInputQuestion answers a live question_requested prompt. It maps onto
 	// [QuestionResponse].
 	ExecInputQuestion ExecInputType = "question"
+	// ExecInputPlanReview answers a live plan_review_requested prompt. It maps
+	// onto [PlanReviewDecision].
+	ExecInputPlanReview ExecInputType = "plan_review"
 	// ExecInputConfig updates session settings mid-session. It maps onto
 	// [UpdateSessionRequest].
 	ExecInputConfig ExecInputType = "config"
@@ -48,9 +51,9 @@ const (
 // ExecInputFrame is one caller-to-daemon control frame. The payload field
 // matching Type carries the canonical api payload; Send additionally accepts a
 // bare Content string so scripts can write `{"type":"send","content":"..."}`.
-// SessionID optionally targets a child subagent session for permission or
-// question replies; when omitted, exec routes by request_id / tool_call_id or
-// defaults to the root session.
+// SessionID optionally targets a child subagent session for permission,
+// question, or plan_review replies; when omitted, exec routes by
+// request_id / tool_call_id or defaults to the root session.
 type ExecInputFrame struct {
 	Type       ExecInputType         `json:"type"`
 	SessionID  string                `json:"session_id,omitempty"`
@@ -58,6 +61,7 @@ type ExecInputFrame struct {
 	Content    string                `json:"content,omitempty"`
 	Permission *PermissionDecision   `json:"permission,omitempty"`
 	Question   *QuestionResponse     `json:"question,omitempty"`
+	PlanReview *PlanReviewDecision   `json:"plan_review,omitempty"`
 	Config     *UpdateSessionRequest `json:"config,omitempty"`
 }
 

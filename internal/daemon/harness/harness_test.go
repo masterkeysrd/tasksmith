@@ -32,6 +32,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 	_ "modernc.org/sqlite"
 )
 
@@ -1121,8 +1122,8 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Put permissions manager in ModePlan: view is allowed, write is denied (AccessDeny without interrupt) and unknown tool fails Prepare
-	perm.SetMode(api.ModePlan)
+	// Enforce readOnly policy ceiling: view is allowed, write is denied (AccessDeny without interrupt) and unknown tool fails Prepare.
+	perm.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{ReadOnly: true}})
 
 	prov := &fakeProvider{
 		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {

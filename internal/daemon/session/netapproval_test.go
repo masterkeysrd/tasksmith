@@ -35,6 +35,7 @@ func (m *askingPermManager) Policies() *warp.Policies        { return nil }
 func (m *askingPermManager) SetPolicies(*warp.Policies)      {}
 func (m *askingPermManager) AgentPolicies() *warp.Policies   { return nil }
 func (m *askingPermManager) SetAgentPolicies(*warp.Policies) {}
+func (m *askingPermManager) SetPlansDir(string)              {}
 func (m *askingPermManager) SetRuntimePolicy(*permissions.RuntimePolicy) {
 }
 func (m *askingPermManager) RuntimePolicy() *permissions.RuntimePolicy { return nil }

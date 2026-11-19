@@ -92,6 +92,36 @@ func TestCommandExecute(t *testing.T) {
 		}
 	})
 
+	t.Run("plan without prompt switches mode", func(t *testing.T) {
+		store.ResetSession()
+		defer store.ResetSession()
+
+		if err := r.Execute("/plan"); err != nil {
+			t.Fatalf("Execute /plan: %v", err)
+		}
+		if store.GetSession().Config.Mode != api.ModePlan {
+			t.Errorf("expected mode to be plan, got %q", store.GetSession().Config.Mode)
+		}
+	})
+
+	t.Run("plan with prompt switches mode and sends", func(t *testing.T) {
+		store.ResetSession()
+		store.ResetTranscript()
+		defer store.ResetSession()
+		defer store.ResetTranscript()
+
+		if err := r.Execute("/plan design auth middleware"); err != nil {
+			t.Fatalf("Execute /plan <prompt>: %v", err)
+		}
+		if store.GetSession().Config.Mode != api.ModePlan {
+			t.Errorf("expected mode to be plan, got %q", store.GetSession().Config.Mode)
+		}
+		items := store.GetTranscript().Items
+		if items == nil || len(*items) == 0 {
+			t.Fatalf("expected pending user prompt in transcript after /plan <prompt>")
+		}
+	})
+
 	t.Run("help enqueues slot", func(t *testing.T) {
 		store.ClearSlot()
 		defer store.ClearSlot()

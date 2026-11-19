@@ -158,7 +158,7 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 		if entry.Agent != nil && entry.Agent.To != "" {
 			text = "Agent set to " + entry.Agent.To
 		}
-	case api.TimelineKindPermission:
+	case api.TimelineKindPermission, api.TimelineKindPlanReview:
 		return nil
 	case api.TimelineKindInterrupted:
 		text = "Interrupted by user"

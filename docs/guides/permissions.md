@@ -8,13 +8,13 @@ TaskSmith employs a multi-tiered security model that balances agent autonomy wit
 
 TaskSmith supports five session-wide permission modes. Each mode adjusts the approval threshold according to your workflow:
 
-| Mode | Identifier | Tool Behavior | Recommended For |
+| Mode | Identifier | Permission Gate | Behavioral Posture & Recommended Use |
 | :--- | :--- | :--- | :--- |
-| **Default** | `default` | Read-only inspection tools (`view`, `grep`, `glob`, `ls`) run automatically. Mutating operations (`write`, `edit`, `bash`, `web_fetch`, `web_search`) trigger an interactive approval prompt unless matched by an explicit allow rule. | Everyday pair-programming and general development. |
-| **Accept Edits** | `accept_edits` | File write and edit operations (`write`, `edit`) execute automatically without prompting. Shell commands (`bash`) and network requests (`web_fetch`, `web_search`) still require explicit approval. | Fast iterative code refactoring where you want the agent to write files freely but audit shell executions. |
-| **Plan** | `plan` | Strict read-only mode. All mutating tools (`write`, `edit`, `bash`) are automatically blocked. Only safe exploration tools are permitted. | Architectural reviews, code investigation, and drafting implementation plans safely without modifying code. |
-| **Ask** | `ask` | Asks for confirmation before executing almost every tool call, except for actions matched by explicit allow rules. | High-security repositories, production environments, or when auditing an unfamiliar agent or tool. |
-| **Auto** | `auto` | Autonomous mode. Automatically executes all tools without prompting, unless an action matches an explicit `deny` rule or workspace policy exclusion. | Automated CI/CD runs, headless batch scripts, or trusted local sandbox workflows. |
+| **Default** | `default` | Read-only inspection tools (`view`, `grep`, `glob`, `ls`, `ask_question`, `todos`, read-only `bash`) run automatically. Mutating operations (`write`, `edit`, mutating `bash`, `web_fetch`, `web_search`) prompt unless matched by an allow rule (writes to `<session-dir>/plans/` always auto-allow). | Standard **Act** posture for everyday pair-programming and general development. |
+| **Accept Edits** | `accept_edits` | Same read baseline as `default`, plus workspace file write/edit/remove operations (`write`, `edit`, `remove`) execute automatically without prompting. Shell commands (`bash`) and network requests still require approval. | Standard **Act** posture for iterative code refactoring with shell auditing. |
+| **Plan** | `plan` | Same permission gate as `default` (reads run; mutations prompt). Writes, edits, and removals inside `<session-dir>/plans/` auto-allow without prompting. | **Plan** posture: investigates the codebase, clarifies ambiguities via `ask_question`, asks where to save the plan (`<session-dir>/plans/` vs. workspace), and submits via `exit_plan_mode` for approval. |
+| **Ask** | `ask` | Same permission gate as `default` (reads run; mutations prompt). | **Ask** posture: answers questions and explains code without modifying project files. |
+| **Auto** | `auto` | Autonomous mode. Automatically executes all allowed tools without prompting, unless an action matches an explicit `deny` rule, workspace/agent policy ceiling, `bypass_sandbox` retry, or unlisted proxy host. | Standard **Act** posture for automated CI/CD runs or trusted local sandbox workflows. |
 
 > [!NOTE]
 > Even in `auto` mode, explicit `deny` rules and workspace policy exclusions are strictly enforced. To learn how Abstract Syntax Tree (AST) command analysis and filesystem path confinement prevent escapes under the hood, see the [Permissions Architecture](../architecture/permissions.md).
@@ -36,7 +36,7 @@ You can change permission modes at any time without restarting your session:
 
 ## Interactive Tool Approvals
 
-When an agent proposes an action requiring authorization, TaskSmith pauses execution and presents an interactive permission modal in the terminal. This includes `ask_question` in `ask` mode unless an allow rule matches; after approval, the question form appears. A deny rule or rejection prevents the question from appearing.
+When an agent proposes an action requiring authorization, TaskSmith pauses execution and presents an interactive permission modal in the terminal. Workspace or agent `ask` policies can also gate specific tools (including `ask_question`) unless a matching allow rule exists. A deny rule or rejection prevents the tool from running.
 
 For example:
 

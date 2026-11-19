@@ -45,8 +45,8 @@ not repeat every `exec` flag. Both surfaces start the daemon when none is reacha
   with no prompt is a usage error (exit `2`).
 - `jsonl` (bidirectional): stdin is a stream of newline-delimited control frames and the
   session stays open until a `close` frame or EOF. A prompt argument is optional (it is
-  submitted as the first turn). Frames accept an optional `session_id`; for `permission`
-  and `question`, `exec` auto-routes to the owning parent or child subagent by
+  submitted as the first turn). Frames accept an optional `session_id`; for `permission`,
+  `question`, and `plan_review`, `exec` auto-routes to the owning parent or child subagent by
   `request_id` / `tool_call_id` when `session_id` is omitted.
 
 Control frames (one JSON object per line, schema `api.ExecInputFrame`):
@@ -56,11 +56,12 @@ Control frames (one JSON object per line, schema `api.ExecInputFrame`):
 | `send` | `content` (bare text) or full `send` (`api.SendRequest`) | start a turn; bare content still routes local slash commands and `!` shell input |
 | `permission` | `permission` (`api.PermissionDecision`) | answer a pending permission request |
 | `question` | `question` (`api.QuestionResponse`) | answer a pending question |
+| `plan_review` | `plan_review` (`api.PlanReviewDecision`) | approve or give feedback on a pending `plan_review_requested` prompt (`request_id`, `tool_call_id`, `approved`, optional `mode`, `feedback`, `canceled`) |
 | `config` | `config` (`api.UpdateSessionRequest`) | update the session configuration |
 | `cancel` | — | cancel the in-flight turn |
 | `close` | — | finish once pending turns complete |
 
-In `text` mode a pending permission or question cannot be answered: the run terminates
+In `text` mode a pending permission, question, or plan review cannot be answered: the run terminates
 with status `needs_input` and exit code `4` (the in-flight turn is canceled in the
 background) instead of hanging.
 
@@ -80,7 +81,7 @@ With `--output-format jsonl`, stdout carries frames only; diagnostics go to stde
 
 ## Slash commands without the TUI
 
-`exec` dispatches these locally: `/model [--force] [id]`, `/models`, `/mode [mode]`,
+`exec` dispatches these locally: `/model [--force] [id]`, `/models`, `/mode [mode]`, `/plan [prompt]`,
 `/agent [name]`, `/agents`, `/effort [level|default]`, `/thinking [on|off|adaptive|default]`,
 `/budget [tokens|default]`, `/usage`, `/compact [focus]`, `/fork [title]`,
 `/login [provider]` (`/auth`, `/signin`), `/exit` (`/quit`),

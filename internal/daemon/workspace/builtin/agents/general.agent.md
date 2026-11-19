@@ -17,6 +17,8 @@ spec:
     tools:
       exclude:
         - ask_question
+        - enter_plan_mode
+        - exit_plan_mode
         - invoke_agent
         - manage_agents
 ---

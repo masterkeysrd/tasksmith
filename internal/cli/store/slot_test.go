@@ -11,6 +11,7 @@ func TestSlotKindHidesComposer(t *testing.T) {
 	}{
 		{kind: SlotKindPermission, want: true},
 		{kind: SlotKindQuestion, want: true},
+		{kind: SlotKindPlanReview, want: true},
 		{kind: SlotKindPicker, want: true},
 		{kind: SlotKindAutocomplete, want: false},
 		{kind: SlotKind("unknown"), want: false},

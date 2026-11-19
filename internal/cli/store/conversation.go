@@ -89,6 +89,7 @@ const (
 	StreamRunning           StreamStatus = "running"
 	StreamWaitingPermission StreamStatus = "waiting_permission"
 	StreamWaitingQuestion   StreamStatus = "waiting_question"
+	StreamWaitingPlanReview StreamStatus = "waiting_plan_review"
 	StreamCompleted         StreamStatus = "completed"
 	StreamFailed            StreamStatus = "failed"
 )
@@ -99,6 +100,7 @@ type StreamState struct {
 	Streaming         bool
 	WaitingPermission bool
 	WaitingQuestion   bool
+	WaitingPlanReview bool
 	Status            api.SessionStatus
 	PendingCommand    string
 	Queue             *[]api.QueueItem
@@ -202,28 +204,30 @@ type conversationHooks struct {
 // conversationAccumulator folds TimelineEntries and SSE events into view messages,
 // splitting them into a finalized prefix flushed to Transcript and a mutable suffix in StreamState.
 type conversationAccumulator struct {
-	mu                sync.Mutex
-	sessionID         string
-	messages          []conversationMessage
-	permissions       []api.PermissionRequest
-	questions         []api.QuestionRequest
-	resolvedQuestions map[string]bool
-	questionRecords   map[string]api.QuestionRecord
-	status            StreamStatus
-	sessionStatus     api.SessionStatus
-	err               error
-	draft             int
-	pendingUser       *Message
-	pendingCommand    string
-	pendingCommandID  string
-	parentTurnActive  bool
-	runningSubagents  int
-	queue             []api.QueueItem
-	todos             []api.TodoItem
-	flushedIDs        map[string]bool
-	identities        map[string]string
-	nextDraft         uint64
-	hooks             conversationHooks
+	mu                  sync.Mutex
+	sessionID           string
+	messages            []conversationMessage
+	permissions         []api.PermissionRequest
+	questions           []api.QuestionRequest
+	resolvedQuestions   map[string]bool
+	questionRecords     map[string]api.QuestionRecord
+	planReviews         []api.PlanReviewRequest
+	resolvedPlanReviews map[string]bool
+	status              StreamStatus
+	sessionStatus       api.SessionStatus
+	err                 error
+	draft               int
+	pendingUser         *Message
+	pendingCommand      string
+	pendingCommandID    string
+	parentTurnActive    bool
+	runningSubagents    int
+	queue               []api.QueueItem
+	todos               []api.TodoItem
+	flushedIDs          map[string]bool
+	identities          map[string]string
+	nextDraft           uint64
+	hooks               conversationHooks
 
 	wasStreaming bool
 	turnStart    time.Time
@@ -357,11 +361,22 @@ func questionSlotID(reqID string) string {
 	return "question-" + reqID
 }
 
+func planReviewSlotID(reqID string) string {
+	return "plan_review-" + reqID
+}
+
 func (acc *conversationAccumulator) clearQuestionsLocked() {
 	for _, req := range acc.questions {
 		acc.removeSlot(questionSlotID(req.ID))
 	}
 	acc.questions = nil
+}
+
+func (acc *conversationAccumulator) clearPlanReviewsLocked() {
+	for _, req := range acc.planReviews {
+		acc.removeSlot(planReviewSlotID(req.ID))
+	}
+	acc.planReviews = nil
 }
 
 func (acc *conversationAccumulator) clearPermissionsLocked() {
@@ -380,6 +395,8 @@ func (acc *conversationAccumulator) reset() {
 	acc.clearQuestionsLocked()
 	acc.resolvedQuestions = nil
 	acc.questionRecords = nil
+	acc.clearPlanReviewsLocked()
+	acc.resolvedPlanReviews = nil
 	acc.status = StreamIdle
 	acc.sessionStatus = api.StatusIdle
 	acc.err = nil
@@ -478,7 +495,7 @@ func (acc *conversationAccumulator) addPendingUser(id, text string, atts ...[]ap
 	if len(atts) > 0 && len(atts[0]) > 0 {
 		attachments = slices.Clone(atts[0])
 	}
-	if acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion {
+	if acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion || acc.status == StreamWaitingPlanReview {
 		if !slices.ContainsFunc(acc.queue, func(item api.QueueItem) bool { return item.ID == id }) {
 			acc.queue = append(acc.queue, api.QueueItem{
 				ID:   id,
@@ -540,7 +557,7 @@ func (acc *conversationAccumulator) setPendingUserAttachments(id string, atts []
 func (acc *conversationAccumulator) addPendingCommand(id, cmd string) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
-	if acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion {
+	if acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion || acc.status == StreamWaitingPlanReview {
 		if !slices.ContainsFunc(acc.queue, func(item api.QueueItem) bool { return item.ID == id }) {
 			acc.queue = append(acc.queue, api.QueueItem{
 				ID:        id,
@@ -687,6 +704,8 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			acc.status = StreamWaitingPermission
 		case api.StatusWaitingQuestion:
 			acc.status = StreamWaitingQuestion
+		case api.StatusWaitingPlanReview:
+			acc.status = StreamWaitingPlanReview
 		case api.StatusIdle:
 			acc.status = StreamIdle
 		default:
@@ -721,6 +740,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 				acc.pendingCommandID = ""
 				acc.clearPermissionsLocked()
 				acc.clearQuestionsLocked()
+				acc.clearPlanReviewsLocked()
 				acc.discardDraftLocked()
 				acc.publishLocked()
 				acc.appendTimeline(p.Entry)
@@ -729,6 +749,11 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			if p.Entry.Kind == api.TimelineKindQuestion && p.Entry.Question != nil {
 				acc.recordQuestionLocked(*p.Entry.Question)
 				acc.removeQuestionLocked(p.Entry.Question.Request.ID)
+				acc.publishLocked()
+				return
+			}
+			if p.Entry.Kind == api.TimelineKindPlanReview && p.Entry.PlanReview != nil {
+				acc.removePlanReviewLocked(p.Entry.PlanReview.Request.ID)
 				acc.publishLocked()
 				return
 			}
@@ -742,6 +767,8 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 					if len(acc.permissions) == 0 && acc.status == StreamWaitingPermission {
 						if len(acc.questions) > 0 {
 							acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
+						} else if len(acc.planReviews) > 0 {
+							acc.status, acc.sessionStatus = StreamWaitingPlanReview, api.StatusWaitingPlanReview
 						} else {
 							acc.status = StreamRunning
 						}
@@ -869,6 +896,18 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 		acc.publishLocked()
 
+	case api.EventPlanReviewRequested:
+		p, ok := event.Payload.(api.PlanReviewRequestedEvent)
+		if !ok || (acc.sessionID != "" && p.SessionID != acc.sessionID) {
+			return
+		}
+		acc.addPlanReviewsLocked(p.PlanReviews)
+		if len(acc.planReviews) > 0 && len(acc.permissions) == 0 && len(acc.questions) == 0 {
+			acc.status, acc.err = StreamWaitingPlanReview, nil
+			acc.sessionStatus = api.StatusWaitingPlanReview
+		}
+		acc.publishLocked()
+
 	case api.EventTaskUpdated:
 		p, ok := event.Payload.(api.TaskUpdatedEvent)
 		if !ok {
@@ -980,9 +1019,14 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry, pe
 // mutable stream as running or waiting-permission instead of being marked
 // interrupted and flushed to immutable scrollback, where a later status
 // reconcile would duplicate it under the live spinner.
-func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entries []api.TimelineEntry, pendingQuestions []api.QuestionRequest) {
+func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entries []api.TimelineEntry, pendingQuestions []api.QuestionRequest, pendingPlanReviews ...[]api.PlanReviewRequest) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
+
+	var planReviews []api.PlanReviewRequest
+	if len(pendingPlanReviews) > 0 {
+		planReviews = pendingPlanReviews[0]
+	}
 
 	// Pass 1: Process state mutations and accumulate messages
 	for _, entry := range entries {
@@ -994,11 +1038,16 @@ func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entr
 			acc.pendingUser = nil
 			acc.clearPermissionsLocked()
 			acc.clearQuestionsLocked()
+			acc.clearPlanReviewsLocked()
 			acc.discardDraftLocked()
 		case api.TimelineKindQuestion:
 			if entry.Question != nil {
 				acc.recordQuestionLocked(*entry.Question)
 				acc.removeQuestionLocked(entry.Question.Request.ID)
+			}
+		case api.TimelineKindPlanReview:
+			if entry.PlanReview != nil {
+				acc.removePlanReviewLocked(entry.PlanReview.Request.ID)
 			}
 		case api.TimelineKindPermission:
 			if entry.Permission != nil {
@@ -1029,6 +1078,12 @@ func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entr
 			acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
 		}
 	}
+	if len(planReviews) > 0 {
+		acc.addPlanReviewsLocked(planReviews)
+		if len(acc.planReviews) > 0 && len(acc.permissions) == 0 && len(acc.questions) == 0 {
+			acc.status, acc.sessionStatus = StreamWaitingPlanReview, api.StatusWaitingPlanReview
+		}
+	}
 
 	// Seed the live snapshot before projecting so in-flight tool calls project
 	// as mutable stream state instead of interrupted scrollback history, and
@@ -1038,6 +1093,9 @@ func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entr
 	if sess != nil && (sess.ID == "" || acc.sessionID == "" || sess.ID == acc.sessionID) && acc.pendingUser == nil && acc.pendingCommand == "" {
 		if len(sess.PendingPermissions) > 0 {
 			_ = acc.addPermissionsLocked(sess.PendingPermissions)
+		}
+		if len(sess.PendingPlanReviews) > 0 {
+			acc.addPlanReviewsLocked(sess.PendingPlanReviews)
 		}
 		switch sess.Status {
 		case api.StatusThinking, api.StatusGenerating, api.StatusExecuting, api.StatusCompacting:
@@ -1049,6 +1107,9 @@ func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entr
 		case api.StatusWaitingQuestion:
 			acc.status, acc.sessionStatus, acc.err = StreamWaitingQuestion, sess.Status, nil
 			acc.parentTurnActive = true
+		case api.StatusWaitingPlanReview:
+			acc.status, acc.sessionStatus, acc.err = StreamWaitingPlanReview, sess.Status, nil
+			acc.parentTurnActive = true
 		case api.StatusIdle, "":
 			if hasRunningSubagents(sess.Subagents) {
 				acc.status, acc.sessionStatus, acc.err = StreamRunning, api.StatusThinking, nil
@@ -1057,7 +1118,7 @@ func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entr
 		}
 	}
 	if acc.pendingUser == nil && acc.pendingCommand == "" &&
-		(acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion) {
+		(acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion || acc.status == StreamWaitingPlanReview) {
 		if start := inFlightTurnStart(sess, entries); !start.IsZero() {
 			acc.turnStart = start
 		}
@@ -1081,7 +1142,7 @@ func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entr
 					acc.appendMessage(h)
 				}
 			}
-		} else if entry.Kind == api.TimelineKindCompacted || entry.Kind == api.TimelineKindCacheBroken || (entry.Kind != api.TimelineKindPermission && entry.Kind != api.TimelineKindQuestion) {
+		} else if entry.Kind == api.TimelineKindCompacted || entry.Kind == api.TimelineKindCacheBroken || (entry.Kind != api.TimelineKindPermission && entry.Kind != api.TimelineKindQuestion && entry.Kind != api.TimelineKindPlanReview) {
 			acc.appendTimeline(entry)
 		}
 	}
@@ -1149,6 +1210,9 @@ func (acc *conversationAccumulator) ReconcileStreamStatus(sess *api.Session) {
 		case api.StatusWaitingQuestion:
 			acc.status = StreamWaitingQuestion
 			acc.sessionStatus = api.StatusWaitingQuestion
+		case api.StatusWaitingPlanReview:
+			acc.status = StreamWaitingPlanReview
+			acc.sessionStatus = api.StatusWaitingPlanReview
 		default:
 			acc.sessionStatus = sess.Status
 			return
@@ -1241,6 +1305,8 @@ func (acc *conversationAccumulator) reconcilePermissions(requests []api.Permissi
 		acc.status, acc.sessionStatus, acc.err = StreamWaitingPermission, api.StatusWaitingPermission, nil
 	} else if len(acc.questions) > 0 {
 		acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
+	} else if len(acc.planReviews) > 0 {
+		acc.status, acc.sessionStatus = StreamWaitingPlanReview, api.StatusWaitingPlanReview
 	} else if acc.status == StreamWaitingPermission {
 		acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
 	}
@@ -1291,9 +1357,69 @@ func (acc *conversationAccumulator) SeedQuestions(requests []api.QuestionRequest
 	if len(acc.questions) > 0 && len(acc.permissions) == 0 {
 		acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
 	} else if len(acc.questions) == 0 && acc.status == StreamWaitingQuestion {
+		if len(acc.planReviews) > 0 {
+			acc.status, acc.sessionStatus = StreamWaitingPlanReview, api.StatusWaitingPlanReview
+		} else {
+			acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
+		}
+	}
+	acc.publishLocked()
+}
+
+func (acc *conversationAccumulator) SeedPlanReviews(requests []api.PlanReviewRequest) {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	for _, existing := range acc.planReviews {
+		if !slices.ContainsFunc(requests, func(r api.PlanReviewRequest) bool { return r.ID == existing.ID }) {
+			RemoveSlot(planReviewSlotID(existing.ID))
+		}
+	}
+	acc.planReviews = slices.DeleteFunc(acc.planReviews, func(r api.PlanReviewRequest) bool {
+		return !slices.ContainsFunc(requests, func(req api.PlanReviewRequest) bool { return req.ID == r.ID })
+	})
+	for _, req := range requests {
+		delete(acc.resolvedPlanReviews, req.ID)
+	}
+	acc.addPlanReviewsLocked(requests)
+	if len(acc.planReviews) > 0 && len(acc.permissions) == 0 && len(acc.questions) == 0 {
+		acc.status, acc.sessionStatus = StreamWaitingPlanReview, api.StatusWaitingPlanReview
+	} else if len(acc.planReviews) == 0 && acc.status == StreamWaitingPlanReview {
 		acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
 	}
 	acc.publishLocked()
+}
+
+func (acc *conversationAccumulator) addPlanReviewsLocked(requests []api.PlanReviewRequest) {
+	for _, req := range requests {
+		if req.ID == "" || req.ToolCallID == "" || req.Path == "" || acc.resolvedPlanReviews[req.ID] {
+			continue
+		}
+		if slices.ContainsFunc(acc.messages, func(m conversationMessage) bool {
+			return m.message.Role == api.RoleTool && m.message.ToolCallID == req.ToolCallID
+		}) {
+			continue
+		}
+		if slices.ContainsFunc(acc.planReviews, func(r api.PlanReviewRequest) bool { return r.ID == req.ID }) {
+			continue
+		}
+		acc.planReviews = append(acc.planReviews, req)
+		acc.enqueueSlot(SlotItem{ID: planReviewSlotID(req.ID), Kind: SlotKindPlanReview, Data: req})
+	}
+}
+
+func (acc *conversationAccumulator) removePlanReviewLocked(id string) {
+	if id == "" {
+		return
+	}
+	if acc.resolvedPlanReviews == nil {
+		acc.resolvedPlanReviews = make(map[string]bool)
+	}
+	acc.resolvedPlanReviews[id] = true
+	acc.removeSlot(planReviewSlotID(id))
+	acc.planReviews = slices.DeleteFunc(acc.planReviews, func(r api.PlanReviewRequest) bool { return r.ID == id })
+	if len(acc.planReviews) == 0 && len(acc.permissions) == 0 && len(acc.questions) == 0 && acc.status == StreamWaitingPlanReview {
+		acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
+	}
 }
 
 func (acc *conversationAccumulator) addQuestionsLocked(requests []api.QuestionRequest) {
@@ -1335,7 +1461,11 @@ func (acc *conversationAccumulator) removeQuestionLocked(id string) {
 	acc.removeSlot(questionSlotID(id))
 	acc.questions = slices.DeleteFunc(acc.questions, func(r api.QuestionRequest) bool { return r.ID == id })
 	if len(acc.questions) == 0 && len(acc.permissions) == 0 && acc.status == StreamWaitingQuestion {
-		acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
+		if len(acc.planReviews) > 0 {
+			acc.status, acc.sessionStatus = StreamWaitingPlanReview, api.StatusWaitingPlanReview
+		} else {
+			acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
+		}
 	}
 }
 
@@ -1349,6 +1479,8 @@ func (acc *conversationAccumulator) removePermission(reqID string) {
 	if len(acc.permissions) == 0 && acc.status == StreamWaitingPermission {
 		if len(acc.questions) > 0 {
 			acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
+		} else if len(acc.planReviews) > 0 {
+			acc.status, acc.sessionStatus = StreamWaitingPlanReview, api.StatusWaitingPlanReview
 		} else {
 			acc.status = StreamRunning
 		}
@@ -1487,21 +1619,26 @@ func (acc *conversationAccumulator) publishLocked() {
 		msgsPtr = &cp
 	}
 
-	isStreaming := acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion || acc.pendingUser != nil || acc.pendingCommand != "" ||
+	isStreaming := acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion || acc.status == StreamWaitingPlanReview || acc.pendingUser != nil || acc.pendingCommand != "" ||
 		(msgsPtr != nil && len(*msgsPtr) > 0 && acc.status != StreamIdle && acc.status != StreamCompleted && acc.status != StreamFailed)
 	isWaiting := acc.status == StreamWaitingPermission || len(acc.permissions) > 0
 	isWaitingQuestion := acc.status == StreamWaitingQuestion || len(acc.questions) > 0
+	isWaitingPlanReview := acc.status == StreamWaitingPlanReview || len(acc.planReviews) > 0
 
 	sessionStatus := acc.sessionStatus
 	if sessionStatus == "" {
 		if isWaiting {
 			sessionStatus = api.StatusWaitingPermission
+		} else if isWaitingQuestion {
+			sessionStatus = api.StatusWaitingQuestion
+		} else if isWaitingPlanReview {
+			sessionStatus = api.StatusWaitingPlanReview
 		} else if isStreaming {
 			sessionStatus = api.StatusThinking
 		} else {
 			sessionStatus = api.StatusIdle
 		}
-	} else if !isStreaming && !isWaiting {
+	} else if !isStreaming && !isWaiting && !isWaitingQuestion && !isWaitingPlanReview {
 		sessionStatus = api.StatusIdle
 	}
 
@@ -1546,6 +1683,7 @@ func (acc *conversationAccumulator) publishLocked() {
 		Streaming:         isStreaming,
 		WaitingPermission: isWaiting,
 		WaitingQuestion:   isWaitingQuestion,
+		WaitingPlanReview: isWaitingPlanReview,
 		Status:            sessionStatus,
 		PendingCommand:    acc.pendingCommand,
 		Queue:             queuePtr,
@@ -1626,7 +1764,7 @@ func (acc *conversationAccumulator) projectLocked() (history []Message, streamMs
 		}
 	}
 
-	isActive := acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion
+	isActive := acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion || acc.status == StreamWaitingPlanReview
 	mutableSuffix := false
 	for i, message := range messages {
 		if message.Role == api.RoleTool && len(message.Parts) == 0 {

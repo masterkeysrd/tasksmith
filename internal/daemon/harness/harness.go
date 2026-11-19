@@ -35,6 +35,8 @@ var (
 	ErrPendingPermissionsUnresolved = errors.New("harness: all pending permissions must be resolved before resuming")
 	ErrNoPendingQuestions           = errors.New("harness: no pending questions for thread")
 	ErrPendingQuestionsUnresolved   = errors.New("harness: all pending questions must be resolved before resuming")
+	ErrNoPendingPlanReviews         = errors.New("harness: no pending plan reviews for thread")
+	ErrPendingPlanReviewsUnresolved = errors.New("harness: all pending plan reviews must be resolved before resuming")
 )
 
 // Queue is the consumer interface for the session's execution queue
@@ -65,6 +67,7 @@ type CompactionCompleted struct {
 type Interrupted struct {
 	Permissions []api.PermissionRequest
 	Questions   []api.QuestionRequest
+	PlanReviews []api.PlanReviewRequest
 }
 
 type Completed struct {
@@ -86,10 +89,11 @@ type RuleLoaded struct {
 // It can provide either a new user message, resolved permission decisions and question answers,
 // or a compaction request.
 type Input struct {
-	Message   message.Message
-	Decisions map[string]api.PermissionDecision
-	Answers   map[string]api.QuestionResponse
-	Compact   *api.CompactRequest
+	Message     message.Message
+	Decisions   map[string]api.PermissionDecision
+	Answers     map[string]api.QuestionResponse
+	PlanReviews map[string]api.PlanReviewDecision
+	Compact     *api.CompactRequest
 	// ModelOverride, when non-empty, temporarily overrides the session's model
 	// for the duration of this turn (used by commands declaring spec.models).
 	// The session restores its original model when the turn exits.
@@ -97,7 +101,7 @@ type Input struct {
 }
 
 func (input Input) HasResponses() bool {
-	return input.Decisions != nil || input.Answers != nil
+	return input.Decisions != nil || input.Answers != nil || input.PlanReviews != nil
 }
 
 func (input Input) HasInteractiveContent() bool {
@@ -286,6 +290,9 @@ func (h *harness) prepareInput(ctx context.Context, input Input, state State) (g
 		if len(state.PendingQuestions) > 0 {
 			return nil, nil, nil, ErrPendingQuestionsUnresolved
 		}
+		if len(state.PendingPlanReviews) > 0 {
+			return nil, nil, nil, ErrPendingPlanReviewsUnresolved
+		}
 		if input.Compact != nil {
 			return prepareCompaction(input.Compact), nil, nil, nil
 		}
@@ -309,9 +316,12 @@ func prepareCompaction(input *api.CompactRequest) graph.Update[State] {
 }
 
 func prepareResponses(input Input, state State) (graph.Update[State], error) {
-	if len(state.PendingPermissions) == 0 && len(state.PendingQuestions) == 0 {
+	if len(state.PendingPermissions) == 0 && len(state.PendingQuestions) == 0 && len(state.PendingPlanReviews) == 0 {
 		if input.Answers != nil {
 			return nil, ErrNoPendingQuestions
+		}
+		if input.PlanReviews != nil {
+			return nil, ErrNoPendingPlanReviews
 		}
 		return nil, ErrNoPendingPermissions
 	}
@@ -338,9 +348,21 @@ func prepareResponses(input Input, state State) (graph.Update[State], error) {
 		answers[req.ID] = response
 		answers[req.ToolCallID] = response
 	}
+	planReviews := make(map[string]api.PlanReviewDecision, len(state.PendingPlanReviews)*2)
+	for _, req := range state.PendingPlanReviews {
+		dec, ok := lookupPlanReviewDecision(input.PlanReviews, req)
+		if !ok {
+			return nil, ErrPendingPlanReviewsUnresolved
+		}
+		dec = *dec.Clone()
+		dec.RequestID, dec.ToolCallID = req.ID, req.ToolCallID
+		planReviews[req.ID] = dec
+		planReviews[req.ToolCallID] = dec
+	}
 	return graph.Update[State](func(s State) State {
 		s.PermissionDecisions = normalized
 		s.QuestionResponses = answers
+		s.PlanReviewDecisions = planReviews
 		return s
 	}), nil
 }
@@ -432,6 +454,7 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 			if !yield(Interrupted{
 				Permissions: clonePermissionRequests(snap.State.PendingPermissions),
 				Questions:   cloneQuestionRequests(snap.State.PendingQuestions),
+				PlanReviews: clonePlanReviewRequests(snap.State.PendingPlanReviews),
 			}, nil) {
 				stopped = true
 				return false

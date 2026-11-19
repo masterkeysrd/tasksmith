@@ -106,11 +106,15 @@ type State struct {
 	PermissionDecisions map[string]api.PermissionDecision `json:"permission_decisions,omitempty"`
 	PendingQuestions    []api.QuestionRequest             `json:"pending_questions,omitempty"`
 	QuestionResponses   map[string]api.QuestionResponse   `json:"question_responses,omitempty"`
+	PendingPlanReviews  []api.PlanReviewRequest           `json:"pending_plan_reviews,omitempty"`
+	PlanReviewDecisions map[string]api.PlanReviewDecision `json:"plan_review_decisions,omitempty"`
 	Todos               []api.TodoItem                    `json:"todos,omitempty"`
 	LoadedTools         []string                          `json:"loaded_tools,omitempty"`
 	LoadedRules         []string                          `json:"loaded_rules,omitempty"`
 	LoadedSkills        []string                          `json:"loaded_skills,omitempty"`
 	SuggestedRules      []string                          `json:"suggested_rules,omitempty"`
+	Mode                api.PermissionMode                `json:"mode,omitempty"`
+	PlanPath            string                            `json:"plan_path,omitempty"`
 	Context             api.ContextState                  `json:"context"`
 }
 
@@ -138,6 +142,15 @@ func (s State) Copy() State {
 		responses = make(map[string]api.QuestionResponse, len(s.QuestionResponses))
 		for key, response := range s.QuestionResponses {
 			responses[key] = *response.Clone()
+		}
+	}
+
+	planReviews := clonePlanReviewRequests(s.PendingPlanReviews)
+	var planDecisions map[string]api.PlanReviewDecision
+	if s.PlanReviewDecisions != nil {
+		planDecisions = make(map[string]api.PlanReviewDecision, len(s.PlanReviewDecisions))
+		for key, dec := range s.PlanReviewDecisions {
+			planDecisions[key] = *dec.Clone()
 		}
 	}
 
@@ -178,11 +191,15 @@ func (s State) Copy() State {
 		PermissionDecisions: decisions,
 		PendingQuestions:    questions,
 		QuestionResponses:   responses,
+		PendingPlanReviews:  planReviews,
+		PlanReviewDecisions: planDecisions,
 		Todos:               todos,
 		LoadedTools:         loadedTools,
 		LoadedRules:         loadedRules,
 		LoadedSkills:        loadedSkills,
 		SuggestedRules:      suggestedRules,
+		Mode:                s.Mode,
+		PlanPath:            s.PlanPath,
 		Context:             s.Context,
 	}
 }
@@ -261,6 +278,7 @@ func (s State) ApplyCompaction(static StaticContext, limits models.Limits) State
 	s.LoadedRules = nil
 	s.LoadedSkills = nil
 	s.SuggestedRules = nil
+	s.Mode = ""
 	s.Context = computeContextState(static, s, limits)
 	return s
 }
@@ -578,6 +596,17 @@ func cloneQuestionRequests(in []api.QuestionRequest) []api.QuestionRequest {
 		return nil
 	}
 	out := make([]api.QuestionRequest, len(in))
+	for i := range in {
+		out[i] = *in[i].Clone()
+	}
+	return out
+}
+
+func clonePlanReviewRequests(in []api.PlanReviewRequest) []api.PlanReviewRequest {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]api.PlanReviewRequest, len(in))
 	for i := range in {
 		out[i] = *in[i].Clone()
 	}

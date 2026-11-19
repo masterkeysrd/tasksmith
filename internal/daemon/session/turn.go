@@ -36,12 +36,15 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 	if id != "" && (req.Question != nil || req.Decision != nil) {
 		return fmt.Errorf("%w: cannot combine question/decision with id", ErrInvalidConfig)
 	}
+	if id != "" && req.PlanReview != nil {
+		return fmt.Errorf("%w: cannot combine plan review decision with id", ErrInvalidConfig)
+	}
 	if id != "" && !uuid.Validate(id) {
 		return fmt.Errorf("%w: invalid message id %q", ErrInvalidConfig, id)
 	}
 
 	if req.Compact != nil {
-		if req.Question != nil || req.Decision != nil || strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" {
+		if req.Question != nil || req.Decision != nil || req.PlanReview != nil || strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" {
 			return fmt.Errorf("%w: cannot combine compaction request with other input", ErrInvalidConfig)
 		}
 		s.Lock()
@@ -54,11 +57,20 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 	}
 
 	if req.Question != nil {
-		if req.Decision != nil || strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" {
+		if req.Decision != nil || req.PlanReview != nil || strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" {
 			return fmt.Errorf("%w: cannot combine question response with other input", ErrInvalidConfig)
 		}
 		return s.resumeInteraction(ctx, func(c context.Context) (bool, error) {
 			return s.recordQuestion(c, *req.Question)
+		})
+	}
+
+	if req.PlanReview != nil {
+		if req.Decision != nil || strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" {
+			return fmt.Errorf("%w: cannot combine plan review decision with other input", ErrInvalidConfig)
+		}
+		return s.resumeInteraction(ctx, func(c context.Context) (bool, error) {
+			return s.recordPlanReview(c, *req.PlanReview)
 		})
 	}
 
@@ -356,8 +368,8 @@ func (s *Session) PopMessages() []message.Message {
 }
 
 func (s *Session) waitingForInteractionLocked() bool {
-	return len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 || len(s.hostApprovals) > 0 ||
-		s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion
+	return len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 || len(s.PendingPlanReviews) > 0 || len(s.hostApprovals) > 0 ||
+		s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion || s.Status == api.StatusWaitingPlanReview
 }
 
 func (s *Session) startTurn(hInput harness.Input) error {
@@ -369,7 +381,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	if s.waitingForInteractionLocked() && !hInput.HasInteractiveContent() {
 		s.Unlock()
 		if hInput.Compact != nil {
-			return fmt.Errorf("%w: resolve pending permissions or questions before compacting", ErrInvalidConfig)
+			return fmt.Errorf("%w: resolve pending permissions, questions, or plan reviews before compacting", ErrInvalidConfig)
 		}
 		return nil
 	}
@@ -380,7 +392,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	initialStatus := api.StatusThinking
 	if hInput.Compact != nil {
 		initialStatus = api.StatusCompacting
-	} else if hInput.Message == nil && hInput.Decisions == nil && len(s.queue) > 0 {
+	} else if hInput.Message == nil && hInput.Decisions == nil && hInput.Answers == nil && hInput.PlanReviews == nil && len(s.queue) > 0 {
 		if s.queue[0].Kind == api.QueueKindCommand {
 			initialStatus = api.StatusExecuting
 		}
@@ -391,8 +403,10 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	if hInput.Message != nil {
 		s.PendingPermissions = nil
 		s.PendingQuestions = nil
+		s.PendingPlanReviews = nil
 		clear(s.decisions)
 		clear(s.answers)
+		clear(s.planReviews)
 	}
 	s.Error = ""
 	s.err = nil
@@ -412,7 +426,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			s.Lock()
 			if s.done == done {
 				s.Running = false
-				if s.Status != api.StatusWaitingPermission && s.Status != api.StatusWaitingQuestion && s.Status != api.StatusIdle {
+				if s.Status != api.StatusWaitingPermission && s.Status != api.StatusWaitingQuestion && s.Status != api.StatusWaitingPlanReview && s.Status != api.StatusIdle {
 					s.Status = api.StatusIdle
 					statusChanged = true
 				}
@@ -581,11 +595,13 @@ func (s *Session) resumeInteraction(ctx context.Context, record func(context.Con
 	s.Lock()
 	fullDecisions := maps.Clone(s.decisions)
 	fullAnswers := maps.Clone(s.answers)
+	fullPlanReviews := maps.Clone(s.planReviews)
 	clear(s.decisions)
 	clear(s.answers)
+	clear(s.planReviews)
 	s.Unlock()
 
-	return s.startTurn(harness.Input{Decisions: fullDecisions, Answers: fullAnswers})
+	return s.startTurn(harness.Input{Decisions: fullDecisions, Answers: fullAnswers, PlanReviews: fullPlanReviews})
 }
 
 func (s *Session) appendTimeline(ctx context.Context, entry *timeline.Entry) error {
@@ -644,9 +660,13 @@ func (s *Session) recordDecision(ctx context.Context, decision api.PermissionDec
 		}
 	}
 	s.PendingPermissions = remaining
-	allResolved := len(remaining) == 0 && len(s.PendingQuestions) == 0
-	if len(remaining) == 0 && len(s.PendingQuestions) > 0 {
-		s.Status = api.StatusWaitingQuestion
+	allResolved := len(remaining) == 0 && len(s.PendingQuestions) == 0 && len(s.PendingPlanReviews) == 0
+	if len(remaining) == 0 {
+		if len(s.PendingQuestions) > 0 {
+			s.Status = api.StatusWaitingQuestion
+		} else if len(s.PendingPlanReviews) > 0 {
+			s.Status = api.StatusWaitingPlanReview
+		}
 	}
 	s.Unlock()
 
@@ -710,12 +730,72 @@ func (s *Session) recordQuestion(ctx context.Context, response api.QuestionRespo
 		}
 	}
 	s.PendingQuestions = remaining
-	ready := len(remaining) == 0 && len(s.PendingPermissions) == 0
+	ready := len(remaining) == 0 && len(s.PendingPermissions) == 0 && len(s.PendingPlanReviews) == 0
+	if len(remaining) == 0 && len(s.PendingPermissions) == 0 && len(s.PendingPlanReviews) > 0 {
+		s.Status = api.StatusWaitingPlanReview
+	}
 	s.Unlock()
 
 	if err := s.appendTimeline(ctx, entry); err != nil {
 		s.Lock()
 		delete(s.answers, matched.ID)
+		s.Unlock()
+		return false, err
+	}
+	return ready, nil
+}
+
+func (s *Session) recordPlanReview(ctx context.Context, decision api.PlanReviewDecision) (bool, error) {
+	if !decision.Canceled && decision.Approved && decision.Mode != "" {
+		switch decision.Mode {
+		case api.ModeAcceptEdits, api.ModeDefault, api.ModeAuto:
+		default:
+			return false, fmt.Errorf("%w: unsupported approval mode %q", ErrInvalidPlanReview, decision.Mode)
+		}
+	}
+	state, err := s.Harness.LoadState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if len(state.PendingPlanReviews) == 0 {
+		return false, ErrNoPendingPlanReviews
+	}
+	var matched *api.PlanReviewRequest
+	for i := range state.PendingPlanReviews {
+		req := &state.PendingPlanReviews[i]
+		if (decision.RequestID != "" && decision.RequestID == req.ID) || (decision.ToolCallID != "" && decision.ToolCallID == req.ToolCallID) {
+			matched = req
+			break
+		}
+	}
+	if matched == nil {
+		return false, ErrPlanReviewNotFound
+	}
+	decision = *decision.Clone()
+	decision.RequestID, decision.ToolCallID = matched.ID, matched.ToolCallID
+	entry := timeline.NewPlanReviewEntry(api.PlanReviewRecord{Request: *matched.Clone(), Decision: decision})
+
+	s.Lock()
+	if s.planReviews == nil {
+		s.planReviews = make(map[string]api.PlanReviewDecision)
+	}
+	s.planReviews[matched.ID] = decision
+	var remaining []api.PlanReviewRequest
+	for i := range state.PendingPlanReviews {
+		if _, ok := s.planReviews[state.PendingPlanReviews[i].ID]; !ok {
+			remaining = append(remaining, *state.PendingPlanReviews[i].Clone())
+		}
+	}
+	s.PendingPlanReviews = remaining
+	ready := len(remaining) == 0 && len(s.PendingPermissions) == 0 && len(s.PendingQuestions) == 0
+	if len(remaining) == 0 && len(s.PendingPermissions) == 0 && len(s.PendingQuestions) > 0 {
+		s.Status = api.StatusWaitingQuestion
+	}
+	s.Unlock()
+
+	if err := s.appendTimeline(ctx, entry); err != nil {
+		s.Lock()
+		delete(s.planReviews, matched.ID)
 		s.Unlock()
 		return false, err
 	}
@@ -733,6 +813,7 @@ func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 	s.Running = false
 	s.PendingPermissions = nil
 	s.PendingQuestions = nil
+	s.PendingPlanReviews = nil
 	s.queue = nil
 	s.Status = api.StatusIdle
 	s.FinishedAt = time.Now().UTC()
@@ -880,15 +961,24 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 			for i := range ev.Questions {
 				questions[i] = *ev.Questions[i].Clone()
 			}
+			planReviews := make([]api.PlanReviewRequest, len(ev.PlanReviews))
+			for i := range ev.PlanReviews {
+				planReviews[i] = *ev.PlanReviews[i].Clone()
+			}
 			nextStatus := api.StatusWaitingQuestion
 			if len(perms) > 0 {
 				nextStatus = api.StatusWaitingPermission
+			} else if len(questions) > 0 {
+				nextStatus = api.StatusWaitingQuestion
+			} else if len(planReviews) > 0 {
+				nextStatus = api.StatusWaitingPlanReview
 			}
 			s.Lock()
 			s.Status = nextStatus
 			s.Running = false
 			s.PendingPermissions = perms
 			s.PendingQuestions = questions
+			s.PendingPlanReviews = planReviews
 			s.FinishedAt = time.Now().UTC()
 			s.Unlock()
 
@@ -901,6 +991,9 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 			}
 			if len(questions) > 0 {
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QuestionRequestedEvent{SessionID: s.ID, Questions: questions})
+			}
+			if len(planReviews) > 0 {
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.PlanReviewRequestedEvent{SessionID: s.ID, PlanReviews: planReviews})
 			}
 			s.notifyParentUpdate()
 

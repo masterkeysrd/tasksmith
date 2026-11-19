@@ -16,7 +16,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
-	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 )
 
 // FileMention represents an explicit file or directory reference attached to a user prompt.
@@ -102,11 +101,11 @@ func (r *AttachmentResolver) isModalitySupported(mod media.Modality) (string, bo
 	return r.supportsModality(mod)
 }
 
-func (r *AttachmentResolver) filterUserMediaBlocks(user *message.User) []string {
+func (r *AttachmentResolver) filterUserMediaBlocks(user *message.User) []ReminderItem {
 	if user == nil || len(user.Content) == 0 || r.supportsModality == nil {
 		return nil
 	}
-	var notes []string
+	var notes []ReminderItem
 	kept := make(message.Content, 0, len(user.Content))
 	for _, blk := range user.Content {
 		desc, mod, isMedia := media.DescriptorFromBlock(blk)
@@ -116,10 +115,14 @@ func (r *AttachmentResolver) filterUserMediaBlocks(user *message.User) []string 
 		}
 		if modelID, ok := r.supportsModality(mod); !ok {
 			name := cmp.Or(desc.DisplayName, string(mod))
-			notes = append(notes, fmt.Sprintf(
-				"<context_media name=%q mime_type=%q status=\"omitted\">Cannot attach %s %q: active model %q does not support %s input.</context_media>",
-				name, desc.MIMEType, mod, name, modelID, mod,
-			))
+			notes = append(notes, MediaReminder{
+				Media: api.Media{
+					MIMEType:    desc.MIMEType,
+					DisplayName: name,
+				},
+				Status: "omitted",
+				Reason: UnsupportedMediaReason(mod, name, modelID),
+			})
 			continue
 		}
 		kept = append(kept, blk)
@@ -133,12 +136,12 @@ func (r *AttachmentResolver) filterUserMediaBlocks(user *message.User) []string 
 	return notes
 }
 
-func (r *AttachmentResolver) resolveFileAndMediaBlocks(ctx context.Context, atts []api.Attachment) ([]string, []message.Block) {
+func (r *AttachmentResolver) resolveFileAndMediaBlocks(ctx context.Context, atts []api.Attachment) ([]ReminderItem, []message.Block) {
 	if len(atts) == 0 {
 		return nil, nil
 	}
 
-	var blocks []string
+	var items []ReminderItem
 	var mediaBlocks []message.Block
 	seen := make(map[string]struct{})
 	seenMedia := make(map[string]struct{})
@@ -159,10 +162,14 @@ func (r *AttachmentResolver) resolveFileAndMediaBlocks(ctx context.Context, atts
 			seenMedia[att.Media.SHA256] = struct{}{}
 			name := cmp.Or(att.Media.DisplayName, att.Ref, att.Media.SHA256)
 			if modelID, supported := r.isModalitySupported(mod); !supported {
-				blocks = append(blocks, fmt.Sprintf(
-					"<context_media name=%q mime_type=%q status=\"omitted\">Cannot attach %s %q: active model %q does not support %s input.</context_media>",
-					name, att.Media.MIMEType, mod, name, modelID, mod,
-				))
+				items = append(items, MediaReminder{
+					Media: api.Media{
+						MIMEType:    att.Media.MIMEType,
+						DisplayName: name,
+					},
+					Status: "omitted",
+					Reason: UnsupportedMediaReason(mod, name, modelID),
+				})
 				continue
 			}
 			blk, err := media.BlockFromDescriptor(*att.Media)
@@ -170,10 +177,13 @@ func (r *AttachmentResolver) resolveFileAndMediaBlocks(ctx context.Context, atts
 				continue
 			}
 			mediaBlocks = append(mediaBlocks, blk)
-			blocks = append(blocks, fmt.Sprintf(
-				"<context_media name=%q mime_type=%q size=%q />",
-				name, att.Media.MIMEType, format.Bytes(att.Media.ByteSize),
-			))
+			items = append(items, MediaReminder{
+				Media: api.Media{
+					MIMEType:    att.Media.MIMEType,
+					ByteSize:    att.Media.ByteSize,
+					DisplayName: name,
+				},
+			})
 			continue
 		}
 
@@ -207,11 +217,6 @@ func (r *AttachmentResolver) resolveFileAndMediaBlocks(ctx context.Context, atts
 			}
 		}
 
-		refAttr := ""
-		if att.Ref != "" {
-			refAttr = fmt.Sprintf(" ref=%q", att.Ref)
-		}
-
 		if m.IsDir {
 			res, err := r.std.List(ctx, std.ListRequest{
 				Path:          rel,
@@ -223,22 +228,19 @@ func (r *AttachmentResolver) resolveFileAndMediaBlocks(ctx context.Context, atts
 				continue
 			}
 
-			var entryLines []string
+			entries := make([]std.ListEntry, 0, len(res.Entries))
 			for _, entry := range res.Entries {
 				if err := r.checkFileAccess(ctx, FileMention{Path: entry.Path, IsDir: entry.IsDir}, checker); err != nil {
 					continue
 				}
-				entryType := "file"
-				if entry.IsDir {
-					entryType = "dir"
-				}
-				entryLines = append(entryLines, fmt.Sprintf("- %s (%s, %d bytes)", entry.Name, entryType, entry.Size))
+				entries = append(entries, entry)
 			}
-			content := strings.Join(entryLines, "\n")
-			if res.Truncated {
-				content += "\n... (truncated)"
-			}
-			blocks = append(blocks, fmt.Sprintf("<context_directory%s path=%q>\n%s\n</context_directory>", refAttr, m.Path, content))
+			items = append(items, DirectoryReminder{
+				Attachment: att,
+				Path:       m.Path,
+				Entries:    entries,
+				Truncated:  res.Truncated,
+			})
 		} else {
 			offset := max(1, m.StartLine)
 			limit := 0
@@ -253,7 +255,12 @@ func (r *AttachmentResolver) resolveFileAndMediaBlocks(ctx context.Context, atts
 			})
 			if err != nil {
 				if errors.Is(err, media.ErrTooLarge) {
-					blocks = append(blocks, fmt.Sprintf("<context_media%s path=%q status=\"omitted\">%v</context_media>", refAttr, m.Path, err))
+					items = append(items, MediaReminder{
+						Ref:    att.Ref,
+						Path:   m.Path,
+						Status: "omitted",
+						Reason: err.Error(),
+					})
 				} else {
 					r.logger.Warn("file mention: view failed", log.String("path", rel), log.Any("err", err))
 				}
@@ -262,10 +269,15 @@ func (r *AttachmentResolver) resolveFileAndMediaBlocks(ctx context.Context, atts
 
 			if res.Media != nil {
 				if modelID, supported := r.isModalitySupported(res.Media.Modality); !supported {
-					blocks = append(blocks, fmt.Sprintf(
-						"<context_media%s path=%q mime_type=%q status=\"omitted\">Cannot attach %s %q: active model %q does not support %s input.</context_media>",
-						refAttr, m.Path, res.Media.MIMEType, res.Media.Modality, m.Path, modelID, res.Media.Modality,
-					))
+					items = append(items, MediaReminder{
+						Media: api.Media{
+							MIMEType: res.Media.MIMEType,
+						},
+						Ref:    att.Ref,
+						Path:   m.Path,
+						Status: "omitted",
+						Reason: UnsupportedMediaReason(res.Media.Modality, m.Path, modelID),
+					})
 					continue
 				}
 				sha := res.Hash
@@ -291,21 +303,32 @@ func (r *AttachmentResolver) resolveFileAndMediaBlocks(ctx context.Context, atts
 					continue
 				}
 				mediaBlocks = append(mediaBlocks, blk)
-				blocks = append(blocks, fmt.Sprintf(
-					"<context_media%s path=%q mime_type=%q size=%q />",
-					refAttr, m.Path, res.Media.MIMEType, format.Bytes(res.Media.ByteSize),
-				))
+				items = append(items, MediaReminder{
+					Media: api.Media{
+						MIMEType: res.Media.MIMEType,
+						ByteSize: res.Media.ByteSize,
+					},
+					Ref:  att.Ref,
+					Path: m.Path,
+				})
 				continue
 			}
 
-			linesAttr := ""
+			fileAtt := att
 			if m.StartLine > 0 {
-				linesAttr = fmt.Sprintf(" lines=%q", fmt.Sprintf("%d-%d", res.StartLine, res.EndLine))
+				fileAtt.StartLine = res.StartLine
+				fileAtt.EndLine = res.EndLine
+			} else {
+				fileAtt.StartLine = 0
+				fileAtt.EndLine = 0
 			}
-
-			blocks = append(blocks, fmt.Sprintf("<context_file%s path=%q%s>\n%s\n</context_file>", refAttr, m.Path, linesAttr, res.Numbered))
+			items = append(items, FileReminder{
+				Attachment: fileAtt,
+				Path:       m.Path,
+				Content:    res.Numbered,
+			})
 		}
 	}
 
-	return blocks, mediaBlocks
+	return items, mediaBlocks
 }

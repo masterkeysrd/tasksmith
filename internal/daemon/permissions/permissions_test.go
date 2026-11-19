@@ -513,22 +513,25 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 		t.Fatalf("ModeAcceptEdits unsafePlan: expected AccessAsk, got %s", dec)
 	}
 
-	// 3. ModePlan
+	// 3. ModePlan shares base permission gate with ModeDefault
 	sess.SetMode(api.ModePlan)
-	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessDeny {
-		t.Fatalf("ModePlan writePlan: expected AccessDeny, got %s", dec)
+	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessAsk {
+		t.Fatalf("ModePlan writePlan: expected AccessAsk, got %s", dec)
 	}
 	if dec, _, _ := sess.Evaluate(safeReadPlan); dec != tools.AccessAllow {
 		t.Fatalf("ModePlan safeReadPlan: expected AccessAllow, got %s", dec)
 	}
 
-	// 4. ModeAsk
+	// 4. ModeAsk shares base permission gate with ModeDefault
 	sess.SetMode(api.ModeAsk)
-	if dec, _, _ := sess.Evaluate(safeReadPlan); dec != tools.AccessAsk {
-		t.Fatalf("ModeAsk safeReadPlan: expected AccessAsk, got %s", dec)
-	}
-	_ = sess.AddAllow("view(README.md)")
 	if dec, _, _ := sess.Evaluate(safeReadPlan); dec != tools.AccessAllow {
+		t.Fatalf("ModeAsk safeReadPlan: expected AccessAllow, got %s", dec)
+	}
+	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessAsk {
+		t.Fatalf("ModeAsk writePlan: expected AccessAsk, got %s", dec)
+	}
+	_ = sess.AddAllow("write_file(internal/pkg/a.go)")
+	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessAllow {
 		t.Fatalf("ModeAsk with allow rule: expected AccessAllow, got %s", dec)
 	}
 	_ = sess.Clear()
@@ -730,13 +733,16 @@ func TestSessionManagerBypassSandboxEvaluation(t *testing.T) {
 		}
 	}
 
-	// Plan mode denies any non-read-only plan, including bypass plans.
+	// Plan mode prompts for bypass plans (shares default gate, does not auto-allow).
 	sess := attachTestSession(t, api.ModePlan)
+	if dec, _, _ := sess.Evaluate(bypassBashPlan("git commit -m x")); dec != tools.AccessAsk {
+		t.Errorf("expected plan mode to ask for bypass plan without grant, got %s", dec)
+	}
 	if err := sess.AddAllow("bash_unsandboxed(git commit *)"); err != nil {
 		t.Fatalf("AddAllow: %v", err)
 	}
-	if dec, _, _ := sess.Evaluate(bypassBashPlan("git commit -m x")); dec != tools.AccessDeny {
-		t.Errorf("expected plan mode to deny bypass plan, got %s", dec)
+	if dec, _, _ := sess.Evaluate(bypassBashPlan("git commit -m x")); dec != tools.AccessAllow {
+		t.Errorf("expected plan mode with bypass grant to allow, got %s", dec)
 	}
 }
 
@@ -780,11 +786,11 @@ func TestSessionManagerAutoAllowBashMatrix(t *testing.T) {
 		t.Errorf("expected nil runtime policy to disable widening, got %s", dec)
 	}
 
-	// Plan mode still denies; ask mode still prompts.
+	// Plan and ask modes still prompt for mutating bash.
 	plan := attachTestSession(t, api.ModePlan)
 	plan.SetRuntimePolicy(&permissions.RuntimePolicy{AutoAllowBash: true, SandboxNative: true})
-	if dec, _, _ := plan.Evaluate(safeBash); dec != tools.AccessDeny {
-		t.Errorf("expected plan mode to deny, got %s", dec)
+	if dec, _, _ := plan.Evaluate(safeBash); dec != tools.AccessAsk {
+		t.Errorf("expected plan mode to prompt, got %s", dec)
 	}
 	ask := attachTestSession(t, api.ModeAsk)
 	ask.SetRuntimePolicy(&permissions.RuntimePolicy{AutoAllowBash: true, SandboxNative: true})
@@ -1377,5 +1383,109 @@ func TestFileAccessChecker(t *testing.T) {
 	})
 	if err := restrictedChecker.Check("main.go", "main.go", false); err == nil {
 		t.Errorf("expected agent-policy-excluded view prohibited, got nil")
+	}
+}
+
+func TestPlansDirAutoAllowAndRestrictedWorkspace(t *testing.T) {
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-perm-plans-test")
+	t.Cleanup(xdg.ClearCache)
+
+	wsDir := t.TempDir()
+	plansDir := filepath.Join(t.TempDir(), "sessions", "s1", "plans")
+
+	planWrite := &tools.Plan{
+		ToolName: "write",
+		Action:   api.ActionWrite,
+		Safety:   api.SafetySafe,
+		Target:   filepath.Join(plansDir, "implementation.md"),
+	}
+	planRemove := &tools.Plan{
+		ToolName: "remove",
+		Action:   api.ActionDelete,
+		Safety:   api.SafetySafe,
+		Target:   filepath.Join(plansDir, "implementation.md"),
+	}
+	repoRemove := &tools.Plan{
+		ToolName: "remove",
+		Action:   api.ActionDelete,
+		Safety:   api.SafetySafe,
+		Target:   "main.go",
+	}
+	repoWrite := &tools.Plan{
+		ToolName: "write",
+		Action:   api.ActionWrite,
+		Safety:   api.SafetySafe,
+		Target:   "main.go",
+	}
+	safeRead := &tools.Plan{
+		ToolName: "view",
+		Action:   api.ActionRead,
+		Safety:   api.SafetySafe,
+		Target:   "main.go",
+		ReadOnly: true,
+	}
+
+	// 1. Normal workspace: plansDir writes auto-allow in every mode; repo writes prompt in default/plan/ask.
+	sess := attachTestSession(t, api.ModeDefault)
+	sess.SetPlansDir(plansDir)
+	for _, mode := range []api.PermissionMode{api.ModeDefault, api.ModePlan, api.ModeAsk, api.ModeAcceptEdits, api.ModeAuto} {
+		sess.SetMode(mode)
+		if dec, _, _ := sess.Evaluate(planWrite); dec != tools.AccessAllow {
+			t.Fatalf("mode %s: expected plansDir write auto-allowed, got %s", mode, dec)
+		}
+		if dec, _, _ := sess.Evaluate(planRemove); dec != tools.AccessAllow {
+			t.Fatalf("mode %s: expected plansDir remove auto-allowed, got %s", mode, dec)
+		}
+	}
+	sess.SetMode(api.ModePlan)
+	if dec, _, _ := sess.Evaluate(repoWrite); dec != tools.AccessAsk {
+		t.Fatalf("ModePlan repo write: expected AccessAsk, got %s", dec)
+	}
+	if dec, _, _ := sess.Evaluate(repoRemove); dec != tools.AccessAsk {
+		t.Fatalf("ModePlan repo remove: expected AccessAsk, got %s", dec)
+	}
+
+	// Explicit deny rule still blocks plansDir writes.
+	if err := sess.AddDeny("write(*)"); err != nil {
+		t.Fatal(err)
+	}
+	if dec, _, _ := sess.Evaluate(planWrite); dec != tools.AccessDeny {
+		t.Fatalf("denied write: expected AccessDeny, got %s", dec)
+	}
+
+	// 2. Restricted workspace: starts in default mode, blocks repo mutations even in ModeAuto, keeps plansDir writable.
+	wsRestricted, err := workspace.Open(context.Background(), wsDir, workspace.WithRestrictedMode(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  wsRestricted,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restrictedSess := mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
+	restrictedSess.SetPlansDir(plansDir)
+
+	if dec, _, _ := restrictedSess.Evaluate(safeRead); dec != tools.AccessAllow {
+		t.Fatalf("restricted safe read: expected AccessAllow, got %s", dec)
+	}
+	if dec, _, _ := restrictedSess.Evaluate(repoWrite); dec != tools.AccessDeny {
+		t.Fatalf("restricted repo write: expected AccessDeny, got %s", dec)
+	}
+	if dec, _, _ := restrictedSess.Evaluate(repoRemove); dec != tools.AccessDeny {
+		t.Fatalf("restricted repo remove: expected AccessDeny, got %s", dec)
+	}
+	restrictedSess.SetMode(api.ModeAuto)
+	if dec, _, _ := restrictedSess.Evaluate(repoWrite); dec != tools.AccessDeny {
+		t.Fatalf("restricted repo write in ModeAuto: expected AccessDeny, got %s", dec)
+	}
+	if dec, _, _ := restrictedSess.Evaluate(planWrite); dec != tools.AccessAllow {
+		t.Fatalf("restricted plansDir write: expected AccessAllow, got %s", dec)
+	}
+	if dec, _, _ := restrictedSess.Evaluate(planRemove); dec != tools.AccessAllow {
+		t.Fatalf("restricted plansDir remove: expected AccessAllow, got %s", dec)
 	}
 }

@@ -395,4 +395,24 @@ func TestTasksmithConfigPathsSensitiveForWrites(t *testing.T) {
 	if _, safety := EvaluatePathWithConfig(sandboxJSON, api.ActionRead, PathConfig{}); safety == api.SafetyUnsafe {
 		t.Errorf("EvaluatePathWithConfig(sandbox.json, read) = SafetyUnsafe, want reads permitted")
 	}
+
+	plansDir := filepath.Join(dataDir, "workspaces", "abc123", "sessions", "sess-1", "plans")
+	planFile := filepath.Join(plansDir, "implementation.md")
+	cfg := PathConfig{WriteDirs: []string{plansDir}}
+	for _, action := range []api.ActionType{api.ActionRead, api.ActionWrite, api.ActionDelete} {
+		if _, safety := EvaluatePathWithConfig(planFile, action, cfg); safety != api.SafetySafe {
+			t.Errorf("EvaluatePathWithConfig(planFile, %v) = %v, want SafetySafe", action, safety)
+		}
+	}
+	if _, safety := EvaluatePathWithConfig(nested, api.ActionWrite, cfg); safety != api.SafetyUnsafe {
+		t.Errorf("EvaluatePathWithConfig(permissions.json with plans WriteDir) = %v, want SafetyUnsafe", safety)
+	}
+	if err := os.MkdirAll(plansDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(nested, filepath.Join(plansDir, "escape.json")); err == nil {
+		if _, safety := EvaluatePathWithConfig(filepath.Join(plansDir, "escape.json"), api.ActionWrite, cfg); safety != api.SafetyUnsafe {
+			t.Errorf("EvaluatePathWithConfig(symlink escape from plansDir) = %v, want SafetyUnsafe", safety)
+		}
+	}
 }

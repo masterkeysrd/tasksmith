@@ -15,6 +15,7 @@ const (
 	TimelineKindMode          TimelineKind = "mode"
 	TimelineKindPermission    TimelineKind = "permission"
 	TimelineKindQuestion      TimelineKind = "question"
+	TimelineKindPlanReview    TimelineKind = "plan_review"
 	TimelineKindInterrupted   TimelineKind = "interrupted"
 	TimelineKindCompacted     TimelineKind = "compacted"
 	TimelineKindCacheBroken   TimelineKind = "cache_broken"
@@ -70,6 +71,12 @@ type PermissionRecord struct {
 type QuestionRecord struct {
 	Request  QuestionRequest  `json:"request"`
 	Response QuestionResponse `json:"response"`
+}
+
+// PlanReviewRecord captures an exit_plan_mode review prompt and its user decision.
+type PlanReviewRecord struct {
+	Request  PlanReviewRequest  `json:"request"`
+	Decision PlanReviewDecision `json:"decision"`
 }
 
 // CompactedRecord captures a context compaction event in the session timeline.
@@ -155,6 +162,7 @@ type TimelineEntry struct {
 	Mode          *ModeChange          `json:"mode,omitempty"`
 	Permission    *PermissionRecord    `json:"permission,omitempty"`
 	Question      *QuestionRecord      `json:"question,omitempty"`
+	PlanReview    *PlanReviewRecord    `json:"plan_review,omitempty"`
 	Compacted     *CompactedRecord     `json:"compacted,omitempty"`
 	CacheBroken   *CacheBrokenRecord   `json:"cache_broken,omitempty"`
 	TurnCompleted *TurnCompletedRecord `json:"turn_completed,omitempty"`

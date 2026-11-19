@@ -52,10 +52,10 @@ func (s *Session) Fork(ctx context.Context, title string) (*Session, error) {
 		s.Unlock()
 		return nil, fmt.Errorf("%w: cannot fork while a turn is running", ErrSessionRunning)
 	}
-	if s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion ||
-		len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 {
+	if s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion || s.Status == api.StatusWaitingPlanReview ||
+		len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 || len(s.PendingPlanReviews) > 0 {
 		s.Unlock()
-		return nil, fmt.Errorf("%w: cannot fork while the session awaits a permission or answer", ErrSessionRunning)
+		return nil, fmt.Errorf("%w: cannot fork while the session awaits a permission, answer, or plan review", ErrSessionRunning)
 	}
 	if s.ParentID != "" {
 		s.Unlock()

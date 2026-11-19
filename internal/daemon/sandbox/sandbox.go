@@ -17,15 +17,16 @@ import (
 
 // session is the concrete implementation of the Sandbox interface.
 type session struct {
-	id          string
-	mode        Mode
-	workDir     string
-	realWorkDir string
-	tempDir     string
-	realTempDir string
-	fsPolicy    atomic.Pointer[FilesystemPolicy]
-	envMu       sync.RWMutex
-	cfg         Config
+	id               string
+	mode             Mode
+	workDir          string
+	realWorkDir      string
+	tempDir          string
+	realTempDir      string
+	sessionWriteDirs []string
+	fsPolicy         atomic.Pointer[FilesystemPolicy]
+	envMu            sync.RWMutex
+	cfg              Config
 	// netProxy serves allowlisted child traffic when the network posture is
 	// "allowlist"; guarded by envMu together with cfg.
 	netProxy       *Proxy
@@ -102,16 +103,24 @@ func New(cfg Config) (Sandbox, error) {
 	cfg.Mode = mode
 	cfg.WorkDir = cleanWorkDir
 
+	var sessionWriteDirs []string
+	for _, d := range cfg.SessionWriteDirs {
+		if d = strings.TrimSpace(d); d != "" {
+			sessionWriteDirs = append(sessionWriteDirs, filepath.Clean(d))
+		}
+	}
+
 	s := &session{
-		id:          id,
-		mode:        mode,
-		workDir:     cleanWorkDir,
-		realWorkDir: realWorkDir,
-		tempDir:     tempDir,
-		realTempDir: realTempDir,
-		cfg:         cfg,
-		root:        root,
-		watchers:    make(map[*sandboxWatcher]struct{}),
+		id:               id,
+		mode:             mode,
+		workDir:          cleanWorkDir,
+		realWorkDir:      realWorkDir,
+		tempDir:          tempDir,
+		realTempDir:      realTempDir,
+		sessionWriteDirs: sessionWriteDirs,
+		cfg:              cfg,
+		root:             root,
+		watchers:         make(map[*sandboxWatcher]struct{}),
 	}
 	s.readOnly.Store(cfg.ReadOnly)
 	s.fsPolicy.Store(normalizeFilesystemPolicy(cfg.Filesystem))

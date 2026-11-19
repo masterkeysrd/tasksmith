@@ -183,6 +183,7 @@ Some built-in commands:
 | `/budget` | `/budget [tokens\|default]` | Show or set a model-supported thinking token budget. |
 | `/thinking` | `/thinking [on\|off\|adaptive\|default]` | Show or change a model-supported thinking toggle or adaptive strategy. |
 | `/mode` | `/mode [default\|accept_edits\|plan\|ask\|auto]` | Inspect or change the session permission mode. |
+| `/plan` | `/plan [prompt]` | Switch to `plan` mode, optionally submitting a planning prompt immediately. |
 | `/sessions` | `/sessions [session_id]` | Open the interactive session browser to switch, rename (`F2`), fork (`F3`), or delete (`F4`) sessions. |
 | `/new` | `/new [model]` | Start a fresh session draft. |
 | `/fork` | `/fork [title]` | Branch the current session into a new top-level session that keeps the conversation, and switch to it. |
@@ -248,7 +249,7 @@ For full details on rules and pattern syntax, see the [Permissions Guide](./perm
 
 ### Structured Agent Questions (`ask_question`)
 
-When an agent needs human guidance or clarifying requirements, it invokes the built-in `ask_question` tool. Permission rules apply; in `ask` mode, approve the tool call before the question form appears unless an allow rule matches. Denied calls do not show a question.
+When an agent needs human guidance or clarifying requirements, it invokes the built-in `ask_question` tool. Permission rules and workspace policies apply; if an `ask` policy covers `ask_question`, approve the tool call before the question form appears unless an allow rule matches. Denied calls do not show a question.
 
 The interactive question form supports:
 
@@ -256,6 +257,15 @@ The interactive question form supports:
 - **Multi-Select**: Use `↑` / `↓` to highlight options and press `Space` to toggle selections (`[✓]` / `[ ]`). Press `Enter` to confirm your selections.
 - **Confirmation**: Select between `Yes` and `No`.
 - **Multi-Step Questionnaires**: When an agent asks multiple questions at once, a step bar (`Step 1 of 3`) lets you navigate back and forth using `Left` / `Shift+Tab` and `Right` before final submission. Press `Esc` to cancel the questionnaire.
+
+### Plan Review Prompts (`exit_plan_mode`)
+
+When an agent finishes drafting a plan and calls `exit_plan_mode(path)`, the turn pauses and opens a compact **Plan review** prompt in `<Slot />` showing the plan path, line count, and four choices. Press `p` to toggle a scrollable Markdown viewer for the full plan (`p` or `Esc` returns to the choices without canceling):
+
+- **1. Approve & auto-accept edits (`accept_edits`)**
+- **2. Approve with standard prompts (`default`)**
+- **3. Approve autonomous (`auto`)**
+- **4. Keep planning** (`4` or `r` opens an inline feedback input so you can request revisions while staying in `plan` mode; `Esc` cancels and stays in `plan` mode).
 
 ---
 
@@ -445,7 +455,7 @@ Because events arrive as the same `api.Event` schema the TUI consumes, any proce
 
 ### Slash Commands & Shell Input Without the TUI
 
-Inside headless runs (including mid-session `send` frames), `/model`, `/models`, `/mode`, `/agent`, `/agents`, `/usage`, `/compact`, `/fork`, `/exit`, and `/help` work locally without starting a turn; workspace commands, skills, `!` shell input, and `mcp:<server>:<prompt>` references go through the daemon. An unrecognized bare `/name` fails fast with `unknown slash command` instead of being sent to the model. See [Slash Commands Without the TUI](../reference/exec.md#6-slash-commands-without-the-tui).
+Inside headless runs (including mid-session `send` frames), `/model`, `/models`, `/mode`, `/plan`, `/agent`, `/agents`, `/usage`, `/compact`, `/fork`, `/exit`, and `/help` work locally without starting a turn; workspace commands, skills, `!` shell input, and `mcp:<server>:<prompt>` references go through the daemon. An unrecognized bare `/name` fails fast with `unknown slash command` instead of being sent to the model. See [Slash Commands Without the TUI](../reference/exec.md#6-slash-commands-without-the-tui).
 
 ### Embedding (Go SDK)
 

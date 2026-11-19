@@ -14,6 +14,7 @@ type SlotKind string
 const (
 	SlotKindPermission   SlotKind = "permission"
 	SlotKindQuestion     SlotKind = "question"
+	SlotKindPlanReview   SlotKind = "plan_review"
 	SlotKindPicker       SlotKind = "picker"
 	SlotKindAutocomplete SlotKind = "autocomplete"
 	SlotKindModelSwitch  SlotKind = "model_switch"
@@ -29,7 +30,7 @@ type ModelSwitchRequest struct {
 // HidesComposer reports whether this slot kind should hide the Composer while active.
 func (k SlotKind) HidesComposer() bool {
 	switch k {
-	case SlotKindPermission, SlotKindQuestion, SlotKindPicker, SlotKindModelSwitch:
+	case SlotKindPermission, SlotKindQuestion, SlotKindPlanReview, SlotKindPicker, SlotKindModelSwitch:
 		return true
 	default:
 		return false

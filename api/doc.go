@@ -17,6 +17,7 @@
 //   - [EntryAddedEvent] ([EventEntryAdded]): broadcast when a new [TimelineEntry] is recorded in a session.
 //   - [ChunkEvent] ([EventChunk]): streaming assistant token or delta blocks.
 //   - [PermissionRequestedEvent] ([EventPermissionRequested]): pending tool approvals.
+//   - [PlanReviewRequestedEvent] ([EventPlanReviewRequested]): pending exit_plan_mode reviews.
 //   - [CompletedEvent] ([EventCompleted]): signal concluding a turn.
 //   - [ErrorEvent] ([EventError]): terminal turn errors.
 //
@@ -35,6 +36,7 @@
 //   - [TimelineKindAgent]: active agent updates ([AgentChange]).
 //   - [TimelineKindMode]: permission mode transitions ([ModeChange]).
 //   - [TimelineKindPermission]: tool permission resolutions ([PermissionRecord]).
+//   - [TimelineKindPlanReview]: exit_plan_mode review resolutions ([PlanReviewRecord]).
 //   - [TimelineKindForked]: session fork markers ([ForkRecord]).
 //
 // This package is a pure protocol contract and depends exclusively on the Go

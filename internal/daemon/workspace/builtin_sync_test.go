@@ -294,6 +294,15 @@ func TestBuiltinSandboxPermissionReferences(t *testing.T) {
 			t.Fatalf("headless-exec reference lacks %q guidance", want)
 		}
 	}
+	modesRef, err := os.ReadFile(filepath.Join(builtinDir, "skills", "cli-customizations", "references", "modes-and-planning.md"))
+	if err != nil {
+		t.Fatalf("synced cli-customizations modes-and-planning reference missing: %v", err)
+	}
+	for _, want := range []string{"/plan", "Shift+Tab", "exit_plan_mode", "accept_edits"} {
+		if !strings.Contains(string(modesRef), want) {
+			t.Fatalf("modes-and-planning reference lacks %q guidance", want)
+		}
+	}
 
 	sk, ok := cat.GetSkill("tasksmith-customizations")
 	if !ok {

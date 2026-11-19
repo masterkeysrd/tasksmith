@@ -17,7 +17,7 @@ import (
 // (workspace commands, skills, MCP prompts) stays the single source of truth
 // for workflow behavior across clients.
 var localCommands = []string{
-	"model", "models", "mode", "agent", "agents", "effort", "thinking", "budget", "usage", "compact", "fork", "login", "auth", "signin", "exit", "quit", "help",
+	"model", "models", "mode", "plan", "agent", "agents", "effort", "thinking", "budget", "usage", "compact", "fork", "login", "auth", "signin", "exit", "quit", "help",
 }
 
 // newMessageID mints the uuid-v7 message id the daemon expects on sends.
@@ -64,6 +64,8 @@ func (r *run) localCommand(text string) (bool, error) {
 		return true, r.cmdModels()
 	case "mode":
 		return true, r.cmdMode(args)
+	case "plan":
+		return true, r.cmdPlan(args)
 	case "agent":
 		return true, r.cmdAgent(args)
 	case "agents":
@@ -201,6 +203,26 @@ func (r *run) cmdMode(args []string) error {
 	}
 	r.reportCommandData("/mode "+string(mode), "mode set to "+string(mode), mode, nil)
 	return nil
+}
+
+// cmdPlan switches to plan mode and optionally submits a planning prompt.
+func (r *run) cmdPlan(args []string) error {
+	prompt := strings.TrimSpace(strings.Join(args, " "))
+	if prompt == "" {
+		return r.cmdMode([]string{string(api.ModePlan)})
+	}
+	if r.sess.Config.Mode != api.ModePlan {
+		sess, err := r.c.UpdateSession(r.ctx, r.sess.ID, api.UpdateSessionRequest{
+			Config: api.SessionConfig{Mode: api.ModePlan},
+		})
+		if err != nil {
+			return err
+		}
+		if sess != nil {
+			r.sess = sess
+		}
+	}
+	return r.sendPrompt(prompt, prompt)
 }
 
 // cmdAgent shows or sets the session agent, delegating validation to the daemon.

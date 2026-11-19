@@ -75,6 +75,8 @@ func formatSubagentStatus(s api.SessionStatus) string {
 		return "Waiting Permission"
 	case api.StatusWaitingQuestion:
 		return "Waiting Answer"
+	case api.StatusWaitingPlanReview:
+		return "Waiting Plan Review"
 	default:
 		return strings.ReplaceAll(string(s), "_", " ")
 	}
@@ -281,7 +283,7 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 		chatChildren = append(chatChildren, components.Message(components.MessageProps{Message: msg}))
 	}
 
-	if conv.IsStreaming() && status != api.StatusIdle && status != api.StatusWaitingPermission && status != api.StatusWaitingQuestion {
+	if conv.IsStreaming() && status != api.StatusIdle && status != api.StatusWaitingPermission && status != api.StatusWaitingQuestion && status != api.StatusWaitingPlanReview {
 		startedAt, input, output := conv.TurnStats()
 		todos := conv.Todos()
 		activeText := ""

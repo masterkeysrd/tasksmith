@@ -171,7 +171,7 @@ func (s *Session) registerHostApproval(req api.PermissionRequest, host string, p
 // is blocked inside the sandboxed subprocess) and must remain visible as such
 // to Enqueue, startTurn, and reconnecting clients.
 func (s *Session) beginHostApprovalPrompt(prior api.SessionStatus) {
-	if prior == api.StatusWaitingPermission || prior == api.StatusWaitingQuestion {
+	if prior == api.StatusWaitingPermission || prior == api.StatusWaitingQuestion || prior == api.StatusWaitingPlanReview {
 		return
 	}
 	s.Lock()
@@ -194,12 +194,14 @@ func (s *Session) finishHostApprovalPrompt(prior api.SessionStatus, turnToken ch
 		return
 	}
 	next := prior
-	if next == api.StatusWaitingPermission || next == api.StatusWaitingQuestion {
+	if next == api.StatusWaitingPermission || next == api.StatusWaitingQuestion || next == api.StatusWaitingPlanReview {
 		// Another prompt predates ours; leave the waiting posture intact.
 	} else if len(s.hostApprovals) > 0 || len(s.PendingPermissions) > 0 {
 		next = api.StatusWaitingPermission
 	} else if len(s.PendingQuestions) > 0 {
 		next = api.StatusWaitingQuestion
+	} else if len(s.PendingPlanReviews) > 0 {
+		next = api.StatusWaitingPlanReview
 	} else if turnToken == nil || turnToken != s.done {
 		// The prompting turn ended (its teardown preserved the waiting
 		// status); settle the session back to idle.

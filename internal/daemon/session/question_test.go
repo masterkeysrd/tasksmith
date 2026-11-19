@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+	"github.com/masterkeysrd/warp"
 )
 
 func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
@@ -26,7 +27,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.PermManager.SetMode(api.ModeAsk)
+	sess.PermManager.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Ask: []string{"ask_question"}}})
 	if err := sess.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
 		t.Fatal(err)
 	}

@@ -69,6 +69,27 @@ func UnsandboxedExecutionFromContext(ctx context.Context) bool {
 	return v
 }
 
+type planReviewOutcomeKey struct{}
+
+// PlanReviewOutcome carries the user's review decision when resuming an
+// exit_plan_mode interrupt in the harness.
+type PlanReviewOutcome struct {
+	Approved bool
+	Mode     api.PermissionMode
+	Feedback string
+}
+
+// WithPlanReviewOutcome attaches the resolved plan review outcome to ctx.
+func WithPlanReviewOutcome(ctx context.Context, outcome PlanReviewOutcome) context.Context {
+	return context.WithValue(ctx, planReviewOutcomeKey{}, outcome)
+}
+
+// PlanReviewOutcomeFromContext retrieves the plan review outcome from ctx, if set.
+func PlanReviewOutcomeFromContext(ctx context.Context) (PlanReviewOutcome, bool) {
+	v, ok := ctx.Value(planReviewOutcomeKey{}).(PlanReviewOutcome)
+	return v, ok
+}
+
 // AccessDecision represents the policy evaluation outcome.
 type AccessDecision string
 
@@ -106,6 +127,9 @@ type Plan struct {
 	// can never auto-approve an unsandboxed retry, while excluded matches
 	// flow through normal bash(...) rules and modes.
 	BypassSandbox bool `json:"bypass_sandbox,omitempty"`
+	// PlanReview carries the validated plan path and Markdown preview when
+	// exit_plan_mode prepares a plan review interrupt.
+	PlanReview *api.PlanReviewRequest `json:"-"`
 }
 
 // Tool is an executable LLM-callable tool with two-phase Prepare and Execute

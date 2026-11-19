@@ -13,12 +13,17 @@ func TestPrepareResponsesNormalizesAndClones(t *testing.T) {
 	state := State{
 		PendingPermissions: []api.PermissionRequest{{ID: "permission", ToolCallID: "write"}},
 		PendingQuestions:   []api.QuestionRequest{{ID: "question", ToolCallID: "ask"}},
+		PendingPlanReviews: []api.PlanReviewRequest{{ID: "plan-review", ToolCallID: "exit_plan_mode", Path: "plans/a.md"}},
 	}
 	selected := []string{"original"}
 	input := Input{
 		Decisions: map[string]api.PermissionDecision{"write": {Kind: api.DecisionReject}},
 		Answers: map[string]api.QuestionResponse{"question": {
 			Answers: []api.QuestionAnswer{{Question: "Choose", Selected: selected}},
+		}},
+		PlanReviews: map[string]api.PlanReviewDecision{"exit_plan_mode": {
+			Approved: true,
+			Mode:     api.ModeAcceptEdits,
 		}},
 	}
 	update, err := prepareResponses(input, state)
@@ -37,6 +42,12 @@ func TestPrepareResponsesNormalizesAndClones(t *testing.T) {
 		answer, ok := result.QuestionResponses[key]
 		if !ok || answer.RequestID != "question" || answer.ToolCallID != "ask" || len(answer.Answers) != 1 || answer.Answers[0].Selected[0] != "original" {
 			t.Fatalf("answer %q: %+v", key, answer)
+		}
+	}
+	for _, key := range []string{"plan-review", "exit_plan_mode"} {
+		dec, ok := result.PlanReviewDecisions[key]
+		if !ok || dec.RequestID != "plan-review" || dec.ToolCallID != "exit_plan_mode" || !dec.Approved || dec.Mode != api.ModeAcceptEdits {
+			t.Fatalf("plan review decision %q: %+v", key, dec)
 		}
 	}
 }

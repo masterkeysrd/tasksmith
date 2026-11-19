@@ -23,6 +23,7 @@ func ToAPISession(sess *Session) api.Session {
 	status := api.StatusIdle
 	var perms []api.PermissionRequest
 	var questions []api.QuestionRequest
+	var planReviews []api.PlanReviewRequest
 	var ts []api.Task
 	var todos []api.TodoItem
 	var queueItems []api.QueueItem
@@ -33,6 +34,7 @@ func ToAPISession(sess *Session) api.Session {
 		}
 		perms = sess.PendingPermissions
 		questions = sess.PendingQuestions
+		planReviews = sess.PendingPlanReviews
 		ts = slices.Clone(sess.State.Tasks)
 		todos = sess.Todos
 		queueItems = sess.VisibleQueue()
@@ -53,6 +55,8 @@ func ToAPISession(sess *Session) api.Session {
 		activity = "Waiting for permission"
 	} else if status == api.StatusWaitingQuestion {
 		activity = "Waiting for answer"
+	} else if status == api.StatusWaitingPlanReview {
+		activity = "Waiting for plan review"
 	} else if status == api.StatusIdle {
 		activity = ""
 	} else if status == api.StatusThinking && activity == "" {
@@ -74,6 +78,7 @@ func ToAPISession(sess *Session) api.Session {
 		Context:            ctxState,
 		PendingPermissions: perms,
 		PendingQuestions:   questions,
+		PendingPlanReviews: planReviews,
 		Tasks:              ts,
 		Todos:              todos,
 		Queue:              queueItems,

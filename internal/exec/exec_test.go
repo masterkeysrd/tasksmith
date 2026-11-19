@@ -459,3 +459,135 @@ func TestResolveSessionModelCapabilityMismatchHintAndForce(t *testing.T) {
 		t.Fatalf("sawForce = %v, want [false true]", sawForce)
 	}
 }
+
+func TestCmdPlanSwitchesModeAndSubmitsPrompt(t *testing.T) {
+	var modes []api.PermissionMode
+	var sent []string
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case req.Method == http.MethodPatch && req.URL.Path == "/v1/sessions/s1":
+			var body api.UpdateSessionRequest
+			_ = json.NewDecoder(req.Body).Decode(&body)
+			modes = append(modes, body.Config.Mode)
+			raw, _ := json.Marshal(api.Session{
+				ID:     "s1",
+				Config: api.SessionConfig{Mode: body.Config.Mode},
+			})
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(raw)),
+			}, nil
+		case req.Method == http.MethodPost && req.URL.Path == "/v1/sessions/s1/send":
+			var body api.SendRequest
+			_ = json.NewDecoder(req.Body).Decode(&body)
+			sent = append(sent, body.Content)
+			return &http.Response{
+				StatusCode: http.StatusAccepted,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+			}, nil
+		}
+		return execTransport{}.RoundTrip(req)
+	})
+
+	var out bytes.Buffer
+	r := newExecRun(t, &Options{Stdout: &out, Stderr: &bytes.Buffer{}}, rt)
+	r.sess = &api.Session{ID: "s1", Status: api.StatusIdle, Config: api.SessionConfig{Mode: api.ModeDefault}}
+
+	if handled, err := r.localCommand("/plan"); !handled || err != nil {
+		t.Fatalf("/plan failed: handled=%v err=%v", handled, err)
+	}
+	if r.sess.Config.Mode != api.ModePlan || len(sent) != 0 {
+		t.Fatalf("after /plan: mode=%q sent=%v", r.sess.Config.Mode, sent)
+	}
+
+	r.sess.Config.Mode = api.ModeDefault
+	if handled, err := r.localCommand("/plan refactor auth"); !handled || err != nil {
+		t.Fatalf("/plan <prompt> failed: handled=%v err=%v", handled, err)
+	}
+	if r.sess.Config.Mode != api.ModePlan || len(sent) != 1 || sent[0] != "refactor auth" {
+		t.Fatalf("after /plan <prompt>: mode=%q sent=%v", r.sess.Config.Mode, sent)
+	}
+	if len(modes) != 2 || modes[0] != api.ModePlan || modes[1] != api.ModePlan {
+		t.Fatalf("modes = %v, want [plan plan]", modes)
+	}
+
+	summary := planReviewSummary([]api.PlanReviewRequest{{
+		ID:         "pr-1",
+		ToolCallID: "tc-1",
+		Path:       "plans/auth.md",
+	}})
+	if !strings.Contains(summary, "Review plan: plans/auth.md") {
+		t.Fatalf("planReviewSummary = %q", summary)
+	}
+}
+
+func TestExecPlanReviewRoutingAndNonInteractiveGuard(t *testing.T) {
+	var sentSession string
+	var sentReq api.SendRequest
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/send") && req.Method == http.MethodPost {
+			parts := strings.Split(strings.TrimPrefix(req.URL.Path, "/v1/sessions/"), "/")
+			sentSession = parts[0]
+			if err := json.NewDecoder(req.Body).Decode(&sentReq); err != nil {
+				return nil, err
+			}
+			return &http.Response{
+				StatusCode: http.StatusAccepted,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+			}, nil
+		}
+		return execTransport{}.RoundTrip(req)
+	})
+
+	r := newExecRun(t, &Options{InputFormat: InputJSONL, OutputFormat: OutputJSONL, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}, rt)
+	r.sess = &api.Session{ID: "root-sess", Status: api.StatusIdle}
+
+	// Register plan review owner on a subagent session via EventPlanReviewRequested.
+	r.handleEvent(api.Event{
+		Type:  api.EventPlanReviewRequested,
+		Topic: api.SessionStreamTopic("sub-sess"),
+		Payload: api.PlanReviewRequestedEvent{
+			SessionID: "sub-sess",
+			PlanReviews: []api.PlanReviewRequest{{
+				ID:         "pr-sub",
+				ToolCallID: "tc-sub",
+				Path:       "plans/sub.md",
+			}},
+		},
+	})
+	if err := r.applyFrame(api.ExecInputFrame{
+		Type: api.ExecInputPlanReview,
+		PlanReview: &api.PlanReviewDecision{
+			RequestID: "pr-sub",
+			Approved:  true,
+			Mode:      api.ModeAcceptEdits,
+		},
+	}); err != nil {
+		t.Fatalf("applyFrame(plan_review): %v", err)
+	}
+	if sentSession != "sub-sess" || sentReq.PlanReview == nil || sentReq.PlanReview.RequestID != "pr-sub" || !sentReq.PlanReview.Approved {
+		t.Fatalf("plan_review routing mismatch: session=%q req=%+v", sentSession, sentReq.PlanReview)
+	}
+
+	// Non-interactive text mode triggers needs_input guard on EventPlanReviewRequested.
+	nonInt := newExecRun(t, &Options{InputFormat: InputText, OutputFormat: OutputText, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}, rt)
+	nonInt.sess = &api.Session{ID: "root-sess", Status: api.StatusIdle}
+	stop := nonInt.handleEvent(api.Event{
+		Type:  api.EventPlanReviewRequested,
+		Topic: api.SessionStreamTopic("root-sess"),
+		Payload: api.PlanReviewRequestedEvent{
+			SessionID: "root-sess",
+			PlanReviews: []api.PlanReviewRequest{{
+				ID:         "pr-root",
+				ToolCallID: "tc-root",
+				Path:       "plans/root.md",
+			}},
+		},
+	})
+	if !stop || nonInt.lastStatus != api.ExecResultNeedsInput || !strings.Contains(nonInt.guardReason, "Review plan: plans/root.md") {
+		t.Fatalf("non-interactive guard mismatch: stop=%v status=%q reason=%q", stop, nonInt.lastStatus, nonInt.guardReason)
+	}
+}

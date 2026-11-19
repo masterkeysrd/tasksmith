@@ -229,12 +229,13 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	if sid != "" && sess != nil {
 		FreezeTranscript()
 		if tl, err := c.Timeline(subCtx, sid); err == nil {
-			globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions)
+			globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions, sess.PendingPlanReviews)
 		}
 		if len(sess.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(sess.PendingPermissions)
 		}
 		globalConversation.SeedQuestions(sess.PendingQuestions)
+		globalConversation.SeedPlanReviews(sess.PendingPlanReviews)
 		if len(sess.Queue) > 0 {
 			SeedQueue(sess.Queue)
 		}
@@ -286,7 +287,7 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string, since stri
 						}
 						if tl, tlErr := c.Timeline(watchCtx, sessionID); tlErr == nil {
 							if sessErr == nil && sess != nil {
-								globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions)
+								globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions, sess.PendingPlanReviews)
 							} else {
 								globalConversation.loadTimeline(tl)
 							}
@@ -294,6 +295,7 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string, since stri
 						if sessErr == nil && sess != nil {
 							globalConversation.reconcilePermissions(sess.PendingPermissions)
 							globalConversation.SeedQuestions(sess.PendingQuestions)
+							globalConversation.SeedPlanReviews(sess.PendingPlanReviews)
 							globalConversation.ReconcileStreamStatus(sess)
 						}
 						since = resyncSince
@@ -342,7 +344,7 @@ func startSessionsWatcher(ctx context.Context) {
 						if GetApp().DaemonStatus == DaemonConnected {
 							SetDaemonStatus(DaemonDisconnected)
 							st := GetStream()
-							if st.Streaming || st.WaitingPermission || st.WaitingQuestion || st.PendingCommand != "" {
+							if st.Streaming || st.WaitingPermission || st.WaitingQuestion || st.WaitingPlanReview || st.PendingCommand != "" {
 								CancelTurn()
 							}
 						}
@@ -451,6 +453,7 @@ func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 
 // Send sends a user prompt message to the active session. If no session exists yet,
 // one is created lazily.
+// Send sends a prompt to the active session, creating one lazily if needed.
 func Send(text string, attachments ...api.Attachment) {
 	SendWithUserText(text, text, attachments...)
 }
@@ -459,6 +462,27 @@ func Send(text string, attachments ...api.Attachment) {
 // (rather than any server-rendered prompt or MCP resource body in text) for
 // structured @-mention reconciliation and 3.4 fallback lookup.
 func SendWithUserText(text, userText string, attachments ...api.Attachment) {
+	sendWithUserText(text, userText, "", attachments...)
+}
+
+// SetModeAndSend switches the session permission mode synchronously (canceling
+// any pending mode debounce) and immediately submits text as a turn in that mode.
+func SetModeAndSend(mode api.PermissionMode, text string, attachments ...api.Attachment) {
+	if mode == "" {
+		mode = api.ModeDefault
+	}
+	sessMu.Lock()
+	cancelModeDebounceLocked()
+	sessMu.Unlock()
+
+	session.Set(func(s SessionState) SessionState {
+		s.Config.Mode = mode
+		return s
+	})
+	sendWithUserText(text, text, mode, attachments...)
+}
+
+func sendWithUserText(text, userText string, modeOverride api.PermissionMode, attachments ...api.Attachment) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return
@@ -492,6 +516,24 @@ func SendWithUserText(text, userText string, attachments ...api.Attachment) {
 		if err != nil {
 			globalConversation.cancelPendingUser(msgID, err)
 			return
+		}
+		if modeOverride != "" && cmp.Or(sess.Config.Mode, api.ModeDefault) != modeOverride {
+			updated, uerr := c.UpdateSession(ctx, sess.ID, api.UpdateSessionRequest{
+				Config: api.SessionConfig{Mode: modeOverride},
+			})
+			if uerr != nil {
+				globalConversation.cancelPendingUser(msgID, uerr)
+				return
+			}
+			if updated != nil {
+				sess = updated
+			}
+			session.Set(func(s SessionState) SessionState {
+				if s.Session != nil && s.Session.ID == sess.ID {
+					s.Session.Config.Mode = modeOverride
+				}
+				return s
+			})
 		}
 
 		finalAttachments := mentions.Resolve(userText, reconciled, func(cand string) (string, bool) {
@@ -683,6 +725,39 @@ func SubmitQuestion(req api.QuestionRequest, response api.QuestionResponse, done
 			globalConversation.mu.Lock()
 			if globalConversation.sessionID == sessionID {
 				globalConversation.removeQuestionLocked(req.ID)
+				globalConversation.publishLocked()
+			}
+			globalConversation.mu.Unlock()
+		}
+		if done != nil {
+			done(err)
+		}
+	}()
+}
+
+// SubmitPlanReview submits a user approval or keep-planning decision for a pending plan review.
+func SubmitPlanReview(req api.PlanReviewRequest, decision api.PlanReviewDecision, done func(error)) {
+	sessMu.Lock()
+	c, ctx := activeClient, activeCtx
+	sess := GetSession().Session
+	sessMu.Unlock()
+	if sess == nil || sess.ID == "" || req.ID == "" {
+		if done != nil {
+			done(fmt.Errorf("no active session for plan review"))
+		}
+		return
+	}
+	decision.RequestID, decision.ToolCallID = req.ID, req.ToolCallID
+	sessionID := sess.ID
+	go func() {
+		if ctx == nil || ctx.Err() != nil {
+			ctx = context.Background()
+		}
+		err := c.Send(ctx, sessionID, api.SendRequest{PlanReview: &decision})
+		if err == nil {
+			globalConversation.mu.Lock()
+			if globalConversation.sessionID == sessionID {
+				globalConversation.removePlanReviewLocked(req.ID)
 				globalConversation.publishLocked()
 			}
 			globalConversation.mu.Unlock()
@@ -1443,13 +1518,14 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 			sess = loadedSess
 		}
 		if tl, err := c.Timeline(ctx, sess.ID); err == nil {
-			globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions)
+			globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions, sess.PendingPlanReviews)
 		}
 		loadSessionUsage(ctx, c, sess.ID)
 		if len(sess.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(sess.PendingPermissions)
 		}
 		globalConversation.SeedQuestions(sess.PendingQuestions)
+		globalConversation.SeedPlanReviews(sess.PendingPlanReviews)
 		if len(sess.Queue) > 0 {
 			SeedQueue(sess.Queue)
 		}
@@ -1757,12 +1833,13 @@ func SwitchSession(sessionID string) {
 		ResetForSessionSwitch()
 
 		if tl, err := c.Timeline(ctx, loaded.ID); err == nil {
-			globalConversation.loadTimelineSnapshot(loaded, tl, loaded.PendingQuestions)
+			globalConversation.loadTimelineSnapshot(loaded, tl, loaded.PendingQuestions, loaded.PendingPlanReviews)
 		}
 		if len(loaded.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(loaded.PendingPermissions)
 		}
 		globalConversation.SeedQuestions(loaded.PendingQuestions)
+		globalConversation.SeedPlanReviews(loaded.PendingPlanReviews)
 		if len(loaded.Queue) > 0 {
 			SeedQueue(loaded.Queue)
 		}

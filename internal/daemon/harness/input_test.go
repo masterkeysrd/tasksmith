@@ -19,8 +19,10 @@ func TestInputHasResponses(t *testing.T) {
 		{name: "compact only", input: Input{Compact: &api.CompactRequest{}}},
 		{name: "empty decisions", input: Input{Decisions: map[string]api.PermissionDecision{}}, want: true},
 		{name: "empty answers", input: Input{Answers: map[string]api.QuestionResponse{}}, want: true},
+		{name: "empty plan reviews", input: Input{PlanReviews: map[string]api.PlanReviewDecision{}}, want: true},
 		{name: "populated decisions", input: Input{Decisions: map[string]api.PermissionDecision{"id": {Kind: api.DecisionReject}}}, want: true},
 		{name: "populated answers", input: Input{Answers: map[string]api.QuestionResponse{"id": {Canceled: true}}}, want: true},
+		{name: "populated plan reviews", input: Input{PlanReviews: map[string]api.PlanReviewDecision{"id": {Approved: true}}}, want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

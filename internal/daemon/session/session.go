@@ -280,6 +280,15 @@ func Open(ctx context.Context, dbSess *Session, cfg Config) (*Session, error) {
 				sess.Status = api.StatusWaitingQuestion
 			}
 		}
+		if len(st.PendingPlanReviews) > 0 && sess.Status != api.StatusThinking {
+			sess.PendingPlanReviews = make([]api.PlanReviewRequest, len(st.PendingPlanReviews))
+			for i := range st.PendingPlanReviews {
+				sess.PendingPlanReviews[i] = *st.PendingPlanReviews[i].Clone()
+			}
+			if len(st.PendingPermissions) == 0 && len(st.PendingQuestions) == 0 {
+				sess.Status = api.StatusWaitingPlanReview
+			}
+		}
 		sess.Unlock()
 	}
 	_ = sess.configureHarness(ctx)
@@ -467,6 +476,8 @@ func (s *Session) setStatus(next api.SessionStatus) {
 		s.Activity = "Waiting for permission"
 	case api.StatusWaitingQuestion:
 		s.Activity = "Waiting for answer"
+	case api.StatusWaitingPlanReview:
+		s.Activity = "Waiting for plan review"
 	case api.StatusThinking:
 		if s.Activity == "" {
 			s.Activity = "Thinking..."
@@ -675,12 +686,13 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 		sbPolicy = sandboxEff.Overlay(sbPolicy)
 	}
 	sb, err := sandbox.New(sandbox.Config{
-		ID:         s.ID,
-		WorkDir:    s.WorkDir,
-		Mode:       mode,
-		Env:        s.workspace.SubprocessEnv(),
-		Filesystem: sbPolicy,
-		Network:    sandboxNetworkPolicy(sandboxEff),
+		ID:               s.ID,
+		WorkDir:          s.WorkDir,
+		Mode:             mode,
+		Env:              s.workspace.SubprocessEnv(),
+		Filesystem:       sbPolicy,
+		SessionWriteDirs: []string{s.plansDir()},
+		Network:          sandboxNetworkPolicy(sandboxEff),
 		OnUnlistedHost: func(ctx context.Context, host string, port int) (bool, error) {
 			return s.requestHostApproval(ctx, host, port)
 		},
@@ -736,6 +748,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 			return s.checkpoint(s.bgCtx)
 		})
 	}
+	s.PermManager.SetPlansDir(s.plansDir())
 	s.pushRuntimePolicy()
 
 	attResolver, err := harness.NewAttachmentResolver(harness.AttachmentResolverConfig{
@@ -970,11 +983,7 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 		}
 	}
 	if req.Config.Mode != "" {
-		if s.workspace != nil && s.workspace.IsRestricted() {
-			newConfig.Mode = api.ModePlan
-		} else {
-			newConfig.Mode = req.Config.Mode
-		}
+		newConfig.Mode = req.Config.Mode
 	}
 
 	updatedAt := time.Now().UTC()
@@ -1281,6 +1290,8 @@ func (s *Session) configureHarness(ctx context.Context) error {
 		ModelInfo:    model,
 		Tools:        container,
 		SystemPrompt: systemPrompt,
+		PlansDir:     s.plansDir(),
+		IsSubagent:   s.ParentID != "",
 		Limits:       limits,
 		Static:       staticCtx,
 		Rules:        ruleMatcher,
@@ -1300,6 +1311,10 @@ func (s *Session) configureHarness(ctx context.Context) error {
 
 func (s *Session) outputsDir() string {
 	return filepath.Join(s.Root, "outputs")
+}
+
+func (s *Session) plansDir() string {
+	return filepath.Join(s.Root, "plans")
 }
 
 func (s *Session) mediaDir() string {
@@ -1451,10 +1466,13 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	if builtinDir, err := xdg.BuiltinDir(); err == nil && builtinDir != "" {
 		readDirs = append(readDirs, builtinDir)
 	}
+	var writeDirs []string
+	writeDirs = append(writeDirs, s.plansDir())
 
 	guardInst := shellguard.New(shellguard.Config{
 		WorkspaceDir: s.WorkDir,
 		ReadDirs:     readDirs,
+		WriteDirs:    writeDirs,
 	})
 
 	// The MCP runtime is resolved per build so a reload that replaced the manager is
@@ -1463,6 +1481,11 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	var mcpCaller tools.MCPCaller
 	if s.mcpCaller != nil {
 		mcpCaller = s.mcpCaller()
+	}
+
+	var planCtrl builtin.PlanController
+	if s.ParentID == "" {
+		planCtrl = s
 	}
 
 	builtinTools, err := builtin.New(builtin.Config{
@@ -1478,6 +1501,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		Rules:            rules,
 		Subagents:        subagents,
 		Agents:           s,
+		Plans:            planCtrl,
 		AgentName:        agentName,
 		Agent:            activeAgent,
 		MCPCaller:        mcpCaller,

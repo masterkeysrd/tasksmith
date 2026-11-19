@@ -8,6 +8,8 @@ const (
 	ToolBash            = "bash"
 	ToolDownload        = "download"
 	ToolEdit            = "edit"
+	ToolEnterPlanMode   = "enter_plan_mode"
+	ToolExitPlanMode    = "exit_plan_mode"
 	ToolGlob            = "glob"
 	ToolGrep            = "grep"
 	ToolInvokeAgent     = "invoke_agent"

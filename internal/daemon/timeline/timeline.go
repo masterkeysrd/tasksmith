@@ -159,6 +159,11 @@ func marshalPayload(entry *Entry) ([]byte, error) {
 			return nil, ErrInvalidEntry
 		}
 		src = entry.Question
+	case api.TimelineKindPlanReview:
+		if entry.PlanReview == nil {
+			return nil, ErrInvalidEntry
+		}
+		src = entry.PlanReview
 	case api.TimelineKindCompacted:
 		if entry.Compacted == nil {
 			return nil, ErrInvalidEntry
@@ -347,6 +352,9 @@ func scanEntry(r rowScanner) (*Entry, error) {
 	case api.TimelineKindQuestion:
 		entry.Question = new(api.QuestionRecord)
 		dst = entry.Question
+	case api.TimelineKindPlanReview:
+		entry.PlanReview = new(api.PlanReviewRecord)
+		dst = entry.PlanReview
 	case api.TimelineKindCompacted:
 		entry.Compacted = new(api.CompactedRecord)
 		dst = entry.Compacted

@@ -38,6 +38,12 @@ func (r *Registry) registerSystemCommands() {
 		Complete:    completeModes,
 	})
 	r.Register(Command{
+		Name:        "plan",
+		Usage:       "/plan [prompt]",
+		Description: "Switch to plan mode, optionally submitting a planning prompt",
+		Handler:     handlePlan,
+	})
+	r.Register(Command{
 		Name:        "model",
 		Usage:       "/model [--force] [model_id]",
 		Description: "Select or switch the active model",
@@ -127,11 +133,11 @@ func modeOptionsWithActive(active api.PermissionMode) []uicomponents.Option {
 		mode api.PermissionMode
 		desc string
 	}{
-		{api.ModeDefault, "Confirm execution on every non-standard action"},
-		{api.ModeAcceptEdits, "Auto-approve workspace file edits"},
-		{api.ModePlan, "Read-only planning mode, prevents execution"},
-		{api.ModeAsk, "Require confirmation for all actions"},
-		{api.ModeAuto, "Auto-approve all actions without prompts"},
+		{api.ModeDefault, "Read tools run; edits, shell and network ask"},
+		{api.ModeAcceptEdits, "Auto-approve workspace file edits; shell and network ask"},
+		{api.ModePlan, "Investigate and draft plans without editing code; mutations ask"},
+		{api.ModeAsk, "Answer questions without modifying code; mutations ask"},
+		{api.ModeAuto, "Auto-approve all allowed actions without prompts"},
 	}
 
 	opts := make([]uicomponents.Option, len(modes))
@@ -189,6 +195,19 @@ func handleMode(args []string) error {
 	if store.GetSession().Session == nil {
 		store.AppendCommandOutput("/mode "+string(nextMode), fmt.Sprintf("Switched to %s mode.", nextMode))
 	}
+	return nil
+}
+
+func handlePlan(args []string) error {
+	prompt := strings.TrimSpace(strings.Join(args, " "))
+	if prompt == "" {
+		store.SetMode(api.ModePlan)
+		if store.GetSession().Session == nil {
+			store.AppendCommandOutput("/plan", "Switched to plan mode.")
+		}
+		return nil
+	}
+	store.SetModeAndSend(api.ModePlan, prompt)
 	return nil
 }
 

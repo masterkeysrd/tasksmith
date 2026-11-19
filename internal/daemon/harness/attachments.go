@@ -224,75 +224,61 @@ func (r *AttachmentResolver) ResolveUserMessage(ctx context.Context, msg message
 
 	atts := AttachmentsOf(user)
 
-	var sections []string
+	var items []ReminderItem
 	var ruleNames []string
 
-	ruleBlocks, loaded := r.resolveRuleBlocks(atts, state)
+	ruleItems, loaded := r.resolveRuleBlocks(atts, state)
 	if len(loaded) > 0 {
 		state = state.RecordLoadedRules(ruleLoadedNames(loaded)...)
 		ruleNames = append(ruleNames, ruleLoadedNames(loaded)...)
-		sections = append(sections, ruleBlocks...)
+		items = append(items, ruleItems...)
 	}
 
-	suggestionSection, suggested := r.rules.SuggestUserRules(user, state)
+	suggestion, suggested := r.rules.SuggestUserRules(user, state)
 	if len(suggested) > 0 {
 		state = state.RecordSuggestedRules(suggested...)
 		ruleNames = append(ruleNames, suggested...)
 	}
-	if suggestionSection != "" {
-		sections = append(sections, suggestionSection)
+	if len(suggestion.Rules) > 0 {
+		items = append(items, suggestion)
 	}
 
-	skillBlocks, loadedSkills, skillToolBlocks := r.resolveSkillBlocks(atts, state)
+	skillItems, loadedSkills, skillToolBlocks := r.resolveSkillBlocks(atts, state)
 	if len(loadedSkills) > 0 {
 		state = state.RecordLoadedSkills(loadedSkills...)
-		sections = append(sections, skillBlocks...)
+		items = append(items, skillItems...)
 	}
 
 	if len(atts) > 0 {
-		fileSections, fileMediaBlocks := r.resolveFileAndMediaBlocks(ctx, atts)
-		sections = append(sections, fileSections...)
+		fileItems, fileMediaBlocks := r.resolveFileAndMediaBlocks(ctx, atts)
+		items = append(items, fileItems...)
 		if len(fileMediaBlocks) > 0 {
 			user.Content = append(user.Content, fileMediaBlocks...)
 		}
-		sections = append(sections, r.resolveMCPBlocks(ctx, atts)...)
+		items = append(items, r.resolveMCPBlocks(ctx, atts)...)
 	}
 
 	if mediaNotes := r.filterUserMediaBlocks(user); len(mediaNotes) > 0 {
-		sections = append(sections, mediaNotes...)
+		items = append(items, mediaNotes...)
 	}
 
-	if len(sections) == 0 {
+	reminder := (SystemReminder{
+		Items:       items,
+		RuleNames:   ruleNames,
+		ExtraBlocks: skillToolBlocks,
+	}).Message()
+	if reminder == nil {
 		return state, nil, loaded
 	}
 
-	var sb strings.Builder
-	sb.WriteString("<system_reminders>\n")
-	sb.WriteString(strings.Join(sections, "\n\n"))
-	sb.WriteString("\n</system_reminders>")
-
-	meta := map[string]any{
-		MetaSystemKind: SystemKindReminder,
-	}
-	if len(ruleNames) > 0 {
-		meta[MetaRuleNames] = ruleNames
-	}
-
-	content := make(message.Content, 0, 1+len(skillToolBlocks))
-	content = append(content, &message.TextBlock{Text: sb.String()})
-	content = append(content, skillToolBlocks...)
-
-	var reminderMsg message.Message = &message.User{
-		Base:    message.Base{Metadata: meta},
-		Content: content,
-	}
 	if len(skillToolBlocks) > 0 {
+		var reminderMsg message.Message = reminder
 		var newTools []string
 		reminderMsg, newTools = state.DeduplicateToolBlocks(reminderMsg)
 		state = state.RecordLoadedTools(newTools...)
+		reminder, _ = reminderMsg.(*message.User)
 	}
 
-	reminder, _ := reminderMsg.(*message.User)
 	return state, reminder, loaded
 }
 
@@ -346,11 +332,11 @@ func (r *AttachmentResolver) portablePath(raw string) string {
 	return cmp.Or(r.workspace.PortablePath(raw), raw)
 }
 
-func (r *AttachmentResolver) resolveRuleBlocks(atts []api.Attachment, state State) ([]string, []RuleLoaded) {
+func (r *AttachmentResolver) resolveRuleBlocks(atts []api.Attachment, state State) ([]ReminderItem, []RuleLoaded) {
 	if len(atts) == 0 {
 		return nil, nil
 	}
-	var blocks []string
+	var items []ReminderItem
 	var loaded []RuleLoaded
 	seen := make(map[string]struct{})
 	wsSpec, proj, activeAgent, globals := r.renderContext()
@@ -371,7 +357,11 @@ func (r *AttachmentResolver) resolveRuleBlocks(atts []api.Attachment, state Stat
 
 		path := r.portablePath(rl.GetPath())
 		rendered := renderWarpRule(rl, wsSpec, proj, activeAgent, globals)
-		blocks = append(blocks, fmt.Sprintf("<rule name=%q path=%q>\n%s\n</rule>", rl.Metadata.Name, path, rendered))
+		items = append(items, RuleReminder{
+			Name:    rl.Metadata.Name,
+			Path:    path,
+			Content: rendered,
+		})
 		loaded = append(loaded, RuleLoaded{
 			ID:      uuid.NewString(),
 			Rule:    rl.Metadata.Name,
@@ -381,14 +371,14 @@ func (r *AttachmentResolver) resolveRuleBlocks(atts []api.Attachment, state Stat
 		})
 	}
 
-	return blocks, loaded
+	return items, loaded
 }
 
-func (r *AttachmentResolver) resolveSkillBlocks(atts []api.Attachment, state State) ([]string, []string, []message.Block) {
+func (r *AttachmentResolver) resolveSkillBlocks(atts []api.Attachment, state State) ([]ReminderItem, []string, []message.Block) {
 	if len(atts) == 0 {
 		return nil, nil, nil
 	}
-	var blocks []string
+	var items []ReminderItem
 	var loaded []string
 	var toolBlocks []message.Block
 	seen := make(map[string]struct{})
@@ -421,7 +411,11 @@ func (r *AttachmentResolver) resolveSkillBlocks(atts []api.Attachment, state Sta
 
 		path := r.portablePath(sk.Directory)
 		body, _ := tools.TruncateSkillInstructions(strings.TrimSpace(rendered), path)
-		blocks = append(blocks, fmt.Sprintf("<skill name=%q path=%q>\n%s\n</skill>", sk.Metadata.Name, path, body))
+		items = append(items, SkillReminder{
+			Name:    sk.Metadata.Name,
+			Path:    path,
+			Content: body,
+		})
 		loaded = append(loaded, sk.Metadata.Name)
 
 		for _, blk := range r.skillToolBlocks(sk) {
@@ -435,7 +429,7 @@ func (r *AttachmentResolver) resolveSkillBlocks(atts []api.Attachment, state Sta
 		}
 	}
 
-	return blocks, loaded, toolBlocks
+	return items, loaded, toolBlocks
 }
 
 func (r *AttachmentResolver) skillToolBlocks(sk *warp.Skill) []message.Block {
@@ -447,13 +441,13 @@ func (r *AttachmentResolver) skillToolBlocks(sk *warp.Skill) []message.Block {
 	return tools.ActivationBlocks(r.tools, cat, skillTools)
 }
 
-func (r *AttachmentResolver) resolveMCPBlocks(ctx context.Context, atts []api.Attachment) []string {
+func (r *AttachmentResolver) resolveMCPBlocks(ctx context.Context, atts []api.Attachment) []ReminderItem {
 	var caller tools.MCPCaller
 	if r.mcpCaller != nil {
 		caller = r.mcpCaller()
 	}
 
-	var blocks []string
+	var items []ReminderItem
 	seen := make(map[string]struct{})
 	for _, att := range atts {
 		if att.Kind != api.AttachmentMCP {
@@ -477,15 +471,13 @@ func (r *AttachmentResolver) resolveMCPBlocks(ctx context.Context, atts []api.At
 			continue
 		}
 
-		var attrs strings.Builder
-		if att.Ref != "" {
-			fmt.Fprintf(&attrs, " ref=%q", att.Ref)
-		}
-		fmt.Fprintf(&attrs, " server=%q uri=%q", serverName, uri)
-		if resp.MIMEType != "" {
-			fmt.Fprintf(&attrs, " mime_type=%q", resp.MIMEType)
-		}
-		blocks = append(blocks, fmt.Sprintf("<context_resource%s>\n%s\n</context_resource>", attrs.String(), resp.Text))
+		items = append(items, MCPResourceReminder{
+			Attachment: att,
+			Server:     serverName,
+			URI:        uri,
+			MIMEType:   resp.MIMEType,
+			Content:    resp.Text,
+		})
 	}
-	return blocks
+	return items
 }

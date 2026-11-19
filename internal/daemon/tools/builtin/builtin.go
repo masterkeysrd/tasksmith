@@ -69,6 +69,9 @@ type Config struct {
 	// SupportsModality reports whether the active session model supports mod,
 	// returning its model ID for diagnostic messages when unsupported.
 	SupportsModality func(mod media.Modality) (modelID string, supported bool)
+	// Plans coordinates enter_plan_mode and exit_plan_mode on top-level
+	// sessions. When nil (e.g., delegated subagents), plan-mode tools are omitted.
+	Plans PlanController
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -175,6 +178,31 @@ func New(cfg Config) ([]tools.Tool, error) {
 				return tools.NewHandler(ToolReadMCPResource, m, newReadMCPResourceTool(cfg.Workspace, cfg.MCPCaller, m.Annotation))
 			},
 		})
+	}
+
+	if cfg.Plans != nil {
+		toolEntries = append(toolEntries,
+			struct {
+				name    string
+				factory func(meta tools.Metadata) tools.Tool
+			}{
+				ToolEnterPlanMode, func(m tools.Metadata) tools.Tool {
+					return tools.NewHandler(ToolEnterPlanMode, m, &enterPlanModeTool{plans: cfg.Plans})
+				},
+			},
+			struct {
+				name    string
+				factory func(meta tools.Metadata) tools.Tool
+			}{
+				ToolExitPlanMode, func(m tools.Metadata) tools.Tool {
+					return tools.NewHandler(ToolExitPlanMode, m, &exitPlanModeTool{
+						sandbox: cfg.Sandbox,
+						guard:   cfg.Guard,
+						plans:   cfg.Plans,
+					})
+				},
+			},
+		)
 	}
 
 	if cfg.Agents != nil && len(cfg.Subagents) > 0 {

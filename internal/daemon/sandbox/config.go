@@ -95,6 +95,12 @@ type Config struct {
 	// WorkDir by the os.Root handle.
 	Filesystem FilesystemPolicy `json:"filesystem,omitzero"`
 
+	// SessionWriteDirs lists session-private directories outside WorkDir (such
+	// as <session-dir>/plans/) that remain writable through the in-process FS
+	// capability even when ReadOnly is true. Child processes never inherit these
+	// paths when ReadOnly is active.
+	SessionWriteDirs []string `json:"-"`
+
 	// DefaultTimeout sets the fallback execution timeout for Proc.Exec when
 	// Command.Timeout is zero.
 	DefaultTimeout time.Duration `json:"default_timeout,omitempty"`
