@@ -268,7 +268,7 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 			return fmt.Errorf("workspace: write .env: %w", err)
 		}
 
-		if err := ensureGitignoreEntry(absDir, ".env"); err != nil {
+		if err := EnsureGitignoreEntry(absDir, ".env"); err != nil {
 			return fmt.Errorf("workspace: update .gitignore: %w", err)
 		}
 	}
@@ -409,7 +409,7 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 		if err != nil {
 			return fmt.Errorf("workspace: format provider manifest: %w", err)
 		}
-		providerPath := filepath.Join(providersDir, provName+".yaml")
+		providerPath := filepath.Join(providersDir, provName+".provider.yaml")
 		if err := os.WriteFile(providerPath, providerData, 0o644); err != nil {
 			return fmt.Errorf("workspace: write provider manifest: %w", err)
 		}
@@ -434,7 +434,9 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitOptions) error {
 	return w.Reload(ctx)
 }
 
-func ensureGitignoreEntry(dir, entry string) error {
+// EnsureGitignoreEntry appends entry to <dir>/.gitignore under a secrets
+// heading when it is not already listed, creating the file when missing.
+func EnsureGitignoreEntry(dir, entry string) error {
 	gitignorePath := filepath.Join(dir, ".gitignore")
 	existing, err := os.ReadFile(gitignorePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

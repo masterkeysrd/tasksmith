@@ -2147,6 +2147,18 @@ func thinkingCapabilityDefault(option api.ThinkingCapability) *api.ThinkingSetti
 	return nil
 }
 
+// RefreshDraftModelPreview re-resolves the draft session's model preview
+// against the daemon. Callers use it after workspace mutations (providers,
+// aliases) so the composer badge tracks the patched manifests before the
+// first turn creates a real session.
+func RefreshDraftModelPreview(ctx context.Context) {
+	state := GetSession()
+	if state.Session != nil {
+		return
+	}
+	updateDraftModel(ctx, Client(), state.Config)
+}
+
 func updateDraftModel(ctx context.Context, c *client.Client, cfg api.SessionConfig) {
 	var model *api.Model
 	if c != nil {

@@ -166,8 +166,8 @@ func TestIsConfigured_IsInitialized_Initialize_CopyConfig(t *testing.T) {
 		t.Errorf("WORKSPACE.md missing defaultProvider: %s", wsContent)
 	}
 
-	// Verify .agents/providers/openai.yaml
-	provPath := filepath.Join(dir, ".agents", "providers", "openai.yaml")
+	// Verify .agents/providers/openai.provider.yaml
+	provPath := filepath.Join(dir, ".agents", "providers", "openai.provider.yaml")
 	if _, err := os.Stat(provPath); err != nil {
 		t.Errorf("expected provider file at %s: %v", provPath, err)
 	}
@@ -221,7 +221,7 @@ func TestIsConfigured_IsInitialized_Initialize_CopyConfig(t *testing.T) {
 	if !IsConfigured(dstDir) {
 		t.Errorf("expected dstDir to be configured after CopyConfig")
 	}
-	for _, rel := range []string{"WORKSPACE.md", ".env", "warp.lock", filepath.Join(".agents", "providers", "openai.yaml")} {
+	for _, rel := range []string{"WORKSPACE.md", ".env", "warp.lock", filepath.Join(".agents", "providers", "openai.provider.yaml")} {
 		if _, err := os.Stat(filepath.Join(dstDir, rel)); err != nil {
 			t.Errorf("CopyConfig missing %s in dstDir: %v", rel, err)
 		}

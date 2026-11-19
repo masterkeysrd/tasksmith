@@ -10,6 +10,28 @@ The `/model` picker groups models by provider and displays three columns:
 
 A muted footer beneath the list describes the highlighted model. Live filtering matches labels, aliases, model IDs, provider names, and billing cells.
 
+A muted alias status line under the title shows where each standard tier resolves (`@default → anthropic/claude-x · @fast → unassigned`). `Enter` stays a strictly ephemeral session model switch; `F2` opens the shared alias editor (below) on the highlighted model, and printable keys keep feeding the filter.
+
+## `/providers` browser & provider management
+
+`/providers` (alias `/provider`) manages the workspace's `ModelProvider` manifests (`.agents/providers/*.provider.yaml` and `~/.config/tasksmith/agents/providers/*.provider.yaml`) through the daemon — there is no sidecar state, and every action patches YAML and hot-reloads:
+
+- **Browser** (unfiltered, so single-letter keys act on the highlighted provider): `space`/`e` toggle `spec.enabled`; `enter`/`m` open the model manager; `a`/`n` add a provider (the empty no-providers screen accepts `a`/`n` too); `esc` exits (`Exited /providers command`). Rows show status glyphs: `✔` Active, `●` Local, `⚠` Missing Auth, `○` Disabled (`Disabled (shadow)` when a workspace override mutes an inherited user provider).
+- **Disabling semantics**: patching writes the owning manifest when it is workspace/project tier; muting an inherited user-tier provider instead writes a workspace shadow `.agents/providers/<name>.provider.yaml` carrying only `enabled: false`, so `~/.config/tasksmith/` stays untouched and the mute is repository-scoped. Re-enabling removes a mute-only shadow when the inherited manifest is enabled, clears the flag in place when a full hand-authored workspace override shares the name (never deleting it), and copies a disabled inherited manifest into a full workspace override otherwise.
+- **Model manager** (`Models · <name>`, `★` marks the default completion model): `space` marks a model for removal, `d` stages a new default, `s` saves, `n` adds a custom model id (for OpenAI-compatible/local endpoints), `c` opens the type catalog (loom `models.dev` metadata; ollama answers live), `f2` opens the alias editor, `esc` goes back. Catalog/model editing is only offered for writable manifests.
+- **Model catalog** (`Catalog · <name>`): filter-first — every printable key types into the filter, `enter` toggles an entry, `ctrl+s` adds the selected entries in one write, `esc` goes back.
+- **Add provider**: preset list (or `Custom provider…`) then a field form; `enter` toggles `Scope` and submits `Create provider`, `e` edits the highlighted text field (non-text rows show why they have no free-text value), `esc` steps back. Supplied API keys are written **only** to the scope's `.env` (`~/.config/tasksmith/.env` or `<workspace-root>/.env`, with `.env` gitignored in workspace scope) and referenced from the manifest as `${env:<NAME>_API_KEY}` — never paste secrets into YAML or ask the user to. A preset-backed create keeps the preset's auth scheme and env var; a custom provider (name different from its type) never inherits the preset's auth, config, defaults, or models.
+
+## Model alias editor (`F2` in `/model` and `/providers`)
+
+One checklist card shared by both commands, persisting directly to the owning `*.provider.yaml`:
+
+- **Standard aliases** always render: `@default` (primary session & main agent), `@fast`, `@balanced`, `@smart`, `@flagship`, each with live state (`assigned to this model`, `unassigned`, `currently <p>/<m>`, staged `moves from <p>/<m>`, or `⚠ duplicate on …` when manual YAML edits collided).
+- **Custom aliases**: existing per-model aliases plus `n` to add a new lowercase `@name` (letters, digits, `-`, `_`). Typing an alias owned by another model stages the move (`moves from <p>/<m>`) instead of rejecting it.
+- **Keys**: `space` toggle, `n` add, `enter` save, `esc` cancel.
+- **Atomic move**: saving sends the exact set the model should own; each reassigned alias is stripped from every other model across writable manifests before being added, keeping bare aliases 1-to-1. Checking `@default` writes the owning manifest's `spec.defaultModels.completion` instead of a model alias.
+- **Boundaries**: `WORKSPACE.md` `spec.modelAliases` (and a `spec.defaultModels.completion` for `@default`) shadow per-model aliases and are never rewritten — the editor wins over duplicate-manifest warnings with `⚠ WORKSPACE.md overrides @default`. `@inherit` is reserved and rejected.
+
 ## Subscription quota windows & `/usage`
 
 For subscription-billed (`QuotaBilled`) models:

@@ -229,6 +229,13 @@ func (w *workspaceRouter) initRoutes() {
 		PostRoute("/v1/workspace/init", w.postWorkspaceInit),
 		PostRoute("/v1/providers/verify", w.postVerifyProvider),
 		GetRoute("/v1/providers", w.listProviders),
+		GetRoute("/v1/workspace/providers", w.listWorkspaceProviders),
+		PostRoute("/v1/workspace/providers", w.postCreateProvider),
+		GetRoute("/v1/workspace/model-aliases", w.listModelAliases),
+		PostRoute("/v1/workspace/model-aliases/assign", w.postAssignModelAliases),
+		GetRoute("/v1/workspace/providers/{name}/catalog", w.getProviderCatalog),
+		PatchRoute("/v1/workspace/providers/{name}/enabled", w.patchProviderEnabled),
+		PatchRoute("/v1/workspace/providers/{name}/models", w.patchProviderModels),
 		PostRoute("/v1/providers/{name}/auth", w.postProviderAuth),
 		GetRoute("/v1/providers/{name}/auth", w.getProviderAuthStatus),
 		PostRoute("/v1/providers/{name}/auth/callback", w.postProviderAuthCallback),
@@ -283,6 +290,92 @@ func (w *workspaceRouter) postProviderAuthCallback(rw http.ResponseWriter, r *ht
 func (w *workspaceRouter) deleteProviderAuth(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	resp, err := w.b.LogoutProviderAuth(r.Context(), name)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
+}
+
+func (w *workspaceRouter) listWorkspaceProviders(rw http.ResponseWriter, r *http.Request) {
+	providers, err := w.b.ListWorkspaceProviders(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, providers)
+}
+
+func (w *workspaceRouter) postCreateProvider(rw http.ResponseWriter, r *http.Request) {
+	req, err := DecodeJSON[api.CreateProviderRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	provider, err := w.b.CreateProvider(r.Context(), RequestWorkspace(r), req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusCreated, provider)
+}
+
+func (w *workspaceRouter) patchProviderEnabled(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	req, err := DecodeJSON[api.SetProviderEnabledRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	providers, err := w.b.SetProviderEnabled(r.Context(), RequestWorkspace(r), name, req.Enabled)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, providers)
+}
+
+func (w *workspaceRouter) patchProviderModels(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	req, err := DecodeJSON[api.UpdateProviderModelsRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	providers, err := w.b.UpdateProviderModels(r.Context(), RequestWorkspace(r), name, req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, providers)
+}
+
+func (w *workspaceRouter) getProviderCatalog(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	entries, err := w.b.ListProviderCatalog(r.Context(), RequestWorkspace(r), name)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, entries)
+}
+
+func (w *workspaceRouter) listModelAliases(rw http.ResponseWriter, r *http.Request) {
+	aliases, err := w.b.ListAliasAssignments(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, aliases)
+}
+
+func (w *workspaceRouter) postAssignModelAliases(rw http.ResponseWriter, r *http.Request) {
+	req, err := DecodeJSON[api.AssignModelAliasesRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	resp, err := w.b.AssignModelAliases(r.Context(), RequestWorkspace(r), req)
 	if err != nil {
 		WriteError(rw, err)
 		return

@@ -4,10 +4,10 @@ kind: Skill
 metadata:
   name: cli-customizations
   displayName: CLI Customizations
-  description: Configure and operate TaskSmith's CLI and REPL workflows—statusline.json (/statusline), theme.json and custom themes (/theme), session modes and plan review (/mode, /plan, Shift+Tab), /sandbox, /permissions, --sandbox, ! shell commands, /model and /usage quota windows, multimodal @/paste input, -c/--continue and /fork, headless tasksmith exec/-p (NDJSON), and provider auth (/login).
+  description: Configure and operate TaskSmith's CLI and REPL workflows—statusline.json (/statusline), theme.json and custom themes (/theme), session modes and plan review (/mode, /plan, Shift+Tab), /sandbox, /permissions, --sandbox, ! shell commands, /model and /usage quota windows, the /providers browser and shared F2 model alias editor, multimodal @/paste input, -c/--continue and /fork, headless tasksmith exec/-p (NDJSON), and provider auth (/login).
 spec:
-  useWhen: "The user asks how to customize CLI appearance or keybindings, switch modes or review plans, drive /sandbox or /permissions, interpret /model pricing or subscription quotas, attach images/PDFs/audio, resume or fork sessions, automate TaskSmith headlessly in CI/scripts, or sign in to OAuth providers."
-  keywords: [statusline, theme, mode, /mode, /plan, shift+tab, accept_edits, ask, auto, /sandbox, /permissions, --sandbox, quota, /usage, /model, multimodal, paste, exec, headless, --print, ndjson, jsonl, --continue, --fork, /fork, auth, /login, oauth]
+  useWhen: "The user asks how to customize CLI appearance or keybindings, switch modes or review plans, drive /sandbox or /permissions, interpret /model pricing or subscription quotas, manage providers or model aliases via /providers or the F2 alias editor, attach images/PDFs/audio, resume or fork sessions, automate TaskSmith headlessly in CI/scripts, or sign in to OAuth providers."
+  keywords: [statusline, theme, mode, /mode, /plan, shift+tab, accept_edits, ask, auto, /sandbox, /permissions, --sandbox, quota, /usage, /model, /providers, /provider, alias, aliases, f2, spec.enabled, multimodal, paste, exec, headless, --print, ndjson, jsonl, --continue, --fork, /fork, auth, /login, oauth]
 ---
 
 # CLI Customizations
@@ -32,6 +32,6 @@ Read only the reference file matching the user's question (paths are relative to
 | Status line & themes | `references/appearance.md` | `statusline.json` (`/statusline`), `theme.json` (`/theme`), built-in themes, and custom `$XDG_CONFIG_HOME/tasksmith/themes/<name>.json` token groups |
 | Modes & planning | `references/modes-and-planning.md` | `default` / `accept_edits` / `plan` / `ask` / `auto` gates vs. postures, `Shift+Tab`, `/mode`, `/plan [prompt]`, `<session-dir>/plans/`, and `exit_plan_mode` review (`p` plan viewer) |
 | Sandbox & permissions UI | `references/sandbox-and-permissions.md` | `/sandbox` tabs (`Policy`, `Exclusions`, `Effective`), live policy refresh vs. `mode` restart, `/permissions`, `--sandbox`, and `!command` shell execution |
-| Models, quotas, & OAuth | `references/models-quotas-and-auth.md` | `/model` columns (`ctx`, `@alias`, `quota` vs. `$/M`), statusline quota badges, `/usage` `4 Quotas` tab thresholds, `tasksmith auth login\|status\|logout` (`--no-browser`, `--paste`), and `/login` |
+| Models, quotas, & OAuth | `references/models-quotas-and-auth.md` | `/model` columns (`ctx`, `@alias`, `quota` vs. `$/M`), alias status line, `/providers` browser (`spec.enabled` toggle, model manager, catalog, add flow), shared `F2` alias editor (atomic 1-to-1 moves), statusline quota badges, `/usage` `4 Quotas` tab thresholds, `tasksmith auth login\|status\|logout` (`--no-browser`, `--paste`), and `/login` |
 | Resume, forking, & media | `references/sessions-and-media.md` | `-c` / `--continue`, `/fork`, `--fork`, `/sessions` `F3`, fork copy/reset rules, `@<path>` image/PDF/audio mentions, `Ctrl+V`/`Alt+V` paste, and `capability_mismatch` `--force` |
 | Headless & SDK (`exec` / `-p`) | `references/headless-exec.md` | `tasksmith exec` / `-p` flags, `text`/`json`/`jsonl` framing, bidirectional `stdin` control frames (`permission`, `question`, `plan_review`, `config`), slash commands, exit codes, and `client.ConnectOrStart` |

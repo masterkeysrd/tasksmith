@@ -109,6 +109,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/rules`** | | *(none)* | Opens the interactive rules browser to inspect rule status, scope, triggers, and token estimates, and to reload workspace rules. |
 | **`/tools`** | | *(none)* | Opens the interactive tools browser to inspect tool status, scope, safety annotations, and JSON schemas, and to reload workspace tools. See [Tools Browser](#tools-browser-tools). |
 | **`/mcp`** | `/mcps` | `[auth <name>\|restart <name>]` | With no subcommand, opens the interactive MCP browser to inspect servers, run prompts, attach resources, authorize, and restart. `auth` and `restart` act on one named server after a confirmation. See [MCP Browser](#mcp-browser-mcp). |
+| **`/providers`** | `/provider` | *(none)* | Opens the interactive provider browser to enable/disable, manage models, browse catalogs, and add configured model providers from their WARP manifests, with an `F2` alias editor shared with `/model`. See [Providers Browser](#providers-browser-providers). |
 | **`/setup`** | | *(none)* | Opens the interactive workspace onboarding and configuration wizard to reconfigure providers, scopes, permissions, tools, or MCP servers. |
 | **`/login`** | `/auth`, `/signin` | `[provider]` | Opens the provider sign-in screen to authorize an OAuth provider (e.g. Antigravity) through the daemon. With no provider, resolves automatically when exactly one OAuth provider exists. See [Provider Sign-In (`/login`)](#provider-sign-in-login). |
 | **`/statusline`** | `/status` | *(none)* | Opens the interactive status line editor to toggle, reorder, and compact the status line segments with a live preview; saves to `statusline.json`. See [Status Line Fields](#status-line-fields). |
@@ -137,6 +138,8 @@ model the session is actually running is suffixed `current`.
 
 - **Active model before a choice**: a fresh draft session has no model of its own, yet it already resolves to the workspace or agent default. That resolved model is marked `current`, and a session configured with an alias is marked on the model the alias resolves to.
 - **Search**: the filter box matches the label, aliases, id, provider name, and billing cell, so typing an alias name narrows the list to the model it names and typing a provider name isolates one provider's group. `/model` argument autocomplete matches aliases the same way and inserts the canonical model id.
+- **Alias status line**: a muted line under the title shows where each standard tier currently resolves (`@default → anthropic/claude-x · @fast → unassigned`), so unassigned tiers are visible before editing anything.
+- **Alias editor (`F2`)**: opens the shared [Model Alias Editor](#model-alias-editor-f2) on the highlighted model. `F2` matches the `/sessions` rename chord, so printable characters keep feeding the live search filter without collision, and `Enter` stays a strictly ephemeral session model switch. The editor opens only for models owned by a configured provider manifest.
 - **Capability mismatch gate**: if switching to a model drops an input modality (`image`, `pdf`, `audio`) currently present in post-compaction session context, the REPL prompts in `<Slot />` to **Switch anyway** (retrying with `force: true` and omitting incompatible historical media on future turns) or **Cancel**. Passing `/model --force <id>` skips the prompt.
 - **Nothing chat-capable**: the picker closes and reports `No chat-capable models available.`
 
@@ -352,6 +355,84 @@ Allowed prompts and resources run immediately. A prohibited one opens `Prohibite
 
 `Enable in manifest` is offered only when the manifest path is known and the server comes from workspace or project scope; a user- or builtin-scope server shows `Use once` alone, since rewriting it would edit files outside the project. Prohibited **tools** have no per-call override in either direction — the agent cannot be talked into one, and the CLI offers no `Use once` for them; only the manifest changes what tools a server exposes, which is why widening a tool happens from its [detail view](#mcp-tool-drill-down) rather than from this prompt. See [Tools & MCP Servers](../guides/tools-and-mcp.md#scoping-mcp-resources).
 
+### Providers Browser (`/providers`)
+
+`/providers` (alias `/provider`) opens `Manage model providers` over the workspace's declarative `ModelProvider` manifests — `~/.config/tasksmith/agents/providers/*.provider.yaml` (User) and `<workspace-root>/.agents/providers/*.provider.yaml` (Workspace) — with a `<N> providers` count line, then one muted heading per scope that has providers (`Workspace providers`, `Local providers`, `User providers`, `Builtin providers`), each naming the directory its manifests live in. Providers are listed by scope tier, closest to the repository first, then by name. The list is deliberately not filterable, so the single-letter actions below always reach the highlighted provider instead of typing into a search box. Every mutation patches the owning manifest through the daemon and hot-reloads the workspace, so the model catalog and gateway agree with the YAML immediately; there is no sidecar state.
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` | Providers Browser | Moves the highlighted provider. |
+| `Enter` / `m` | Providers Browser | Opens the [model manager](#provider-model-manager) for the highlighted provider. |
+| `Space` / `e` | Providers Browser | Toggles `spec.enabled`: patches the owning manifest, or writes a Workspace-tier mute shadow (enable flag only) when disabling an inherited User provider. Re-enabling removes a mute shadow when the inherited manifest is already enabled, clears the flag in place when a hand-authored full workspace override shares the name, and promotes a disabled inherited manifest into a full workspace copy otherwise. |
+| `a` / `n` | Providers Browser | Opens the [add-provider flow](#adding-a-provider). With no providers configured, the empty screen accepts `a` / `n` the same way. |
+| `Esc` | Providers Browser | Closes the browser and leaves `Exited /providers command` in the transcript. |
+
+Each row shows a status glyph in the cursor gutter, the provider name, and a right-hand summary (`Status · type · N models`):
+
+| Status | Glyph | Meaning |
+| :--- | :--- | :--- |
+| `Active` | `✔` green | Enabled and its configured credential resolves (or it needs none). |
+| `Local` | `●` cyan | A local endpoint (`http://localhost`, `127.0.0.1`, `[::1]`) or `ollama` — no credential required. |
+| `Missing Auth` | `⚠` yellow | The `${env:…}` / `${file:…}` secret in `spec.auth` (or an OAuth token) is not available. |
+| `Disabled` | `○` muted | `spec.enabled: false` in the manifest; models stay declared and the provider is skipped by the gateway. A workspace shadow over an enabled inherited manifest shows `Disabled (shadow)`. |
+
+#### Provider Model Manager
+
+`Enter` / `m` on a provider opens `Models · <name>` listing its declared `spec.models`, with `★` marking the manifest's default completion model.
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` | Model Manager | Moves the highlighted model. |
+| `Space` | Model Manager | Marks the model for removal (`(will remove)`). |
+| `d` | Model Manager | Stages the highlighted model as the manifest's default completion model. |
+| `s` | Model Manager | Saves staged removals and the pending default to the manifest. |
+| `n` | Model Manager | Adds a custom model id through an inline prompt (for OpenAI-compatible and local endpoints), saved immediately. |
+| `c` | Model Manager | Opens the [model catalog](#provider-model-catalog) for the provider's type. |
+| `F2` | Model Manager | Opens the shared [Model Alias Editor](#model-alias-editor-f2) on the highlighted model. |
+| `Esc` | Model Manager | Returns to the provider browser. |
+
+#### Provider Model Catalog
+
+`c` opens `Catalog · <name>` over the provider type's model catalog — loom's built-in profile metadata (`models.dev` context windows, pricing, capabilities) for Anthropic/OpenAI/Google GenAI types, ollama's live endpoint when reachable, otherwise the built-in preset's model list. The pane is filter-first: every plain printable keystroke types into the filter (so queries like `sonnet` work even though letters like `s` are actions in other panes), entries already declared in the manifest show `✔ … declared`, and `Ctrl+S` adds the checked entries to `spec.models` in one write.
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` | Catalog | Moves the highlighted entry. |
+| type | Catalog | Filters the catalog — all printable keys reach the filter box. |
+| `Enter` | Catalog | Toggles selection (`☑ … selected`). |
+| `Ctrl+S` | Catalog | Adds all selected entries to the manifest. |
+| `Esc` | Catalog | Returns to the model manager. |
+
+#### Adding a Provider
+
+`a` / `n` first lists the built-in presets (with each preset's auth variable and model count) plus `Custom provider…`; `Esc` returns to the browser. The second screen is a field form — `Scope` (toggles `Workspace (.agents/providers)` ↔ `User (~/.config/tasksmith/agents/providers)` on `Enter`), `Name`, `Type` (custom only), `Endpoint`, `Auth env var`, `API key`, and `Create provider`:
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` | Add Provider | Moves the highlighted field. |
+| `Enter` | Add Provider | Toggles `Scope`; writes the manifest on `Create provider`. Text fields are edited with `e` (the subtitle reads `enter toggles / submits · e edits the highlighted field`). |
+| `e` | Add Provider | Edits the highlighted text field through an inline input seeded with its current value. |
+| `Esc` | Add Provider | Returns to the preset list, then to the browser. |
+
+The daemon writes the manifest, stores any supplied key **exclusively** in the scope's `.env` (`~/.config/tasksmith/.env` or `<workspace-root>/.env`, with `.env` added to `.gitignore` in Workspace scope), references it from the manifest as `${env:<NAME>_API_KEY}`, reloads the workspace, and reports a connectivity verdict through the catalog endpoint (`Added provider <name> (Active) · N catalog models visible`).
+
+### Model Alias Editor (`F2`)
+
+Opened with `F2` from the [model manager](#provider-model-manager) or the [model picker](#model-picker-model), the editor is one card (`Model aliases · <provider>/<model> [User|Workspace]`, with the home-shortened manifest path below) backed by one daemon endpoint, so both commands edit the same YAML. It lists two groups of checkboxes:
+
+- **Standard aliases** (always rendered): `@default` (*Primary session & main agent model*), `@fast` (*Fast subagents*), `@balanced` (*General coding & subagent tier*), `@smart` (*Stronger reasoning, review & planning*), and `@flagship` (*Frontier reasoning ceiling*), each with live assignment state — `assigned to this model`, `unassigned`, `currently <provider>/<model>`, a staged `moves from <provider>/<model>` once checked, `⚠ duplicate on …` when manual YAML edits collided (with `— saving assigns only here` appended while the row is checked), or `⚠ WORKSPACE.md overrides @<alias>` when `WORKSPACE.md` `spec.modelAliases` (or, for `@default`, `spec.defaultModels.completion`) redirects the alias — saving a manifest cannot move those, and the override warning outranks duplicate warnings. `@default` also warns when another provider currently wins it.
+- **Custom aliases**: user-defined `@<name>` aliases currently on this model (uncheckable) plus an inline `n` prompt for a new one (lowercase letters, digits, `-`, `_`; standard names point at the checklist row instead of duplicating, and typing an alias owned elsewhere stages the move as a checked `moves from <provider>/<model>` row — or the `⚠ WORKSPACE.md overrides @<name>` warning when the workspace redirects it).
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` or `k` / `j` | Alias Editor | Moves the checklist cursor. |
+| `Space` | Alias Editor | Toggles the highlighted alias. |
+| `n` | Alias Editor | Adds a custom alias (inline input; `Enter` confirms, `Esc` cancels the input). |
+| `Enter` | Alias Editor | Saves the staged alias set to the owning `*.provider.yaml`. |
+| `Esc` | Alias Editor | Cancels and returns to the calling view. |
+
+Saving sends the exact set the model should own: each reassigned alias is stripped from every other model across writable manifests **before** being added (the atomic move that keeps bare aliases 1-to-1), and checking `@default` routes through the owning manifest's `spec.defaultModels.completion` rather than a model alias. `WORKSPACE.md` `spec.modelAliases` entries are never rewritten — they shadow per-model aliases and are surfaced as a warning instead.
+
 ### Provider Sign-In (`/login`)
 
 `/login [provider]` (aliases `/auth`, `/signin`) signs the session's daemon in to an OAuth model provider such as Antigravity. It starts the daemon's PKCE flow, opens the browser, and shows a `Signing in to <provider>` screen with the authorization URL, a paste field, and the same keybindings as [MCP Authorization](#mcp-authentication):
@@ -436,6 +517,16 @@ While browsing history, the composer's bottom border is replaced by a centered r
 | `F2` | Session Browser | Prompts inline to rename the selected session title. |
 | `F3` | Session Browser | Forks the selected session into a new top-level session and switches to it. |
 | `F4` | Session Browser | Prompts confirmation (`y`/`Enter`) to permanently delete the selected session. |
+
+### Providers Browser (`/providers`)
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `Enter` / `m` | Providers Browser | Opens the model manager for the highlighted provider. |
+| `Space` / `e` | Providers Browser | Toggles `spec.enabled` on the highlighted provider's manifest. |
+| `a` / `n` | Providers Browser | Starts adding a provider from a preset or a custom manifest. |
+| `F2` | Model Manager / Model Picker | Opens the shared model alias editor (see [Model Alias Editor](#model-alias-editor-f2)). |
+| `Esc` | Providers Browser | Closes the browser and returns to the composer. |
 
 ### Changes Browser (`/changes`)
 

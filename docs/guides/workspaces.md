@@ -140,6 +140,8 @@ flowchart TD
     R3 --> R4["4. Catalog Capability Match\n(First registered model supporting the role)"]
 ```
 
+Providers declare `spec.enabled` (`*bool`, default `true`); a disabled `*.provider.yaml` is skipped entirely by resolution — its models and `@aliases` are unavailable, while its endpoint, auth, and model definitions stay in YAML. `/providers` toggles this declaratively (patching the owning manifest, or writing a workspace-tier shadow override to mute an inherited user-tier provider locally), and its model manager plus the `F2` alias editor persist `spec.models`, `defaultModels`, and per-model `aliases` back to the manifest. See [Providers Reference](../reference/providers.md#enabling-and-disabling-providers-specenabled) and [CLI Reference — Providers Browser](../reference/cli.md#providers-browser-providers).
+
 ---
 
 ## Environment Variables & Secrets (`.env`)

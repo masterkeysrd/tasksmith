@@ -283,6 +283,7 @@ func (r *Registry) registerBuiltins() {
 	r.registerRuleCommands()
 	r.registerToolCommands()
 	r.registerMCPCommands()
+	r.registerProviderCommands()
 	r.registerAuthCommands()
 	r.registerWorkspaceCommands()
 	r.registerSetupCommands()

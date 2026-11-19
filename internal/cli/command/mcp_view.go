@@ -1233,6 +1233,10 @@ type mcpEmptyNoticeProps struct {
 	// onReload optionally offers a workspace reload, which is what a user needs
 	// right after adding a manifest that has not been discovered yet.
 	onReload func()
+	// onAdd optionally offers the view's own add flow, so an empty listing can
+	// bootstrap its first entry instead of dead-ending on esc.
+	onAdd    func()
+	addLabel string
 }
 
 // mcpEmptyNotice reports an empty list with a way back.
@@ -1244,6 +1248,8 @@ var mcpEmptyNotice = trail.FC("mcpEmptyNotice", func(props mcpEmptyNoticeProps) 
 			props.action()
 		case k.MatchString("R", "ctrl+r") && props.onReload != nil:
 			props.onReload()
+		case k.MatchString("a", "n") && props.onAdd != nil:
+			props.onAdd()
 		}
 	})
 
@@ -1266,17 +1272,23 @@ var mcpEmptyNotice = trail.FC("mcpEmptyNotice", func(props mcpEmptyNoticeProps) 
 			Style: style.S().Foreground(scheme.Color.Text.Secondary),
 		}, trail.Text("  "+props.message))),
 		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-			Bindings: mcpEmptyNoticeBindings(props.onReload != nil),
+			Bindings: mcpEmptyNoticeBindings(props.onReload != nil, props.onAdd != nil, props.addLabel),
 		}),
 	)
 })
 
-// mcpEmptyNoticeBindings keeps the hint honest: reload is only advertised where
-// it is actually handled.
-func mcpEmptyNoticeBindings(canReload bool) []uicomponents.KeyBinding {
+// mcpEmptyNoticeBindings keeps the hint honest: reload and add are only
+// advertised where they are actually handled.
+func mcpEmptyNoticeBindings(canReload, canAdd bool, addLabel string) []uicomponents.KeyBinding {
 	bindings := []uicomponents.KeyBinding{}
 	if canReload {
 		bindings = append(bindings, uicomponents.KeyBinding{Key: "R / ctrl+r", Label: "Reload workspace"})
+	}
+	if canAdd {
+		if addLabel == "" {
+			addLabel = "Add"
+		}
+		bindings = append(bindings, uicomponents.KeyBinding{Key: "a", Label: addLabel})
 	}
 	return append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Back"})
 }

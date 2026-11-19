@@ -306,6 +306,104 @@ func (c *Client) ListProviders(ctx context.Context) ([]api.ProviderSummary, erro
 	return out, nil
 }
 
+// ListWorkspaceProviders returns every configured model provider across the
+// user and workspace scopes, with each provider's manifest path, enablement,
+// auth availability, and declared models.
+func (c *Client) ListWorkspaceProviders(ctx context.Context) ([]api.WorkspaceProvider, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out []api.WorkspaceProvider
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace/providers", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SetProviderEnabled patches the named provider manifest's spec.enabled flag,
+// reloads the workspace, and returns the updated provider listing.
+func (c *Client) SetProviderEnabled(ctx context.Context, name string, enabled bool) ([]api.WorkspaceProvider, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	path := "/v1/workspace/providers/" + url.PathEscape(name) + "/enabled"
+	var out []api.WorkspaceProvider
+	if err := c.doJSON(ctx, http.MethodPatch, path, nil, api.SetProviderEnabledRequest{Enabled: enabled}, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpdateProviderModels rewrites the named provider manifest's declared models
+// and optional default completion model, reloads the workspace, and returns
+// the updated provider listing.
+func (c *Client) UpdateProviderModels(ctx context.Context, name string, req api.UpdateProviderModelsRequest) ([]api.WorkspaceProvider, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	path := "/v1/workspace/providers/" + url.PathEscape(name) + "/models"
+	var out []api.WorkspaceProvider
+	if err := c.doJSON(ctx, http.MethodPatch, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CreateProvider writes a new provider manifest to the requested scope, stores
+// any API key in the scope's .env file, reloads the workspace, and returns the
+// created provider.
+func (c *Client) CreateProvider(ctx context.Context, req api.CreateProviderRequest) (api.WorkspaceProvider, error) {
+	if err := c.requireCWD(); err != nil {
+		return api.WorkspaceProvider{}, err
+	}
+	var out api.WorkspaceProvider
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/workspace/providers", nil, req, &out); err != nil {
+		return api.WorkspaceProvider{}, err
+	}
+	return out, nil
+}
+
+// ListAliasAssignments returns the current standard and custom model alias
+// assignments across all configured providers, flagging duplicates.
+func (c *Client) ListAliasAssignments(ctx context.Context) ([]api.AliasAssignment, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out []api.AliasAssignment
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace/model-aliases", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AssignModelAliases binds req.Aliases to the named provider model. Aliases
+// currently held by other models are moved atomically before the assignment
+// is saved.
+func (c *Client) AssignModelAliases(ctx context.Context, req api.AssignModelAliasesRequest) (api.AssignModelAliasesResponse, error) {
+	if err := c.requireCWD(); err != nil {
+		return api.AssignModelAliasesResponse{}, err
+	}
+	var out api.AssignModelAliasesResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/workspace/model-aliases/assign", nil, req, &out); err != nil {
+		return api.AssignModelAliasesResponse{}, err
+	}
+	return out, nil
+}
+
+// ListProviderCatalog returns the models the named configured provider can
+// offer, sourced from its static or live catalog when available.
+func (c *Client) ListProviderCatalog(ctx context.Context, name string) ([]api.ProviderCatalogEntry, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	path := "/v1/workspace/providers/" + url.PathEscape(name) + "/catalog"
+	var out []api.ProviderCatalogEntry
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PreviewSession resolves a proposed draft session configuration without creating it.
 func (c *Client) PreviewSession(ctx context.Context, req api.PreviewSessionRequest) (*api.SessionPreview, error) {
 	if err := c.requireCWD(); err != nil {

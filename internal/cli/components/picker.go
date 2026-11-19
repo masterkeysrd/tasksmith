@@ -33,7 +33,11 @@ type ConfirmAction struct {
 type InputAction struct {
 	Prompt       string
 	InitialValue func(opt components.Option) string
-	OnSubmit     func(opt components.Option, value string)
+	// DisabledReason optionally explains, per option, why the prompt must not
+	// open (e.g. the highlighted row is not editable). A non-empty reason
+	// surfaces as an inline notice instead of the input modal.
+	DisabledReason func(opt components.Option) string
+	OnSubmit       func(opt components.Option, value string)
 }
 
 type pickerMode int
@@ -65,6 +69,11 @@ type PickerProps struct {
 	// grouping changes between adjacent options.
 	GroupLabel func(opt components.Option) string
 	Filterable bool
+	// FilterSafeKeys makes a filterable picker filter-first: single printable
+	// key bindings (letters, digits, and "space") never fire ConfirmActions,
+	// InputActions, or Keys while browsing, so every keystroke reaches the
+	// filter box. Bind function keys or chords (f2, ctrl+s) in that mode.
+	FilterSafeKeys bool
 	// Footer renders a muted one-line detail for the highlighted option below
 	// the list, e.g. a model description that would not fit in a row.
 	Footer         func(opt components.Option) string
@@ -84,6 +93,13 @@ func NewPicker(title string, opts []components.Option, onSelect func(opt compone
 		Bindings: DefaultPickerBindings,
 		OnSelect: onSelect,
 	}
+}
+
+// isFilterTypedKey reports whether the event is a plain unmodified printable
+// keystroke destined for a filter input (Text is set for printable characters
+// only, and chords like ctrl+s keep their modifier bits).
+func isFilterTypedKey(ke event.KeyEvent) bool {
+	return ke.Text != "" && ke.Mod == 0
 }
 
 func initialCursor(opts []components.Option) int {
@@ -165,6 +181,12 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		if notice() != "" {
 			setNotice("")
 		}
+		// A filter-safe picker is filter-first: a plain printable keystroke is
+		// never an action (not even vim-style cursor moves), so queries like
+		// "sonnet" reach the filter box intact.
+		if props.FilterSafeKeys && props.Filterable && isFilterTypedKey(ke) {
+			return false
+		}
 		if cursor.HandleKey(ke) {
 			return true
 		}
@@ -206,6 +228,12 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		for _, k := range slices.Sorted(maps.Keys(props.InputActions)) {
 			if ke.MatchString(k) && len(filtered) > 0 {
 				ia := props.InputActions[k]
+				if ia.DisabledReason != nil {
+					if reason := strings.TrimSpace(ia.DisabledReason(filtered[cur])); reason != "" {
+						setNotice(reason)
+						return true
+					}
+				}
 				initVal := ""
 				if ia.InitialValue != nil {
 					initVal = ia.InitialValue(filtered[cur])

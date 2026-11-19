@@ -27,7 +27,7 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - [x] **Quick session resume & forking**: `-c` / `--continue` flag for resuming the latest workspace session and `/fork` conversation branching
 - [x] **Multimodal input**: content-addressed `<session-dir>/media/` storage with late gateway hydration, image/PDF/audio ingestion in `view` (with PDF `pages`), `@` media mentions, clipboard paste, and model-switch capability confirmation
 - [x] **Built-in `web_search` & CLI `auth`**: host-mediated web search tool and `tasksmith auth login|status|logout` subcommands
-- [ ] **WARP-managed `/providers` & deterministic `spec.enabled` policies**: interactive `/providers` browser, inline `F2` alias editor, and manifest-driven `spec.enabled` / `WORKSPACE.md` exclusions for providers, tools, and MCP servers
+- [x] **WARP-managed `/providers` & `spec.enabled`**: interactive `/providers` browser with model manager, catalog, and add flow, inline `F2` alias editor shared with `/model`, and manifest-driven `spec.enabled` for providers with workspace shadow overrides *(tools/MCP `spec.enabled` & `WORKSPACE.md` exclusions remain open under item #13)*
 - [ ] **Claude Code & GitHub Copilot providers**: subscription-backed `claudecode` and `github-copilot` LLM gateway providers (via `loom`) with OAuth sign-in, built-in presets, `@fast`/`@balanced`/`@smart`/`@flagship` model tiers, and quota tracking
 
 ---
@@ -41,6 +41,7 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - **Plugin lifecycle & lockfile hardening**: `tasksmith plugin` CLI subcommands, interactive `/plugins` browser, and strict `warp.lock` digest verification
 - **Configurable commit & PR attribution**: workspace and global preferences for git trailers
 - **Dynamic capability discovery**: host and sandbox tool probes (`git`, `rg`, `gh`) exposed to WARP prompt and tool templates
+- **Programmatic tool orchestration ("Code Mode")**: embedded, zero-ambient-authority JavaScript tool-chaining runtime (`goja`) in the daemon so any provider/model can batch, filter, and loop across built-in and MCP tools in a single turn while enforcing per-call permissions, file journaling, and multi-client (`TUI`, `exec`, `acp`) event streaming
 - **Memory footprint & idle eviction**: cold-session `ListSessions` projection, idle session unloading, sandbox/worktree-isolated lazy file indexing, and CLI scrollback memory trimming
 
 ---

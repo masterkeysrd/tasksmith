@@ -209,6 +209,62 @@ func TestStaleDraftModelResponseIsIgnored(t *testing.T) {
 	}
 }
 
+// TestRefreshDraftModelPreviewRefreshesDraftBadge proves a workspace mutation
+// (provider or alias change) before the first turn re-resolves the composer's
+// draft model badge, and that the refresh is a no-op once a real session exists.
+func TestRefreshDraftModelPreviewRefreshesDraftBadge(t *testing.T) {
+	ResetApp()
+	defer ResetApp()
+	ResetSession()
+	defer ResetSession()
+
+	var previewCalls int
+	rt := &mockSessionRoundTripper{
+		handler: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPost && req.URL.Path == "/v1/sessions/preview" {
+				previewCalls++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"model":{"id":"prov/fresh","label":"Fresh model"}}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	// An empty-workspace init leaves the draft badge on the daemon default
+	// without a preview call, so the refresh below is the only preview.
+	InitSession(context.Background(), c, InitSessionOptions{})
+	if previewCalls != 0 {
+		t.Fatalf("init issued %d preview requests, want 0", previewCalls)
+	}
+
+	RefreshDraftModelPreview(context.Background())
+	if previewCalls != 1 {
+		t.Fatalf("draft refresh issued %d preview requests, want 1", previewCalls)
+	}
+	if got := GetSession(); got.ModelLabel != "Fresh model" {
+		t.Fatalf("draft badge after refresh = %q, want %q", got.ModelLabel, "Fresh model")
+	}
+
+	// Once a real session exists its own model wins: the refresh must not
+	// re-preview or touch the badge.
+	SetSession(&api.Session{ID: "s-1", Config: api.SessionConfig{Agent: "agent"}})
+	RefreshDraftModelPreview(context.Background())
+	if previewCalls != 1 {
+		t.Fatalf("refresh with live session issued extra preview: %d calls", previewCalls)
+	}
+}
+
 func TestInitSessionWithWorkspaceWarnings(t *testing.T) {
 	ResetApp()
 	defer ResetApp()

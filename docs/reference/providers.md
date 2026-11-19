@@ -35,6 +35,12 @@ spec:
   # Driver type: openai | anthropic | ollama | google-genai (genai, gemini) | typesafe | antigravity
   type: openai
 
+  # Enable or disable this provider (default: true when omitted). A disabled
+  # provider keeps its endpoint, auth, headers, aliases, and models in YAML but
+  # is skipped by the gateway and hidden from model resolution. Toggle with
+  # space/e in /providers.
+  # enabled: false
+
   # Upstream API endpoint URL
   endpoint: https://api.openai.com/v1
 
@@ -195,6 +201,14 @@ Two additional references are valid in agent `spec.models`:
 - **`@inherit`** — reserved by TaskSmith for subagent delegation: it resolves to the delegating parent session's model and is never a provider target on its own. Listing `@inherit` in an agent's `spec.models` also permits `invoke_agent`'s `model: "@inherit"`.
 
 When an agent declares `spec.models`, the list doubles as the allowlist enforced on the `model` parameter of [invoke_agent](tools.md#invoke_agent); agents without `spec.models` accept any resolvable model.
+
+### Alias Editing & 1-to-1 Moves
+
+Bare aliases are kept 1-to-1 across providers: saving from the `F2` alias editor (shared by `/model` and `/providers`) strips a reassigned alias from every other model across writable manifests before adding it to the target model — an atomic move persisted directly to the owning `*.provider.yaml` — and checking `@default` writes the owning manifest's `spec.defaultModels.completion` instead of a model alias. Manual YAML edits that declare the same bare alias on two models are reported as `⚠ duplicate on …` in the editor, and saving assigns the alias only to the edited model. `WORKSPACE.md` `spec.modelAliases` entries shadow per-model aliases and are never rewritten by the editor. See [CLI Reference — Model Alias Editor](./cli.md#model-alias-editor-f2).
+
+### Enabling and Disabling Providers (`spec.enabled`)
+
+`spec.enabled` (`*bool`, default `true` when omitted) decides whether a provider participates in resolution: a disabled manifest is skipped by the gateway, contributes no models or aliases, and renders `Disabled` in `/providers`, while its `endpoint`, `auth`, `headers`, `aliases`, and `models` stay declared in YAML and come back on re-enable. Its `${env:…}` secret variables also stay scrubbed from agent subprocess environments while it is merely disabled, since it can be re-enabled at any time. Disabling through `/providers` always patches declarative state: the owning manifest when it lives in the workspace (or project) tier, or a new `<workspace-root>/.agents/providers/<name>.provider.yaml` mute shadow carrying only `enabled: false` when the provider is inherited from the User tier, so muting a global provider for one repository never edits `~/.config/tasksmith/`. Re-enabling removes a mute shadow when the inherited manifest is already enabled, clears the flag in place when a hand-authored full workspace override shares the name (never deleting the override), and promotes a disabled inherited manifest into a full workspace copy otherwise.
 
 ---
 

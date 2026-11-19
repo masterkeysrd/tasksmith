@@ -462,18 +462,28 @@ func (w *Workspace) SubprocessEnv() map[string]string {
 }
 
 // providerAuthEnvLocked collects environment variable names referenced via
-// ${env:...} expressions on configured ModelProvider spec.auth fields. The
-// caller must hold at least the read lock.
+// ${env:...} expressions on every loaded ModelProvider spec.auth field,
+// including disabled and shadowed manifests. A muted provider can be re-enabled
+// at any time, so its secret must never leak into agent subprocesses while it
+// is merely disabled. The caller must hold at least the read lock.
 func (w *Workspace) providerAuthEnvLocked() map[string]struct{} {
 	if w.catalog == nil {
 		return nil
 	}
+	resolver := w.catalog.Resolver()
+	if resolver == nil {
+		return nil
+	}
 	var out map[string]struct{}
-	for _, p := range w.catalog.Providers() {
-		if p == nil || p.Spec.Auth == nil {
+	for _, res := range resolver.ListResources(warp.QueryOptions{
+		Kinds:           []warp.Kind{warp.KindModelProvider},
+		IncludeDisabled: true,
+	}) {
+		mp, ok := res.(*warp.ModelProvider)
+		if !ok || mp.Spec.Auth == nil {
 			continue
 		}
-		for _, name := range ProviderAuthEnvNames(p.Spec.Auth) {
+		for _, name := range ProviderAuthEnvNames(mp.Spec.Auth) {
 			if out == nil {
 				out = make(map[string]struct{})
 			}

@@ -4,7 +4,7 @@ TaskSmith uses declarative YAML manifests and Markdown frontmatter to configure 
 
 Model `cost` pricing and tiers (`label`, `tier.type`, `tier.size`) drive the cost estimates recorded for every LLM call (shown by `/usage` and the status line); a model without `cost` and without a built-in profile price is recorded as unpriced.
 
-For model provider configurations (`kind: ModelProvider`), including `cost` and tier precedence over built-in pricing, see the [Providers Reference](./providers.md).
+For model provider configurations (`kind: ModelProvider`), including `spec.enabled`, `cost`, tier precedence over built-in pricing, and 1-to-1 `@alias` editing, see the [Providers Reference](./providers.md).
 
 ---
 
@@ -101,7 +101,7 @@ Ensure error handling wraps sentinels using `%w`.
 | `projects` | array of strings | Relative paths to registered subprojects or packages. |
 | `defaultProvider` | string | Default model provider name (e.g. `openai`, `ollama`). |
 | `defaultModels` | map[string]string | Role-based model assignments: `completion`, `decision`, `embedding`. |
-| `modelAliases` | map[string]string | Named model shorthands resolved to a canonical `<provider>/<model-id>`; referenced as `@<alias>`, `@default`, or `<provider>/@<alias>`. |
+| `modelAliases` | map[string]string | Named model shorthands resolved to a canonical `<provider>/<model-id>`; referenced as `@<alias>`, `@default`, or `<provider>/@<alias>`. Shadows per-model `aliases` and is never rewritten by the `/providers` / `/model` `F2` alias editor. |
 | `defaultAgent` | string | Persona activated for new sessions (defaults to `main`). |
 | `plugins` | array of objects | External plugin resources to load: `source`, `version`, `namespace`, `imports.include`, `imports.exclude`. |
 | `policies.tools.include` | array of strings | Tool grant glob patterns allowed in this workspace. |

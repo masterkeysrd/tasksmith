@@ -58,6 +58,19 @@ type WorkspaceBackend interface {
 	CompleteProviderAuth(ctx context.Context, provider string, req api.ProviderAuthCallbackRequest) (*api.ProviderAuthResponse, error)
 	LogoutProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error)
 	ListProviders(ctx context.Context) ([]api.ProviderSummary, error)
+	// ListWorkspaceProviders returns the ModelProviders this workspace resolved
+	// across tiers, including disabled and shadowed manifests.
+	ListWorkspaceProviders(ctx context.Context, workspace string) ([]api.WorkspaceProvider, error)
+	// SetProviderEnabled patches spec.enabled on the owning manifest (or writes
+	// a workspace shadow for an inherited provider) and reloads the workspace.
+	SetProviderEnabled(ctx context.Context, workspace, name string, enabled bool) ([]api.WorkspaceProvider, error)
+	UpdateProviderModels(ctx context.Context, workspace, name string, req api.UpdateProviderModelsRequest) ([]api.WorkspaceProvider, error)
+	CreateProvider(ctx context.Context, workspace string, req api.CreateProviderRequest) (*api.WorkspaceProvider, error)
+	AssignModelAliases(ctx context.Context, workspace string, req api.AssignModelAliasesRequest) (*api.AssignModelAliasesResponse, error)
+	ListAliasAssignments(ctx context.Context, workspace string) ([]api.AliasAssignment, error)
+	// ListProviderCatalog lists the models a configured provider's type offers.
+	// A provider whose type has no catalog answers with an empty listing.
+	ListProviderCatalog(ctx context.Context, workspace, name string) ([]api.ProviderCatalogEntry, error)
 	ListWorkspaceFiles(ctx context.Context, workspace string, req api.ListFilesRequest) ([]api.WorkspaceFile, error)
 }
 

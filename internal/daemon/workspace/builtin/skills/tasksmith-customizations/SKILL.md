@@ -7,7 +7,7 @@ metadata:
   description: Author and configure TaskSmith WARP workspace resources (WORKSPACE.md, AGENTS.md, Rule, Skill, Agent, Command, Decision, Tool, MCP, ModelProvider, Plugin) and daemon isolation/policy files (sandbox.json and permissions.json).
 spec:
   useWhen: "Creating, editing, or troubleshooting *.rule.md, SKILL.md, *.agent.md, *.command.md, *.decision.md, *.tool.md, MCP servers, *.provider.yaml, plugins, WORKSPACE.md, AGENTS.md, model tiers (@fast/@balanced/@smart/@flagship), sandbox path/network/excludedCommands rules, or permission allow/deny policies."
-  keywords: [rule, skill, agent, subagent, command, decision, tool, mcp, provider, plugin, workspace.md, agents.md, sandbox.json, permissions.json, allowwrite, denywrite, denyread, allowread, excludedcommands, "@fast", "@balanced", "@smart", "@flagship", "@inherit", modelaliases]
+  keywords: [rule, skill, agent, subagent, command, decision, tool, mcp, provider, plugin, workspace.md, agents.md, sandbox.json, permissions.json, allowwrite, denywrite, denyread, allowread, excludedcommands, "@fast", "@balanced", "@smart", "@flagship", "@inherit", modelaliases, spec.enabled, provider-aliases]
 ---
 
 # TaskSmith Customizations

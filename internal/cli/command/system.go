@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
@@ -421,6 +422,24 @@ var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 		}
 		return c.ListModels(ctx)
 	}), wind.Options{Enabled: c != nil})
+	windClient := wind.UseClient()
+
+	// aliasState feeds the compact standard-alias status line under the title
+	// and backs the F2 editor, so both read the same workspace report.
+	aliasState, setAliasState := kitex.UseState[[]api.AliasAssignment](nil)
+	showEditor, setShowEditor := kitex.UseState(false)
+	editorTarget := kitex.UseRef[api.Model](api.Model{})
+	kitex.UseEffect(func() {
+		if c == nil {
+			return
+		}
+		go func() {
+			list, err := c.ListAliasAssignments(context.Background())
+			if err == nil {
+				setAliasState(list)
+			}
+		}()
+	}, []any{c != nil})
 
 	opts := modelPickerOptions(result.Data, currentModel)
 
@@ -456,14 +475,59 @@ var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 		return nil
 	}
 
+	if showEditor() && editorTarget.Current.Provider != "" {
+		return modelAliasEditorSlot(modelAliasEditorSlotProps{
+			ProviderName: editorTarget.Current.Provider,
+			ModelID:      modelIDPart(editorTarget.Current.ID),
+			ModelName:    firstNonEmpty(editorTarget.Current.Label, editorTarget.Current.Name),
+			onDone: func(message string, err error) {
+				setShowEditor(false)
+				if err != nil {
+					store.AppendError("Alias editor", err.Error())
+					return
+				}
+				store.AppendCommandOutput("/model", message)
+				refreshPickerAliases(c, setAliasState)
+				// Manifest aliases changed, so the model rows' @alias badges and
+				// the workspace warnings are stale until re-pulled.
+				if windClient != nil {
+					windClient.InvalidateQueries("models")
+				}
+				refreshProviderWorkspaceContext(context.Background())
+			},
+			onCancel: func() { setShowEditor(false) },
+		})
+	}
+
 	picker := components.NewPicker("Select model:", opts, func(opt uicomponents.Option) {
 		store.RemoveSlot(slotID)
 		store.SetModel(opt.Value)
 	})
 	picker.Filterable = true
+	picker.Subtitle = modelAliasStatusLine(aliasState(), winSize.Width)
 	picker.Columns = modelPickerColumns(opts, winSize.Width)
 	picker.GroupLabel = modelPickerGroupLabel(result.Data)
 	picker.Footer = modelPickerFooter(result.Data)
+	picker.Bindings = append(slices.Clone(components.DefaultPickerBindings),
+		uicomponents.KeyBinding{Key: "f2", Label: "Edit aliases"},
+	)
+	picker.Keys = map[string]func(uicomponents.Option){
+		// F2 matches /sessions' rename chord: function keys reach the picker
+		// even while the filter input owns printable characters, and Enter
+		// stays a strictly ephemeral session model switch.
+		"f2": func(opt uicomponents.Option) {
+			editorTarget.Current = api.Model{}
+			for _, m := range result.Data {
+				if m.ID == opt.Value {
+					editorTarget.Current = m
+					break
+				}
+			}
+			if editorTarget.Current.Provider != "" {
+				setShowEditor(true)
+			}
+		},
+	}
 	picker.OnCancel = func() {
 		store.RemoveSlot(slotID)
 		store.AppendCommandOutput("/model", "Exited /model command")
@@ -471,6 +535,61 @@ var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 
 	return components.Picker(picker)
 })
+
+// modelIDPart strips the "provider/" prefix from a qualified model id.
+func modelIDPart(id string) string {
+	if _, after, ok := strings.Cut(id, "/"); ok {
+		return after
+	}
+	return id
+}
+
+// refreshPickerAliases reloads the standard-alias status line after a save.
+func refreshPickerAliases(c *client.Client, set func([]api.AliasAssignment)) {
+	if c == nil {
+		return
+	}
+	go func() {
+		if list, err := c.ListAliasAssignments(context.Background()); err == nil {
+			set(list)
+		}
+	}()
+}
+
+// modelAliasStatusLine renders the compact standard-alias line under the
+// /model title, e.g. "@default → anthropic/claude-x · @fast → unassigned".
+// The five standard tiers are always listed — unassigned ones included — so
+// the state the F2 editor will show is visible before opening it. The line is
+// clamped to the terminal width.
+func modelAliasStatusLine(assignments []api.AliasAssignment, width int) string {
+	byAlias := make(map[string]api.AliasAssignment, len(assignments))
+	for _, a := range assignments {
+		byAlias[a.Alias] = a
+	}
+	var parts []string
+	for _, std := range components.StandardModelAliases {
+		a, ok := byAlias[std.Name]
+		switch {
+		case std.Name == "default":
+			// @default has no per-model owner row unless a provider declares a
+			// completion default; the report covers it when present.
+			if ok && a.Provider != "" {
+				parts = append(parts, "@"+std.Name+" → "+a.Provider+"/"+a.Model)
+			} else {
+				parts = append(parts, "@"+std.Name+" → unassigned")
+			}
+		case !ok || a.Provider == "":
+			parts = append(parts, "@"+std.Name+" → unassigned")
+		default:
+			parts = append(parts, "@"+std.Name+" → "+a.Provider+"/"+a.Model)
+		}
+	}
+	line := strings.Join(parts, "  ·  ")
+	if width > 0 {
+		line = format.CompactSingleLine(line, max(20, width-2))
+	}
+	return line
+}
 
 func handleAgent(args []string) error {
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {

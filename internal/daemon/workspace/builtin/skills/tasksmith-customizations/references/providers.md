@@ -9,6 +9,7 @@ TaskSmith ships provider presets as templates. A preset being present does not i
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `spec.type` | string | Gateway driver; required by TaskSmith. |
+| `spec.enabled` | *bool | Enables the provider; defaults to true when omitted. A disabled manifest is skipped by the gateway and model resolution while keeping its endpoint, auth, headers, aliases, and models in YAML. |
 | `spec.endpoint` | string | API base endpoint; handling and defaults depend on the driver. |
 | `spec.defaultModels` | object | Role-specific defaults: `completion`, `decision`, and `embedding`. |
 | `spec.auth` | object | Credential source and authentication scheme. |
@@ -17,6 +18,10 @@ TaskSmith ships provider presets as templates. A preset being present does not i
 | `spec.models` | object[] | Model catalog and descriptive metadata. |
 
 Endpoint and configuration support varies by driver. For example, Ollama has a local default endpoint when omitted; the Google GenAI adapter does not currently pass the manifest endpoint into its client. TaskSmith reads selected OpenAI `config` options such as `apiMode` and `store`; arbitrary keys, such as generic retry or timeout settings, are not necessarily applied. Custom headers are added when the outgoing request does not already have that header.
+
+### Enabling and disabling providers
+
+`spec.enabled` (`*bool`, default `true`) is the declarative switch for provider availability: a disabled provider contributes no models, aliases, or role defaults, and comes back unchanged when re-enabled. When a patch targets a manifest the workspace may write (workspace or current-project tier), the owning `*.provider.yaml` is rewritten through WARP formatting; when the provider is only inherited from the user tier, disabling instead writes a shadow override at `.agents/providers/<name>.provider.yaml` with `enabled: false` (plus the inherited identity), so muting a global provider for one repository never edits `~/.config/tasksmith/`. Re-enabling removes the shadow when the inherited manifest is already enabled. The daemon hot-reloads the workspace after every patch so the gateway, model catalog, and manifests agree.
 
 ## Model resolution
 
