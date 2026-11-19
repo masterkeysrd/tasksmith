@@ -413,6 +413,10 @@ type FetchRequest struct {
 	// Body is the optional raw request payload.
 	Body []byte `json:"body,omitempty"`
 
+	// Format controls how fetched content is rendered in FetchResult.Text
+	// ("markdown" default, "text", or "html").
+	Format string `json:"format,omitempty"`
+
 	// Timeout specifies an optional per-request timeout.
 	Timeout time.Duration `json:"timeout,omitempty"`
 

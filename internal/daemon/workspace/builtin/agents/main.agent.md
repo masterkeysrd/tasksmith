@@ -18,6 +18,7 @@ spec:
     - remove
     - bash
     - web_fetch
+    - web_search
     - download
     - tasks
     - todos

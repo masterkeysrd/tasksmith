@@ -18,6 +18,7 @@ type webFetchTool struct {
 func (t *webFetchTool) Prepare(ctx context.Context, in api.WebFetchInput) (*tools.Plan, error) {
 	res, err := t.std.Fetch(ctx, std.FetchRequest{
 		URL:    in.URL,
+		Format: in.Format,
 		DryRun: true,
 	})
 	if err != nil {
@@ -37,6 +38,7 @@ func (t *webFetchTool) Execute(ctx context.Context, in api.WebFetchInput) (api.W
 	res, err := t.std.Fetch(ctx, std.FetchRequest{
 		URL:     in.URL,
 		Headers: in.Headers,
+		Format:  in.Format,
 	})
 	if err != nil {
 		return api.WebFetchOutput{}, err
@@ -108,5 +110,56 @@ func (t *downloadTool) Execute(ctx context.Context, in api.DownloadInput) (api.D
 		BeforeHash:   res.BeforeHash,
 		AfterHash:    res.AfterHash,
 		IsBinary:     res.IsBinary,
+	}, nil
+}
+
+// webSearchTool runs a web search from the daemon host through std.Search. It
+// is annotated isReadOnly + isOpenWorld: the query mutates nothing, but the
+// permission pipeline still gates every open-world lookup per mode.
+type webSearchTool struct {
+	std *std.Std
+}
+
+func (t *webSearchTool) Prepare(ctx context.Context, in api.WebSearchInput) (*tools.Plan, error) {
+	res, err := t.std.Search(ctx, std.SearchRequest{
+		Query:  in.Query,
+		Limit:  in.Limit,
+		DryRun: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &tools.Plan{
+		ToolName: ToolWebSearch,
+		Action:   api.ActionNet,
+		Safety:   api.SafetyUnknown,
+		Target:   res.Query,
+		Summary:  fmt.Sprintf("Search the web: %s", res.Query),
+		ReadOnly: true,
+	}, nil
+}
+
+func (t *webSearchTool) Execute(ctx context.Context, in api.WebSearchInput) (api.WebSearchOutput, error) {
+	res, err := t.std.Search(ctx, std.SearchRequest{
+		Query:          in.Query,
+		AllowedDomains: in.AllowedDomains,
+		BlockedDomains: in.BlockedDomains,
+		Limit:          in.Limit,
+	})
+	if err != nil {
+		return api.WebSearchOutput{}, err
+	}
+	results := make([]api.WebSearchResult, 0, len(res.Hits))
+	for _, hit := range res.Hits {
+		results = append(results, api.WebSearchResult{
+			Title:   hit.Title,
+			URL:     hit.URL,
+			Snippet: hit.Snippet,
+		})
+	}
+	return api.WebSearchOutput{
+		Query:     res.Query,
+		Results:   results,
+		Truncated: res.Truncated,
 	}, nil
 }

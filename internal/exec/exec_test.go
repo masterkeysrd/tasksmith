@@ -322,6 +322,34 @@ func TestCmdForkRunningSessionSurfacesConflict(t *testing.T) {
 	}
 }
 
+func TestCmdLoginPointsToAuthSubcommand(t *testing.T) {
+	var out bytes.Buffer
+	r := newExecRun(t, &Options{Stdout: &out, Stderr: &bytes.Buffer{}}, execTransport{})
+	r.sess = &api.Session{ID: "s1", Status: api.StatusIdle}
+
+	cases := []struct {
+		command string
+		want    string
+	}{
+		{command: "/login", want: "tasksmith auth login"},
+		{command: "/login antigravity", want: "tasksmith auth login antigravity"},
+		{command: "/auth antigravity", want: "tasksmith auth login antigravity"},
+		{command: "/signin", want: "tasksmith auth login"},
+	}
+	for _, tt := range cases {
+		handled, err := r.localCommand(tt.command)
+		if !handled {
+			t.Fatalf("localCommand(%q) not handled", tt.command)
+		}
+		if err == nil {
+			t.Fatalf("localCommand(%q) = nil error, want the auth subcommand pointer", tt.command)
+		}
+		if !strings.Contains(err.Error(), tt.want) {
+			t.Fatalf("localCommand(%q) error = %q, want it to name %q", tt.command, err, tt.want)
+		}
+	}
+}
+
 func TestCmdModelCapabilityMismatchRequiresForce(t *testing.T) {
 	var sawForce []bool
 	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -74,6 +75,10 @@ type Config struct {
 	Sandbox sandbox.Sandbox
 	Tracker FileTracker
 	Logger  log.Interface
+	// SearchEndpoint optionally overrides the default web search endpoint from
+	// [DefaultSearchEndpoint], e.g. for a self-hosted search mirror. Empty uses
+	// the default.
+	SearchEndpoint string
 }
 
 // Validate ensures that all required dependencies (Sandbox, Tracker, and Logger)
@@ -101,6 +106,12 @@ type Std struct {
 	tracker FileTracker
 	logger  log.Interface
 	rg      *ripgrep.Runner
+	// searchClient serves host-side web search, which bypasses the sandbox
+	// network policy and therefore carries its own timeout budget.
+	searchClient *http.Client
+	// searchEndpoint is the default search endpoint used when a request does
+	// not override it.
+	searchEndpoint string
 }
 
 // New validates cfg and constructs a new [Std] operations library instance.
@@ -123,6 +134,8 @@ func New(cfg Config) (*Std, error) {
 			}
 			return res.Stdout, res.ExitCode, nil
 		}),
+		searchClient:   &http.Client{Timeout: DefaultSearchTimeout},
+		searchEndpoint: resolveSearchEndpoint(cfg.SearchEndpoint),
 	}, nil
 }
 

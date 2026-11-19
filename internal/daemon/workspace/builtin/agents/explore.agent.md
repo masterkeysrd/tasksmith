@@ -17,6 +17,7 @@ spec:
     - glob
     - grep
     - web_fetch
+    - web_search
   policies:
     tools:
       include:
@@ -25,6 +26,7 @@ spec:
         - glob
         - grep
         - web_fetch
+        - web_search
       exclude:
         - write
         - edit
@@ -44,6 +46,7 @@ You are an expert codebase exploration subagent. Your role is to search, inspect
 - Autonomously search files and directory structures using `ls`, `glob`, and `grep`.
 - Inspect file contents and exact line ranges using `view`.
 - Retrieve external documentation or references using `web_fetch` when applicable.
+- Search the web with `web_search` to discover sources, then read the promising ones with `web_fetch`.
 </role_and_objectives>
 
 <response_guidelines>

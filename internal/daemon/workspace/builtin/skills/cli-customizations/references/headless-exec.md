@@ -82,9 +82,12 @@ With `--output-format jsonl`, stdout carries frames only; diagnostics go to stde
 
 `exec` dispatches these locally: `/model [--force] [id]`, `/models`, `/mode [mode]`,
 `/agent [name]`, `/agents`, `/effort [level|default]`, `/thinking [on|off|adaptive|default]`,
-`/budget [tokens|default]`, `/usage`, `/compact [focus]`, `/fork [title]`, `/exit` (`/quit`),
+`/budget [tokens|default]`, `/usage`, `/compact [focus]`, `/fork [title]`,
+`/login [provider]` (`/auth`, `/signin`), `/exit` (`/quit`),
 `/help`. `/fork` branches the current session and rebinds the run to the fork (rejected while
-the source session is running). Everything else — workspace commands and skills, `!` shell
+the source session is running). `/login` never starts a flow headless: it fails with a pointer
+to `tasksmith auth login [provider] [--paste]`, since sign-in waits on a browser or a pasted
+redirect URL. Everything else — workspace commands and skills, `!` shell
 input, and `mcp:<server>:<prompt>`
 references — goes to the daemon. An unrecognized bare `/name` fails with `unknown slash
 command` (exit `1`); paths and `mcp:` references are never mistaken for commands.

@@ -45,6 +45,8 @@ var MessageTool = trail.FC("MessageTool", func(props MessageToolProps) trail.Nod
 		return BashToolRenderer(props.Tool)
 	case "web_fetch":
 		return WebFetchToolRenderer(props.Tool)
+	case "web_search":
+		return WebSearchToolRenderer(props.Tool)
 	case "download":
 		return DownloadToolRenderer(props.Tool)
 	case "tasks":

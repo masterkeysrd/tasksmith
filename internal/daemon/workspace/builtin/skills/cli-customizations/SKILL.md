@@ -4,10 +4,10 @@ kind: Skill
 metadata:
   name: cli-customizations
   displayName: CLI Customizations
-  description: Configure TaskSmith's interactive CLI settings such as the REPL status line composition and the color theme by editing their XDG config files or driving the /statusline view, drive the interactive /sandbox and /permissions editors, --sandbox startup flag, and ! shell mode, explain the /model picker columns, quota windows, and the /usage Quotas tab for subscription-billed providers, document headless execution with tasksmith exec or -p including NDJSON framing, stdin control frames, slash commands without the TUI, and exit codes, and explain quick session resume with -c/--continue and session forking with --fork, /fork, or the F3 shortcut in /sessions.
+  description: Configure TaskSmith's interactive CLI settings such as the REPL status line composition and the color theme by editing their XDG config files or driving the /statusline view, drive the interactive /sandbox and /permissions editors, --sandbox startup flag, and ! shell mode, explain the /model picker columns, quota windows, and the /usage Quotas tab for subscription-billed providers, document headless execution with tasksmith exec or -p including NDJSON framing, stdin control frames, slash commands without the TUI, and exit codes, explain quick session resume with -c/--continue and session forking with --fork, /fork, or the F3 shortcut in /sessions, and guide provider sign-in with the tasksmith auth login|status|logout subcommands or the /login REPL screen.
 spec:
-  useWhen: "The user asks to change, hide, reorder, or configure the status line, status bar segments, compact mode, colors, or theme; asks how the interactive CLI is customized; wants to inspect or change sandboxing, isolation posture, excluded commands, or permission allow/deny rules from inside the REPL via /sandbox, /permissions, --sandbox, or ! commands; asks about quota windows, subscription-billed models, the /usage Quotas tab, or what the /model picker's context, alias, and pricing/quota columns mean; asks about attaching images, PDFs, or audio via @ mentions, clipboard paste (Ctrl+V/Alt+V), or model-switch capability confirmations; asks about running TaskSmith headlessly or in CI via tasksmith exec, -p/--print, --input-format/--output-format jsonl or json, NDJSON control frames, headless slash commands, or exec exit codes; or asks to resume the last session with -c/--continue or to branch/fork a session with --fork, /fork, or the /sessions browser."
-  keywords: [statusline, status line, status bar, segment, compact, theme, colors, cli settings, appearance, sandbox, /sandbox, permissions, /permissions, --sandbox, shell mode, ! command, excluded commands, quota, quotas, /usage, /model, subscription, rate limit, pricing, billing, multimodal, image, pdf, audio, paste, ctrl+v, alt+v, capability mismatch, --force, exec, headless, --print, -p, one-shot, ci, automation, scripting, ndjson, jsonl, control frame, exit code, sdk, embedding, resume, continue, -c, --continue, --fork, fork, /fork, branch, session browser, f3]
+  useWhen: "The user asks to change, hide, reorder, or configure the status line, status bar segments, compact mode, colors, or theme; asks how the interactive CLI is customized; wants to inspect or change sandboxing, isolation posture, excluded commands, or permission allow/deny rules from inside the REPL via /sandbox, /permissions, --sandbox, or ! commands; asks about quota windows, subscription-billed models, the /usage Quotas tab, or what the /model picker's context, alias, and pricing/quota columns mean; asks about attaching images, PDFs, or audio via @ mentions, clipboard paste (Ctrl+V/Alt+V), or model-switch capability confirmations; asks about running TaskSmith headlessly or in CI via tasksmith exec, -p/--print, --input-format/--output-format jsonl or json, NDJSON control frames, headless slash commands, or exec exit codes; or asks to resume the last session with -c/--continue or to branch/fork a session with --fork, /fork, or the /sessions browser; or asks to sign in to, check the status of, or sign out of an OAuth provider via tasksmith auth login/status/logout or the /login command."
+  keywords: [statusline, status line, status bar, segment, compact, theme, colors, cli settings, appearance, sandbox, /sandbox, permissions, /permissions, --sandbox, shell mode, ! command, excluded commands, quota, quotas, /usage, /model, subscription, rate limit, pricing, billing, multimodal, image, pdf, audio, paste, ctrl+v, alt+v, capability mismatch, --force, exec, headless, --print, -p, one-shot, ci, automation, scripting, ndjson, jsonl, control frame, exit code, sdk, embedding, resume, continue, -c, --continue, --fork, fork, /fork, branch, session browser, f3, auth, tasksmith auth, login, /login, /auth, /signin, logout, oauth, pkce, provider sign-in, --no-browser, --paste, credentials]
 ---
 
 # CLI Customizations
@@ -16,7 +16,8 @@ TaskSmith's interactive CLI keeps user-facing appearance settings in small JSON 
 `$XDG_CONFIG_HOME/tasksmith/` and exposes safety-relevant posture through dedicated in-app
 views. Surfaces today: the REPL status line, the color theme, the `/sandbox` editor, and the
 `/permissions` rule browser, plus the `/model` picker and `/usage` browser for model billing,
-and the headless `exec` / `-p` runner for scripts and CI.
+the headless `exec` / `-p` runner for scripts and CI, and provider sign-in via `tasksmith auth`
+and `/login`.
 Prefer the in-app view when the user is inside the REPL; edit the JSON file directly when working
 non-interactively or applying a workspace-wide default.
 
@@ -124,6 +125,28 @@ Quick rules:
 - `@<path>` mentions in both the REPL and `tasksmith exec` attach supported images (`.png`, `.jpg`, `.webp`, `.gif`), PDFs, and audio (`.wav`, `.mp3`, `.m4a`, `.ogg`, `.flac`), snapshotting them into content-addressed storage (`<session-dir>/media/<sha256>`); `.svg` stays on the UTF-8 text path.
 - In the REPL composer, `Ctrl+V` / `Alt+V` pastes a clipboard image as an inline `[Image #N]` pill (uploaded on submit). Deleting `[Image #N]` from the draft detaches it.
 - Switching models when active post-compaction context holds a modality the target model lacks (`capability_mismatch`) opens a confirmation prompt in the REPL (`Switch anyway` retries with `force: true`, omitting unsupported attachments on future turns, or `Cancel`), and fails safely in `exec` unless `/model --force <id>` (or `UpdateSessionRequest.Force: true`) is passed. Running `/compact` summarizes older turns into text and clears the active-modality gate.
+
+## Provider sign-in (`auth` / `/login`)
+
+OAuth model providers (e.g. Antigravity) sign in through the daemon; the CLI only drives it:
+
+- `tasksmith auth login [provider]` starts the daemon's PKCE flow, prints the authorization URL,
+  opens a browser, and waits (up to five minutes) for the sign-in to settle. `--no-browser` only
+  prints the URL; `--paste` finishes by reading the redirect URL from stdin — use it on SSH or
+  headless hosts where the browser cannot reach the daemon's loopback callback.
+- `tasksmith auth status [provider]` shows one provider (`<provider>: <status> (<account>)`) or a
+  `PROVIDER / AUTH / STATUS` table over all configured providers; `tasksmith auth logout [provider]`
+  removes stored credentials (the daemon also cancels any in-flight flow for that provider).
+- In the REPL, `/login [provider]` (aliases `/auth`, `/signin`) opens the same flow as an
+  interactive screen: `c` copies the URL, `Enter` submits a pasted redirect URL (full address-bar
+  URL, bare query string, or code alone), `Esc` leaves the screen while the daemon keeps the flow
+  open for five more minutes. The settled outcome lands in the conversation timeline.
+- With no provider named, login and `/login` resolve automatically only when exactly one
+  OAuth-capable provider is configured; otherwise they name the candidates and ask for one.
+- All `auth` subcommands need a running daemon and never spawn one; point the user at
+  `tasksmith daemon start` when the daemon is down.
+- Never read, write, or print OAuth token files (`~/.local/share/tasksmith/credentials/`); manage
+  credentials only through the `auth` subcommands or `/login`.
 
 ## Etiquette
 

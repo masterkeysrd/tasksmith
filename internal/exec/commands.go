@@ -17,7 +17,7 @@ import (
 // (workspace commands, skills, MCP prompts) stays the single source of truth
 // for workflow behavior across clients.
 var localCommands = []string{
-	"model", "models", "mode", "agent", "agents", "effort", "thinking", "budget", "usage", "compact", "fork", "exit", "quit", "help",
+	"model", "models", "mode", "agent", "agents", "effort", "thinking", "budget", "usage", "compact", "fork", "login", "auth", "signin", "exit", "quit", "help",
 }
 
 // newMessageID mints the uuid-v7 message id the daemon expects on sends.
@@ -80,6 +80,8 @@ func (r *run) localCommand(text string) (bool, error) {
 		return true, r.cmdCompact(args)
 	case "fork":
 		return true, r.cmdFork(args)
+	case "login", "auth", "signin":
+		return true, r.cmdLogin(args)
 	default:
 		return false, nil
 	}
@@ -358,6 +360,19 @@ func thinkingLabel(sess *api.Session) string {
 		return "default (" + desc + ")"
 	}
 	return desc
+}
+
+// cmdLogin answers the REPL's /login (and its /auth, /signin aliases) in
+// headless runs. Provider sign-in is interactive — it waits on a browser or a
+// pasted redirect URL — which a script driving exec cannot supply, so the
+// command never starts a flow and instead names the CLI subcommand built for
+// exactly that job.
+func (r *run) cmdLogin(args []string) error {
+	provider := strings.TrimSpace(strings.Join(args, " "))
+	if provider == "" {
+		return fmt.Errorf("provider sign-in is interactive; run `tasksmith auth login [--paste]` (add a provider name when several OAuth providers exist)")
+	}
+	return fmt.Errorf("provider sign-in is interactive; run `tasksmith auth login %s [--paste]`", provider)
 }
 
 // cmdUsage prints the session usage totals.

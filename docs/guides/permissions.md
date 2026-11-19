@@ -10,8 +10,8 @@ TaskSmith supports five session-wide permission modes. Each mode adjusts the app
 
 | Mode | Identifier | Tool Behavior | Recommended For |
 | :--- | :--- | :--- | :--- |
-| **Default** | `default` | Read-only inspection tools (`view`, `grep`, `glob`, `ls`) run automatically. Mutating operations (`write`, `edit`, `bash`, `web_fetch`) trigger an interactive approval prompt unless matched by an explicit allow rule. | Everyday pair-programming and general development. |
-| **Accept Edits** | `accept_edits` | File write and edit operations (`write`, `edit`) execute automatically without prompting. Shell commands (`bash`) and network requests (`web_fetch`) still require explicit approval. | Fast iterative code refactoring where you want the agent to write files freely but audit shell executions. |
+| **Default** | `default` | Read-only inspection tools (`view`, `grep`, `glob`, `ls`) run automatically. Mutating operations (`write`, `edit`, `bash`, `web_fetch`, `web_search`) trigger an interactive approval prompt unless matched by an explicit allow rule. | Everyday pair-programming and general development. |
+| **Accept Edits** | `accept_edits` | File write and edit operations (`write`, `edit`) execute automatically without prompting. Shell commands (`bash`) and network requests (`web_fetch`, `web_search`) still require explicit approval. | Fast iterative code refactoring where you want the agent to write files freely but audit shell executions. |
 | **Plan** | `plan` | Strict read-only mode. All mutating tools (`write`, `edit`, `bash`) are automatically blocked. Only safe exploration tools are permitted. | Architectural reviews, code investigation, and drafting implementation plans safely without modifying code. |
 | **Ask** | `ask` | Asks for confirmation before executing almost every tool call, except for actions matched by explicit allow rules. | High-security repositories, production environments, or when auditing an unfamiliar agent or tool. |
 | **Auto** | `auto` | Autonomous mode. Automatically executes all tools without prompting, unless an action matches an explicit `deny` rule or workspace policy exclusion. | Automated CI/CD runs, headless batch scripts, or trusted local sandbox workflows. |
@@ -107,6 +107,7 @@ write(*.md)                      # Allow writing root Markdown documentation fil
 # Network Access Rules
 web_fetch(api.github.com)        # Allow fetching GitHub API endpoints
 web_fetch(docs.rs)               # Allow fetching Rust documentation
+web_search(*)                    # Allow all web searches (queries are not URLs, so grant the tool-wide rule)
 
 # Catch-All Rules
 *(src/**)                        # Allow any tool operating inside src/

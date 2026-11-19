@@ -32,6 +32,13 @@ import (
 
 func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container, *std.Std, sandbox.Sandbox, *workspace.Workspace) {
 	t.Helper()
+	return setupBuiltinEnvSearch(t, allowLoopback, "")
+}
+
+// setupBuiltinEnvSearch additionally points the host-side search client at a
+// custom endpoint so web_search tests can serve canned result pages.
+func setupBuiltinEnvSearch(t *testing.T, allowLoopback bool, searchEndpoint string) (string, tools.Container, *std.Std, sandbox.Sandbox, *workspace.Workspace) {
+	t.Helper()
 	xdg.SetTestEnv(t.TempDir(), "tasksmith-builtin-test")
 	t.Cleanup(xdg.ClearCache)
 	ctx := context.Background()
@@ -60,9 +67,10 @@ func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container,
 	})
 
 	stdLib, err := std.New(std.Config{
-		Sandbox: sb,
-		Tracker: std.NewMemoryTracker(),
-		Logger:  log.Default(),
+		Sandbox:        sb,
+		Tracker:        std.NewMemoryTracker(),
+		Logger:         log.Default(),
+		SearchEndpoint: searchEndpoint,
 	})
 	if err != nil {
 		t.Fatalf("std.New failed: %v", err)
@@ -203,6 +211,7 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 		builtin.ToolToolSearch,
 		builtin.ToolView,
 		builtin.ToolWebFetch,
+		builtin.ToolWebSearch,
 		builtin.ToolWrite,
 	}
 
@@ -508,6 +517,79 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		t.Fatalf("unexpected web_fetch output: %+v", fetchRes.StructuredContent)
 	}
 
+	// web_search executes host-side and maps hits into the API schema
+	searchSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `<html><body>
+			<div class="result"><h2 class="result__title"><a class="result__a" href="/l/?uddg=https%3A%2F%2Fgo.dev%2F">Go</a></h2><a class="result__snippet">The Go language.</a></div>
+			<div class="result"><h2 class="result__title"><a class="result__a" href="https://pkg.go.dev/">pkg.go.dev</a></h2></div>
+			<div class="result"><h2 class="result__title"><a class="result__a" href="https://blog.example.org/post">Blog</a></h2></div>
+		</body></html>`)
+	}))
+	defer searchSrv.Close()
+
+	searchDir, searchC, _, _, _ := setupBuiltinEnvSearch(t, false, searchSrv.URL)
+	_ = searchDir
+	searchCall := &message.ToolCall{
+		ID:   "call-search",
+		Name: builtin.ToolWebSearch,
+		Args: map[string]any{
+			"query":           "  go   language ",
+			"allowed_domains": []string{"go.dev", "example.org"},
+			"limit":           2,
+		},
+	}
+	searchPlan, err := searchC.Prepare(ctx, searchCall)
+	if err != nil || searchPlan.Action != api.ActionNet || searchPlan.Safety != api.SafetyUnknown || !searchPlan.ReadOnly {
+		t.Fatalf("unexpected web_search plan: %+v, err=%v", searchPlan, err)
+	}
+	if searchPlan.Target != "go language" || !strings.Contains(searchPlan.Summary, "go language") {
+		t.Errorf("web_search plan target/summary = %q / %q, want the normalized query", searchPlan.Target, searchPlan.Summary)
+	}
+	searchRes, err := searchC.Execute(ctx, searchCall)
+	if err != nil || searchRes.IsError {
+		t.Fatalf("Execute(web_search) failed: err=%v, res=%+v", err, searchRes)
+	}
+	searchOut, ok := searchRes.StructuredContent.(api.WebSearchOutput)
+	if !ok {
+		t.Fatalf("unexpected web_search output type: %T", searchRes.StructuredContent)
+	}
+	if searchOut.Query != "go language" || len(searchOut.Results) != 2 || !searchOut.Truncated {
+		t.Fatalf("web_search output = %+v, want normalized query, 2 capped results, truncated", searchOut)
+	}
+	if searchOut.Results[0].URL != "https://go.dev/" || searchOut.Results[0].Title != "Go" || searchOut.Results[0].Snippet != "The Go language." {
+		t.Errorf("first search result = %+v, want the uddg-unwrapped hit", searchOut.Results[0])
+	}
+	if searchOut.Results[1].URL != "https://pkg.go.dev/" {
+		t.Errorf("second search result = %+v, want the pkg.go.dev hit (a bare domain allows its subdomains)", searchOut.Results[1])
+	}
+	blockedCall := &message.ToolCall{
+		ID:   "call-search-blocked",
+		Name: builtin.ToolWebSearch,
+		Args: map[string]any{
+			"query":           "go language",
+			"allowed_domains": []string{"go.dev", "example.org"},
+			"blocked_domains": []string{"pkg.go.dev"},
+		},
+	}
+	blockedRes, err := searchC.Execute(ctx, blockedCall)
+	if err != nil || blockedRes.IsError {
+		t.Fatalf("Execute(web_search blocked_domains) failed: err=%v", err)
+	}
+	blockedOut, ok := blockedRes.StructuredContent.(api.WebSearchOutput)
+	if !ok || len(blockedOut.Results) != 2 || blockedOut.Truncated {
+		t.Fatalf("blocked-filtered output = %+v, want the two surviving results", blockedRes.StructuredContent)
+	}
+	if blockedOut.Results[1].URL != "https://blog.example.org/post" {
+		t.Errorf("blocked result = %+v, want blog.example.org after pkg.go.dev was dropped", blockedOut.Results[1])
+	}
+	if text := searchOut.TextContent(); !strings.Contains(text, "1. Go") || !strings.Contains(text, "https://go.dev/") {
+		t.Errorf("TextContent() = %q, want a numbered result list", text)
+	}
+	empty := api.WebSearchOutput{Query: "none"}
+	if text := empty.TextContent(); text != "No search results found." {
+		t.Errorf("empty TextContent() = %q", text)
+	}
+
 	// Download to existing unread file fails in Prepare with std.ErrFileNotRead
 	existingUnread := filepath.Join(dir, "existing_unread.txt")
 	if err := os.WriteFile(existingUnread, []byte("initial\n"), 0o644); err != nil {
@@ -636,6 +718,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		{ID: "5", Name: builtin.ToolWebFetch, Args: map[string]any{"url": "   "}},
 		{ID: "6", Name: builtin.ToolWebFetch, Args: map[string]any{"url": "ftp://example.com"}},
 		{ID: "7", Name: builtin.ToolWebFetch, Args: map[string]any{"url": "http://"}},
+		{ID: "8", Name: builtin.ToolWebFetch, Args: map[string]any{"url": "https://example.com", "format": "invalid"}},
 	} {
 		if _, err := c.Prepare(ctx, bad); !errors.Is(err, std.ErrInvalidArgument) {
 			t.Fatalf("expected ErrInvalidArgument for %s (%v), got %v", bad.Name, bad.Args, err)
@@ -797,6 +880,100 @@ func TestWebFetchStreamingSpill(t *testing.T) {
 	spillStr := string(spillData)
 	if !strings.Contains(spillStr, "web line 001\n") || !strings.Contains(spillStr, "web line 600\n") {
 		t.Fatalf("spilled content missing initial or final lines")
+	}
+}
+
+func TestWebFetchFormats(t *testing.T) {
+	const rawHTML = `<html><head><title>Page</title></head><body><p>Hello <a href="/docs">docs</a>.</p></body></html>`
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/html":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = fmt.Fprint(w, rawHTML)
+		case "/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"k":1}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	_, c, _, _, _ := setupBuiltinEnv(t, true)
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		path   string
+		format string
+		want   string
+	}{
+		{
+			name:   "default markdown",
+			path:   "/html",
+			format: "",
+			want:   "# Page\n\nHello [docs](" + ts.URL + "/docs).",
+		},
+		{
+			name:   "explicit markdown",
+			path:   "/html",
+			format: "markdown",
+			want:   "# Page\n\nHello [docs](" + ts.URL + "/docs).",
+		},
+		{
+			name:   "text",
+			path:   "/html",
+			format: "text",
+			want:   "Page\n\nHello docs.",
+		},
+		{
+			name:   "html",
+			path:   "/html",
+			format: "html",
+			want:   rawHTML,
+		},
+		{
+			name:   "json pretty-printed by default",
+			path:   "/json",
+			format: "",
+			want:   "{\n  \"k\": 1\n}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := map[string]any{"url": ts.URL + tt.path}
+			if tt.format != "" {
+				args["format"] = tt.format
+			}
+			call := &message.ToolCall{
+				ID:   "call-fetch-" + tt.name,
+				Name: builtin.ToolWebFetch,
+				Args: args,
+			}
+			if _, err := c.Prepare(ctx, call); err != nil {
+				t.Fatalf("Prepare failed: %v", err)
+			}
+			res, err := c.Execute(ctx, call)
+			if err != nil || res.IsError {
+				t.Fatalf("Execute failed: err=%v, res=%+v", err, res)
+			}
+			out, ok := res.StructuredContent.(api.WebFetchOutput)
+			if !ok {
+				t.Fatalf("expected api.WebFetchOutput, got %T", res.StructuredContent)
+			}
+			if out.Text != tt.want {
+				t.Errorf("Text = %q, want %q", out.Text, tt.want)
+			}
+		})
+	}
+
+	if _, err := c.Prepare(ctx, &message.ToolCall{
+		ID:   "call-fetch-invalid",
+		Name: builtin.ToolWebFetch,
+		Args: map[string]any{"url": ts.URL + "/html", "format": "invalid"},
+	}); !errors.Is(err, std.ErrInvalidArgument) {
+		t.Fatalf("expected std.ErrInvalidArgument for invalid format in Prepare, got %v", err)
 	}
 }
 

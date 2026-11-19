@@ -649,6 +649,7 @@ func renderToolsStep(props OnboardingWizardProps, state store.OnboardingState) t
 		{"remove", "Write"},
 		{"bash", "Execute"},
 		{"web_fetch", "Network"},
+		{"web_search", "Network"},
 		{"download", "Network"},
 		{"invoke_agent", "Agents"},
 		{"manage_agents", "Agents"},

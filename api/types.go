@@ -125,9 +125,16 @@ type ProviderAuthRequest struct {
 type ProviderAuthResponse struct {
 	Provider string `json:"provider"`
 	AuthURL  string `json:"auth_url,omitempty"`
-	Status   string `json:"status"` // "idle", "authorizing", "authenticated", "error"
+	Status   string `json:"status"` // "idle", "authorizing", "authenticated", "error", "signed-out"
 	Account  string `json:"account,omitempty"`
 	Error    string `json:"error,omitempty"`
+}
+
+// ProviderAuthCallbackRequest carries a redirect URL the user pasted by hand so
+// a waiting provider OAuth flow can complete when the browser cannot reach the
+// daemon's loopback listener (SSH or headless hosts).
+type ProviderAuthCallbackRequest struct {
+	CallbackURL string `json:"callbackUrl"`
 }
 
 // VerifyProviderRequest requests verification of a provider's credentials or endpoint.

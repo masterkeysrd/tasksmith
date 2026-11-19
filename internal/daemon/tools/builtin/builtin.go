@@ -146,6 +146,9 @@ func New(cfg Config) ([]tools.Tool, error) {
 		{ToolWebFetch, func(m tools.Metadata) tools.Tool {
 			return tools.NewHandler(ToolWebFetch, m, &webFetchTool{std: cfg.Std})
 		}},
+		{ToolWebSearch, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolWebSearch, m, &webSearchTool{std: cfg.Std})
+		}},
 		{ToolDownload, func(m tools.Metadata) tools.Tool {
 			return tools.NewHandler(ToolDownload, m, &downloadTool{std: cfg.Std, guard: cfg.Guard})
 		}},

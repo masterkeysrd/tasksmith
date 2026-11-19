@@ -53,6 +53,11 @@ type WorkspaceBackend interface {
 	VerifyProvider(ctx context.Context, req api.VerifyProviderRequest) (*api.VerifyProviderResponse, error)
 	StartProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error)
 	GetProviderAuthStatus(ctx context.Context, provider string) (*api.ProviderAuthResponse, error)
+	// CompleteProviderAuth feeds a redirect URL the user copied from their
+	// browser to the provider OAuth flow in progress.
+	CompleteProviderAuth(ctx context.Context, provider string, req api.ProviderAuthCallbackRequest) (*api.ProviderAuthResponse, error)
+	LogoutProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error)
+	ListProviders(ctx context.Context) ([]api.ProviderSummary, error)
 	ListWorkspaceFiles(ctx context.Context, workspace string, req api.ListFilesRequest) ([]api.WorkspaceFile, error)
 }
 

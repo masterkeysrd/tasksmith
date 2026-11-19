@@ -245,8 +245,10 @@ func mcpAuthCopyKey(k event.KeyEvent, pasted string) bool {
 
 type mcpAuthPaneProps struct {
 	livePaneProps
-	server string
-	state  *kites.Store[mcpAuthState]
+	server   string
+	title    string
+	escLabel string
+	state    *kites.Store[mcpAuthState]
 	// notice is a report owned by the browser rather than the flow, such as the
 	// confirmation of a copy. It shows in place of the flow's own report.
 	notice string
@@ -320,8 +322,12 @@ var mcpAuthPane = trail.FC("MCPServerAuth", func(props mcpAuthPaneProps) trail.N
 	mutedStyle := style.S().Foreground(scheme.Color.Text.Muted)
 
 	width := winSize.Width - mcpCardIndent
+	title := strings.TrimSpace(props.title)
+	if title == "" {
+		title = "Authenticating with " + server + "…"
+	}
 	rows := []trail.Node{
-		mcpDetailLine(trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Authenticating with "+server+"…"))),
+		mcpDetailLine(trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(title))),
 		blankRow(),
 		mcpDetailLine(trail.Span(trail.SpanProps{Style: labelStyle},
 			trail.Text(mcpAuthSpinner+" "+mcpAuthNotice))),
@@ -375,6 +381,11 @@ var mcpAuthPane = trail.FC("MCPServerAuth", func(props mcpAuthPaneProps) trail.N
 		mcpDetailLine(trail.Span(trail.SpanProps{Style: mutedStyle}, trail.Text(mcpAuthReturnHint))),
 	)
 
+	escLabel := strings.TrimSpace(props.escLabel)
+	if escLabel == "" {
+		escLabel = "Back"
+	}
+
 	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
@@ -389,7 +400,7 @@ var mcpAuthPane = trail.FC("MCPServerAuth", func(props mcpAuthPaneProps) trail.N
 			Bindings: []uicomponents.KeyBinding{
 				{Key: "c", Label: "Copy URL"},
 				{Key: "enter", Label: "Submit pasted URL"},
-				{Key: "esc", Label: "Back"},
+				{Key: "esc", Label: escLabel},
 			},
 		}),
 	)

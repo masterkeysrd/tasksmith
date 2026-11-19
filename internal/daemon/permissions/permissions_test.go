@@ -138,10 +138,30 @@ func TestDeriveGrantRules(t *testing.T) {
 		t.Fatalf("net rules with host: got %v", netRules)
 	}
 
-	// ActionNet without host
+	// ActionNet without host: the literal target plus the tool-wide rule,
+	// since a non-URL net target cannot be narrowed to a host.
 	netNoHost := permissions.DeriveGrantRules("web_fetch", api.ActionNet, "invalid-url")
-	if !slices.Equal(netNoHost, []string{"web_fetch(invalid-url)"}) {
+	if !slices.Equal(netNoHost, []string{"web_fetch(invalid-url)", "web_fetch(*)"}) {
 		t.Fatalf("net rules without host: got %v", netNoHost)
+	}
+
+	// web_search targets are queries, not URLs: offer the query and the
+	// tool-wide rule so "always allow" can cover later searches.
+	searchRules := permissions.DeriveGrantRules("web_search", api.ActionNet, "go generics")
+	if !slices.Equal(searchRules, []string{"web_search(go generics)", "web_search(*)"}) {
+		t.Fatalf("web_search rules: got %v", searchRules)
+	}
+
+	// A query with parentheses cannot round-trip through ParseRule, so only
+	// the tool-wide rule is offered.
+	parenRules := permissions.DeriveGrantRules("web_search", api.ActionNet, `fmt.Errorf("%w") in func main()`)
+	if !slices.Equal(parenRules, []string{"web_search(*)"}) {
+		t.Fatalf("web_search rules with parentheses: got %v", parenRules)
+	}
+	for _, rule := range parenRules {
+		if _, _, err := permissions.ParseRule(rule); err != nil {
+			t.Fatalf("derived rule %q does not parse: %v", rule, err)
+		}
 	}
 }
 

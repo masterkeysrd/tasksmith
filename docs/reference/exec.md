@@ -176,6 +176,7 @@ Other REPL-oriented events (`task_updated`, `todos_updated`, `queue_updated`, `c
 | `/usage` | — | Prints session usage (`data` carries `api.SessionUsage`). |
 | `/compact` | `[focus]` | Triggers daemon-side compaction as a turn. |
 | `/fork` | `[title]` | Branches the current session and rebinds the run to the fork (`data` carries the forked `api.Session`). In `jsonl` mode the event stream follows the fork from that point on; a running source session is rejected. |
+| `/login` | `/auth`, `/signin` · `[provider]` | Fails with a pointer to `tasksmith auth login [provider] [--paste]`: provider sign-in waits on a browser or a pasted redirect URL, which a headless run cannot supply. |
 | `/help` | — | Lists local commands and the forwarding rule. |
 | `/exit` | `/quit` | Ends the run (pending turns drain first in bidirectional mode). |
 

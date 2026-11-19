@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/masterkeysrd/loom/message"
 )
@@ -21,6 +22,23 @@ func (o LoadRuleOutput) TextContent() string {
 		return fmt.Sprintf("Rule path: %s\n\n%s", o.Path, o.Instructions)
 	}
 	return o.Instructions
+}
+
+// TextContent renders web search results as a numbered list so the model reads
+// titles, URLs, and snippets instead of a raw JSON blob.
+func (o WebSearchOutput) TextContent() string {
+	if len(o.Results) == 0 {
+		return "No search results found."
+	}
+	var sb strings.Builder
+	for i, res := range o.Results {
+		fmt.Fprintf(&sb, "%d. %s\n   URL: %s\n", i+1, res.Title, res.URL)
+		if res.Snippet != "" {
+			fmt.Fprintf(&sb, "   %s\n", res.Snippet)
+		}
+		sb.WriteString("\n")
+	}
+	return strings.TrimSuffix(sb.String(), "\n\n")
 }
 
 // ToolContent renders the loaded skill's instructions as a text block followed by

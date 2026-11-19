@@ -12,7 +12,7 @@ flowchart TD
         Orchestrator["Session Orchestrator\n(Lifecycle & Host Staging)"]
         FileTools["File Tools\n(view, write, edit, glob)"]
         ProcTools["Command Tools\n(bash, grep, custom scripts)"]
-        NetTools["Network Tools\n(web_fetch)"]
+        NetTools["Network Tools\n(web_fetch, web_search)"]
     end
 
     subgraph SandboxController ["Per-Session Sandbox"]

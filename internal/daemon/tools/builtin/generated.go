@@ -22,5 +22,6 @@ const (
 	ToolToolSearch      = "tool_search"
 	ToolView            = "view"
 	ToolWebFetch        = "web_fetch"
+	ToolWebSearch       = "web_search"
 	ToolWrite           = "write"
 )

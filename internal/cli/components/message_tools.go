@@ -1046,6 +1046,74 @@ func WebFetchToolRenderer(tool store.ToolPart) trail.Node {
 	return WebFetchToolWidget(WebFetchToolWidgetProps{Tool: tool})
 }
 
+type WebSearchToolWidgetProps struct {
+	Tool store.ToolPart
+}
+
+var WebSearchToolWidget = trail.FC("WebSearchToolWidget", func(props WebSearchToolWidgetProps) trail.Node {
+	scheme := theme.UseTheme()
+	tool := props.Tool
+	input := parseToolInput[api.WebSearchInput](tool.Call)
+	output := parseToolOutput[api.WebSearchOutput](tool.Response)
+
+	query := strings.TrimSpace(input.Query)
+	if output.Query != "" {
+		query = strings.TrimSpace(output.Query)
+	}
+
+	failed := tool.Status == store.ToolFailed || (tool.Response != nil && tool.Response.IsError)
+	verb := "Searching"
+	if tool.Status == store.ToolSucceeded || failed {
+		verb = "Searched"
+	}
+
+	status := tool.Status
+	if failed {
+		status = store.ToolFailed
+	}
+
+	hasTarget := query != ""
+	leading := toolHeaderLeading(status, verb, hasTarget, scheme)
+	headerNodes := append([]trail.Node{}, leading...)
+
+	if hasTarget {
+		iconBox := trail.Span(trail.SpanProps{
+			Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre),
+		}, icon.Globe, trail.Text(" "))
+
+		querySpan := trail.Span(trail.SpanProps{
+			Style: style.S().
+				Flex(0, 1).
+				MinWidth(style.Cells(0)).
+				Overflow(style.OverflowHidden).
+				TextOverflow(style.TextOverflowEllipsis).
+				WhiteSpace(style.WhiteSpacePre).
+				Foreground(scheme.Color.Text.Primary),
+		}, trail.Text(query))
+
+		headerNodes = append(headerNodes, iconBox, querySpan)
+	}
+
+	var suffix string
+	if tool.Response != nil && !tool.Response.IsError {
+		suffix = fmt.Sprintf("(%d results)", len(output.Results))
+	}
+
+	if suffixNode := renderSuffixSpan(suffix, scheme); suffixNode != nil {
+		headerNodes = append(headerNodes, suffixNode)
+	}
+
+	if stateSuffix := toolStateSuffix(tool.Status, scheme); stateSuffix != nil {
+		headerNodes = append(headerNodes, stateSuffix)
+	}
+
+	return wrapToolWidget(headerNodes, toolErrorSubline(tool, scheme))
+})
+
+func WebSearchToolRenderer(tool store.ToolPart) trail.Node {
+	return WebSearchToolWidget(WebSearchToolWidgetProps{Tool: tool})
+}
+
 type DownloadToolWidgetProps struct {
 	Tool store.ToolPart
 }

@@ -36,6 +36,20 @@ A model identifier commonly has the form `provider/model`. Workspace resolution 
 
 When `${env:<VAR>}` is used, the gateway reads the workspace environment and falls back to the host environment; a missing or empty value produces a credential error. File credentials (`${file:<PATH>}`) must be readable and nonempty. Rotating a credential value or file changes the gateway fingerprint and rebuilds provider connections. Shipped token presets use `type: bearer` (e.g. `openai`, `typesafe`) or `type: api-key` with a vendor header (`X-Api-Key` for `anthropic`, `x-goog-api-key` for `google-genai`) and `token: "${env:<VAR>}"`, while `antigravity` uses `type: oauth2`.
 
+### Managed OAuth sign-in
+
+`oauth2` providers authenticate through daemon-managed PKCE flows; clients drive them over the daemon HTTP API rather than handling tokens themselves:
+
+| Method | Path | Daemon behavior |
+| --- | --- | --- |
+| `GET` | `/v1/providers` | Lists providers as `ProviderSummary` (`name`, `status`, `has_key`, `auth_type`, `account`, …). |
+| `POST` | `/v1/providers/{name}/auth` | Starts or resumes the PKCE flow and returns `ProviderAuthResponse` (`provider`, `auth_url`, `status`). |
+| `GET` | `/v1/providers/{name}/auth` | Current flow status: `idle`, `authorizing`, `authenticated`, `error`, or `signed-out`. |
+| `POST` | `/v1/providers/{name}/auth/callback` | Completes the waiting flow with a user-pasted redirect URL (`callbackUrl`: full URL, bare query string, or code alone). |
+| `DELETE` | `/v1/providers/{name}/auth` | Cancels any in-flight flow and removes stored credentials (`status: signed-out`, or `idle` when not signed in). |
+
+A flow stays open for five minutes after starting or after a client leaves its screen. Tokens persist under `$XDG_DATA_HOME/tasksmith/credentials/<provider>.json` (normally `~/.local/share/tasksmith/credentials/<provider>.json`) with owner-only permissions in a multi-account registry; the daemon refreshes tokens in the background and reloads workspaces when credentials change. Agents never read, write, or print these token files — sign-in, status, and logout belong to the user-facing auth surfaces.
+
 TaskSmith builds its workspace environment from the process environment and `.env` files: user configuration first, applicable ancestor files from outer to inner, workspace root, then current directory. Later layers override earlier values. Reference secrets through environment variables or files instead of embedding them in manifests or headers.
 
 ## Model entries

@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -188,4 +189,94 @@ func TestOAuthConfigFingerprintTracksAccountIdentity(t *testing.T) {
 	if fpSwitched := gwCfg.Fingerprint(); fpSwitched != fpAliceV1 {
 		t.Fatalf("expected fingerprint after switching back to alice to match alice's fingerprint: %s != %s", fpSwitched, fpAliceV1)
 	}
+}
+
+func TestDeleteProviderToken(t *testing.T) {
+	t.Run("MissingFileReportsNothingDeleted", func(t *testing.T) {
+		xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+		deleted, err := DeleteProviderToken("ghost", "")
+		if err != nil {
+			t.Fatalf("DeleteProviderToken on a missing file: %v", err)
+		}
+		if deleted {
+			t.Error("deleted = true for a provider with no credentials")
+		}
+	})
+
+	t.Run("FullLogoutRemovesCredentials", func(t *testing.T) {
+		xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+		tok := &oauth2.Token{AccessToken: "a1", RefreshToken: "r1", Expiry: time.Now().Add(time.Hour).UTC()}
+		if err := SaveProviderToken("twoprov", tok, "alice@example.com"); err != nil {
+			t.Fatalf("SaveProviderToken: %v", err)
+		}
+
+		deleted, err := DeleteProviderToken("twoprov", "")
+		if err != nil {
+			t.Fatalf("DeleteProviderToken: %v", err)
+		}
+		if !deleted {
+			t.Error("deleted = false after removing stored credentials")
+		}
+		if HasProviderToken("twoprov") {
+			t.Error("HasProviderToken still true after logout")
+		}
+		if path, err := ProviderTokenPath("twoprov"); err == nil {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("credential file %s survived a full logout", path)
+			}
+		}
+
+		if deleted, err := DeleteProviderToken("twoprov", ""); err != nil || deleted {
+			t.Errorf("second logout = (%t, %v), want (false, nil)", deleted, err)
+		}
+	})
+
+	t.Run("AccountLogoutReassignsActiveAccount", func(t *testing.T) {
+		xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+		alice := &oauth2.Token{AccessToken: "a1", RefreshToken: "r1", Expiry: time.Now().Add(time.Hour).UTC()}
+		bob := &oauth2.Token{AccessToken: "b1", RefreshToken: "r2", Expiry: time.Now().Add(2 * time.Hour).UTC()}
+		if err := SaveProviderToken("multiprov", alice, "alice@example.com"); err != nil {
+			t.Fatalf("SaveProviderToken(alice): %v", err)
+		}
+		if err := SaveProviderToken("multiprov", bob, "bob@example.com"); err != nil {
+			t.Fatalf("SaveProviderToken(bob): %v", err)
+		}
+		if err := SwitchProviderAccount("multiprov", "alice@example.com"); err != nil {
+			t.Fatalf("SwitchProviderAccount(alice): %v", err)
+		}
+
+		deleted, err := DeleteProviderToken("multiprov", "alice@example.com")
+		if err != nil {
+			t.Fatalf("DeleteProviderToken(account): %v", err)
+		}
+		if !deleted {
+			t.Error("deleted = false for a known account")
+		}
+
+		tok, email, err := LoadProviderToken("multiprov")
+		if err != nil {
+			t.Fatalf("LoadProviderToken after account logout: %v", err)
+		}
+		if email != "bob@example.com" || tok.AccessToken != "b1" {
+			t.Errorf("active account after logout = %s/%s, want bob@example.com/b1", email, tok.AccessToken)
+		}
+
+		if deleted, err := DeleteProviderToken("multiprov", "nobody@example.com"); err != nil || deleted {
+			t.Errorf("unknown account logout = (%t, %v), want (false, nil)", deleted, err)
+		}
+	})
+
+	t.Run("LastAccountLogoutRemovesFile", func(t *testing.T) {
+		xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+		tok := &oauth2.Token{AccessToken: "a1", RefreshToken: "r1", Expiry: time.Now().Add(time.Hour).UTC()}
+		if err := SaveProviderToken("lastprov", tok, "alice@example.com"); err != nil {
+			t.Fatalf("SaveProviderToken: %v", err)
+		}
+		if _, err := DeleteProviderToken("lastprov", "alice@example.com"); err != nil {
+			t.Fatalf("DeleteProviderToken(last account): %v", err)
+		}
+		if HasProviderToken("lastprov") {
+			t.Error("HasProviderToken still true after the last account was forgotten")
+		}
+	})
 }

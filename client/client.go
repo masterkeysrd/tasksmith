@@ -274,6 +274,38 @@ func (c *Client) GetProviderAuthStatus(ctx context.Context, provider string) (*a
 	return &out, nil
 }
 
+// CompleteProviderAuth finishes an in-flight provider OAuth flow with a
+// callback URL the user copied from their browser.
+func (c *Client) CompleteProviderAuth(ctx context.Context, provider string, req api.ProviderAuthCallbackRequest) (*api.ProviderAuthResponse, error) {
+	var out api.ProviderAuthResponse
+	path := fmt.Sprintf("/v1/providers/%s/auth/callback", url.PathEscape(provider))
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// LogoutProviderAuth cancels any in-flight OAuth flow for provider and removes
+// its persisted credentials.
+func (c *Client) LogoutProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
+	var out api.ProviderAuthResponse
+	path := fmt.Sprintf("/v1/providers/%s/auth", url.PathEscape(provider))
+	if err := c.doJSON(ctx, http.MethodDelete, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListProviders returns the built-in provider presets with their current
+// credential availability.
+func (c *Client) ListProviders(ctx context.Context) ([]api.ProviderSummary, error) {
+	var out []api.ProviderSummary
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/providers", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PreviewSession resolves a proposed draft session configuration without creating it.
 func (c *Client) PreviewSession(ctx context.Context, req api.PreviewSessionRequest) (*api.SessionPreview, error) {
 	if err := c.requireCWD(); err != nil {

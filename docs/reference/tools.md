@@ -1,6 +1,6 @@
 # Built-in Tools Reference
 
-TaskSmith provides 19 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, child subagent delegators, and interactive user prompts. Built-ins are documented below; command-backed custom tools declared as `*.tool.md` manifests and tools discovered from [MCP](manifests.md#10-mcp-server-manifest-mcpyaml) servers share the same registry, safety annotations, and permission pipeline, and are covered in [Custom Tool Execution Model](#4-custom-tool-execution-model) and [MCP Tool Execution Model](#6-mcp-tool-execution-model).
+TaskSmith provides 20 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, child subagent delegators, and interactive user prompts. Built-ins are documented below; command-backed custom tools declared as `*.tool.md` manifests and tools discovered from [MCP](manifests.md#10-mcp-server-manifest-mcpyaml) servers share the same registry, safety annotations, and permission pipeline, and are covered in [Custom Tool Execution Model](#4-custom-tool-execution-model) and [MCP Tool Execution Model](#6-mcp-tool-execution-model).
 
 ---
 
@@ -17,6 +17,7 @@ TaskSmith provides 19 core built-in system tools backed by virtualized OS sandbo
 | **`remove`** | `FS` | Mutating / Prompts in `default`, auto in `accept_edits` | Deletes a file within the workspace with safety checks. |
 | **`bash`** | `Proc` | Dangerous & Open-World / Prompts in `default` & `accept_edits` | Executes commands inside the sandbox with synchronous timeout or background task delegation. |
 | **`web_fetch`** | `Net` | Prompts in `default` unless allow rule exists | Fetches web documents via HTTP/HTTPS with body extraction. |
+| **`web_search`** | `Net` | Prompts in `default` unless allow rule exists | Runs a web search from the daemon host and returns ranked titles, URLs, and snippets with optional domain filters. |
 | **`download`** | `Net`, `FS` | Prompts in `default` unless allow rule exists | Downloads a remote HTTP/HTTPS resource directly into a workspace destination. |
 | **`tasks`** | `Proc`, `Session` | Safe / Auto-allowed | Lists, inspects, feeds input to, or terminates running background tasks. |
 | **`todos`** | `Session` | Safe / Auto-allowed | Manages the session progress checklist, tracking pending and completed items. |
@@ -46,7 +47,7 @@ Every built-in tool defines safety properties in its manifest:
 
 ### Behavior Across Permission Modes
 
-| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `load_rule`, `read_mcp_resource`, `invoke_agent`, `tool_search`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
+| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `load_rule`, `read_mcp_resource`, `invoke_agent`, `tool_search`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `web_search`, `download`) |
 | :--- | :--- | :--- | :--- |
 | **`default`** | Auto-allowed | Prompts user for approval | Prompts user for approval |
 | **`accept_edits`** | Auto-allowed | Auto-allowed (unified diff recorded) | Prompts user for approval |
@@ -356,7 +357,7 @@ When a command matches an `excludedCommands` pattern in `sandbox.json` (strict A
 
 ### `web_fetch`
 
-Fetches web documents over HTTP or HTTPS and returns decoded text content.
+Fetches web documents over HTTP or HTTPS and returns formatted text content (converting HTML to Markdown or plain text, and pretty-printing JSON and XML by default).
 
 - **Annotations**: `isReadOnly: true`, `isIdempotent: true`, `isDangerous: false`, `isOpenWorld: true`
 - **User Hint**: `"Fetch URL: %s"`
@@ -367,6 +368,7 @@ Fetches web documents over HTTP or HTTPS and returns decoded text content.
 | :--- | :--- | :--- | :--- |
 | `url` | string | **Yes** | Target HTTP or HTTPS URL to fetch. |
 | `headers` | map of strings | No | Optional HTTP request headers (e.g. `{"Accept": "application/json"}`). |
+| `format` | string | No | Output format: `markdown` (default — converts HTML to Markdown and pretty-prints JSON/XML), `text` (extracts plain text from HTML and pretty-prints JSON/XML), or `html` (returns the raw unmodified response body). |
 
 #### Output Fields
 
@@ -375,11 +377,44 @@ Fetches web documents over HTTP or HTTPS and returns decoded text content.
 | `url` | string | Normalized request URL. |
 | `status_code` | integer | HTTP response status code (e.g. 200). |
 | `content_type` | string | Response `Content-Type` header. |
-| `text` | string | Decoded text response body. |
+| `text` | string | Formatted or decoded text response body (subject to `format`). |
 
 ```json
 {
   "url": "https://raw.githubusercontent.com/masterkeysrd/tasksmith/main/README.md"
+}
+```
+
+---
+
+### `web_search`
+
+Runs a web search query and returns ranked result titles, URLs, and snippets. The query executes from the daemon host on its own HTTP client rather than the session's sandbox network client, so child-process network confinement (`NetworkPolicy`, allowlist proxy) is unaffected; the permission pipeline still gates every search. Follow up on a promising result with `web_fetch` to retrieve the full page.
+
+- **Annotations**: `isReadOnly: true`, `isIdempotent: false`, `isDangerous: false`, `isOpenWorld: true`
+- **User Hint**: `"Search the web: %s"`
+
+#### Input Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `query` | string | **Yes** | Search query. |
+| `allowed_domains` | array of strings | No | Optional host filter; only results whose host matches one of these domains are returned. A bare domain matches its subdomains; `*` wildcards are supported. |
+| `blocked_domains` | array of strings | No | Optional host filter; results whose host matches one of these domains are dropped. Takes precedence over `allowed_domains`. |
+| `limit` | integer | No | Maximum number of results to return. Defaults to 10, capped at 20. |
+
+#### Output Fields
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `query` | string | Normalized search query that was executed. |
+| `results` | array of `WebSearchResult` | Search results in ranking order; each item carries `title`, `url`, and optional `snippet`. |
+| `truncated` | boolean | `true` when the results page carried more results than the limit. |
+
+```json
+{
+  "query": "go language effective go",
+  "allowed_domains": ["go.dev"]
 }
 ```
 

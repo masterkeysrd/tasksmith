@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
 	"github.com/masterkeysrd/tasksmith/internal/core/hash"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/web"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 )
 
@@ -33,6 +34,11 @@ func (s *Std) Fetch(ctx context.Context, req FetchRequest) (*FetchResult, error)
 			return nil, fmt.Errorf("%w: %w", ErrInvalidArgument, err)
 		}
 		return nil, err
+	}
+
+	format, err := web.ParseFormat(req.Format)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
 
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
@@ -100,7 +106,7 @@ func (s *Std) Fetch(ctx context.Context, req FetchRequest) (*FetchResult, error)
 	contentType := resp.Header.Get("Content-Type")
 	var text string
 	if !isBinaryContent(data) {
-		text = string(data)
+		text = web.FormatContent(parsedURL.String(), contentType, data, format)
 	}
 
 	return &FetchResult{

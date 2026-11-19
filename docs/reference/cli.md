@@ -32,6 +32,11 @@ git diff | tasksmith -p "review this diff"
 | **`daemon stop`** | `tasksmith daemon stop` | Gracefully terminates a running Brain daemon via SIGTERM / shutdown API. |
 | **`daemon status`** | `tasksmith daemon status` | Checks daemon process health, build version, IPC socket connectivity, and active workspace runtimes. |
 | **`version`** | `tasksmith version` | Prints the client build version and, when reachable without spawning, the running daemon's version. |
+| **`auth login`** | `tasksmith auth login [provider] [--no-browser] [--paste]` | Signs in to an OAuth provider through the daemon's PKCE flow. Prints the authorization URL (and opens a browser unless `--no-browser` or `--paste`), then waits for the sign-in to settle. With no `[provider]`, resolves automatically when exactly one OAuth provider exists. `--paste` finishes by pasting the redirect URL on hosts where the browser cannot reach the daemon (SSH, headless). |
+| **`auth status`** | `tasksmith auth status [provider]` | With a provider name, prints `<provider>: <status> (<account>)`; with none, prints a `PROVIDER / AUTH / STATUS` table over all configured providers. |
+| **`auth logout`** | `tasksmith auth logout [provider]` | Removes the daemon-stored OAuth credentials for one provider and reports `Signed out of <provider>` or `<provider> was not signed in`. |
+
+All `auth` subcommands require a running daemon (`tasksmith daemon start`) and never spawn one.
 
 ### Global Flags
 
@@ -104,6 +109,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/tools`** | | *(none)* | Opens the interactive tools browser to inspect tool status, scope, safety annotations, and JSON schemas, and to reload workspace tools. See [Tools Browser](#tools-browser-tools). |
 | **`/mcp`** | `/mcps` | `[auth <name>\|restart <name>]` | With no subcommand, opens the interactive MCP browser to inspect servers, run prompts, attach resources, authorize, and restart. `auth` and `restart` act on one named server after a confirmation. See [MCP Browser](#mcp-browser-mcp). |
 | **`/setup`** | | *(none)* | Opens the interactive workspace onboarding and configuration wizard to reconfigure providers, scopes, permissions, tools, or MCP servers. |
+| **`/login`** | `/auth`, `/signin` | `[provider]` | Opens the provider sign-in screen to authorize an OAuth provider (e.g. Antigravity) through the daemon. With no provider, resolves automatically when exactly one OAuth provider exists. See [Provider Sign-In (`/login`)](#provider-sign-in-login). |
 | **`/statusline`** | `/status` | *(none)* | Opens the interactive status line editor to toggle, reorder, and compact the status line segments with a live preview; saves to `statusline.json`. See [Status Line Fields](#status-line-fields). |
 | **`/init`** | | *(none)* | Invokes the built-in `system:init` command to inspect codebase conventions and interactively generate or update `AGENTS.md`. |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
@@ -344,6 +350,18 @@ Allowed prompts and resources run immediately. A prohibited one opens `Prohibite
 | **`Enable in manifest`** | Permits the item in the manifest, refreshes the server, then runs it as an allowed item. |
 
 `Enable in manifest` is offered only when the manifest path is known and the server comes from workspace or project scope; a user- or builtin-scope server shows `Use once` alone, since rewriting it would edit files outside the project. Prohibited **tools** have no per-call override in either direction — the agent cannot be talked into one, and the CLI offers no `Use once` for them; only the manifest changes what tools a server exposes, which is why widening a tool happens from its [detail view](#mcp-tool-drill-down) rather than from this prompt. See [Tools & MCP Servers](../guides/tools-and-mcp.md#scoping-mcp-resources).
+
+### Provider Sign-In (`/login`)
+
+`/login [provider]` (aliases `/auth`, `/signin`) signs the session's daemon in to an OAuth model provider such as Antigravity. It starts the daemon's PKCE flow, opens the browser, and shows a `Signing in to <provider>` screen with the authorization URL, a paste field, and the same keybindings as [MCP Authorization](#mcp-authentication):
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `c` | Provider Sign-In | Copies the authorization URL. |
+| `Enter` | Provider Sign-In | Submits whatever the paste field holds (full address-bar URL, bare query string, or authorization code alone) to the waiting flow. |
+| `Esc` | Provider Sign-In | Leaves the sign-in screen; the daemon keeps the flow open for five more minutes, so finishing in the browser still signs in. |
+
+With no `[provider]` argument, the command resolves automatically when exactly one OAuth-capable provider is configured, and otherwise lists the candidates and asks for a name. Completion lists OAuth-capable providers. When the flow settles, the screen closes and the outcome lands in the conversation timeline (`Signed in to <provider> as <account>`, or an error naming the reason). Credentials persist at `~/.local/share/tasksmith/credentials/<provider>.json`; see the `auth` subcommands under [Subcommands](#subcommands) for signing in, checking status, or signing out from a shell.
 
 ---
 
@@ -681,6 +699,18 @@ session stream carrying the latest `ModelQuota` after every completed turn and w
 is rate limited, so clients keep the window fresh without polling. A rate-limited call's error
 is enriched with the fresh facts it can prove (e.g. `94% quota remaining · resets in 3h12m at
 18:40`) and never with an invented reset time.
+
+## Provider Auth HTTP Endpoints
+
+These endpoints drive the daemon-managed OAuth PKCE sign-in flow behind `tasksmith auth` and `/login`. Providers are addressed by name.
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/v1/providers` | Lists available and configured providers as `ProviderSummary` (`name`, `display_name`, `status`, `has_key`, `auth_type`, `auth_env`, `account`, `default_model`, `models`, `scope`). |
+| `POST` | `/v1/providers/{name}/auth` | Starts or resumes an OAuth flow for one provider and returns `ProviderAuthResponse` (`provider`, `auth_url`, `status`, `account`, `error`). |
+| `GET` | `/v1/providers/{name}/auth` | Returns the current `ProviderAuthResponse` for one provider; `status` is `idle`, `authorizing`, `authenticated`, `error`, or `signed-out`. |
+| `POST` | `/v1/providers/{name}/auth/callback` | Completes the sign-in in progress with a redirect URL the user copied from their browser. Body: `callbackUrl` — the full address-bar URL, a bare query string, or an authorization code alone. Returns the settled `ProviderAuthResponse`; `400` `bad_request` when the paste is malformed or no flow is open. |
+| `DELETE` | `/v1/providers/{name}/auth` | Removes stored OAuth credentials for one provider and cancels any in-flight flow. Returns `ProviderAuthResponse` with `status` `signed-out` when credentials were removed or `idle` when the provider was not signed in. |
 
 ## MCP HTTP Endpoints
 

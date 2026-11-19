@@ -121,6 +121,8 @@ Requests requiring tools, tool history, media, or a response schema fail when th
 
 Secret fields (`auth.token`, `auth.password`) use declarative WARP expressions (`${env:<VAR>}` or `${file:<PATH>}`). `${file:...}` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value, new file contents, or signing in or switching accounts on an `oauth2` provider — changes the gateway fingerprint and rebuilds provider connections.
 
+`oauth2` providers sign in through the daemon: `/login [provider]` in the REPL or `tasksmith auth login [provider]` from a shell (with `--paste` when the browser cannot reach the daemon's loopback callback), checked with `tasksmith auth status` and cleared with `tasksmith auth logout [provider]`. Tokens persist at `~/.local/share/tasksmith/credentials/<provider>.json`. See [CLI Reference — Provider Sign-In](./cli.md#provider-sign-in-login).
+
 ### Thinking Capability Fields
 
 Each entry under a model's `capabilities.thinking` declares one reasoning strategy and optionally the value to use when nothing overrides it.

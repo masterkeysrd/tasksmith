@@ -796,7 +796,7 @@ func TestFetchAndDownload(t *testing.T) {
 	if fetchRes.StatusCode != http.StatusOK || fetchRes.Headers["x-custom"] != "tasksmith" || fetchRes.Headers["x-echo-method"] != "POST" {
 		t.Fatalf("unexpected FetchResult: %+v", fetchRes)
 	}
-	if !strings.Contains(fetchRes.Text, `"ok":true`) || fetchRes.Truncated {
+	if !strings.Contains(fetchRes.Text, `"ok": true`) || fetchRes.Truncated {
 		t.Fatalf("unexpected FetchResult text: %+v", fetchRes)
 	}
 
@@ -873,6 +873,110 @@ func TestFetchAndDownload(t *testing.T) {
 	}
 	if _, err := s.Fetch(ctx, FetchRequest{URL: "ftp://example.com/file"}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for ftp scheme, got %v", err)
+	}
+}
+
+func TestFetchFormats(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/page":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(`<html><head><title>Doc</title></head><body><p>Hello <a href="/next">next</a></p></body></html>`))
+		case "/data.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"a":1,"b":2}`))
+		case "/feed.xml":
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<root><item>x</item></root>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	s, _, _ := newTestStd(t, true)
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		path   string
+		format string
+		want   string
+	}{
+		{
+			name:   "html default markdown",
+			path:   "/page",
+			format: "",
+			want:   "# Doc\n\nHello [next](" + srv.URL + "/next)",
+		},
+		{
+			name:   "html explicit markdown",
+			path:   "/page",
+			format: "markdown",
+			want:   "# Doc\n\nHello [next](" + srv.URL + "/next)",
+		},
+		{
+			name:   "html text",
+			path:   "/page",
+			format: "text",
+			want:   "Doc\n\nHello next",
+		},
+		{
+			name:   "html raw",
+			path:   "/page",
+			format: "html",
+			want:   `<html><head><title>Doc</title></head><body><p>Hello <a href="/next">next</a></p></body></html>`,
+		},
+		{
+			name:   "json pretty default",
+			path:   "/data.json",
+			format: "",
+			want:   "{\n  \"a\": 1,\n  \"b\": 2\n}",
+		},
+		{
+			name:   "json raw html format",
+			path:   "/data.json",
+			format: "html",
+			want:   `{"a":1,"b":2}`,
+		},
+		{
+			name:   "xml pretty default",
+			path:   "/feed.xml",
+			format: "",
+			want:   "<root>\n  <item>x</item>\n</root>",
+		},
+		{
+			name:   "xml raw html format",
+			path:   "/feed.xml",
+			format: "html",
+			want:   `<root><item>x</item></root>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := s.Fetch(ctx, FetchRequest{
+				URL:    srv.URL + tt.path,
+				Format: tt.format,
+			})
+			if err != nil {
+				t.Fatalf("Fetch failed: %v", err)
+			}
+			if res.Text != tt.want {
+				t.Errorf("Text = %q, want %q", res.Text, tt.want)
+			}
+		})
+	}
+
+	for _, dryRun := range []bool{true, false} {
+		_, err := s.Fetch(ctx, FetchRequest{
+			URL:    srv.URL + "/page",
+			Format: "invalid",
+			DryRun: dryRun,
+		})
+		if !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("DryRun=%t: expected ErrInvalidArgument for invalid format, got %v", dryRun, err)
+		}
 	}
 }
 

@@ -742,6 +742,8 @@ func toolActivityLabel(tc message.ToolCall) string {
 		return "Running command"
 	case "web_fetch", "download":
 		return "Fetching web content"
+	case "web_search":
+		return "Searching the web"
 	default:
 		return "Running " + tc.Name
 	}

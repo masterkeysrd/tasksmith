@@ -237,6 +237,83 @@ func HasProviderToken(provider string) bool {
 	return err == nil && tok != nil && (tok.AccessToken != "" || tok.RefreshToken != "")
 }
 
+// DeleteProviderToken removes the persisted OAuth credentials for provider.
+// When account is non-empty, only that account is forgotten from the
+// multi-account registry (and the active token when it was the active
+// account); otherwise the entire credential file is removed. It reports
+// whether any credential material was actually deleted.
+func DeleteProviderToken(provider string, account string) (bool, error) {
+	tokenPath, err := ProviderTokenPath(provider)
+	if err != nil {
+		return false, err
+	}
+
+	tokenStoreMu.Lock()
+	defer tokenStoreMu.Unlock()
+
+	data, err := os.ReadFile(tokenPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	if strings.TrimSpace(account) == "" {
+		if err := os.Remove(tokenPath); err != nil && !os.IsNotExist(err) {
+			return false, fmt.Errorf("gateway: remove token: %w", err)
+		}
+		return true, nil
+	}
+
+	var stored OAuthToken
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return false, fmt.Errorf("gateway: parse token: %w", err)
+	}
+
+	account = strings.TrimSpace(account)
+	if _, ok := stored.Accounts[account]; !ok {
+		return false, nil
+	}
+	delete(stored.Accounts, account)
+
+	if stored.Email == account {
+		stored.Email = ""
+		stored.AccessToken = ""
+		stored.RefreshToken = ""
+		stored.Expiry = time.Time{}
+		var next *OAuthAccount
+		for i := range stored.Accounts {
+			acc := stored.Accounts[i]
+			if next == nil || acc.LastUsedAt.After(next.LastUsedAt) {
+				next = &acc
+			}
+		}
+		if next != nil {
+			stored.Email = next.Email
+			stored.AccessToken = next.AccessToken
+			stored.RefreshToken = next.RefreshToken
+			stored.Expiry = next.Expiry
+		}
+	}
+
+	if stored.Email == "" && stored.AccessToken == "" && stored.RefreshToken == "" && len(stored.Accounts) == 0 {
+		if err := os.Remove(tokenPath); err != nil && !os.IsNotExist(err) {
+			return false, fmt.Errorf("gateway: remove token: %w", err)
+		}
+		return true, nil
+	}
+
+	out, err := json.MarshalIndent(stored, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("gateway: marshal token: %w", err)
+	}
+	if err := os.WriteFile(tokenPath, out, 0o600); err != nil {
+		return false, fmt.Errorf("gateway: write token: %w", err)
+	}
+	return true, nil
+}
+
 // oauthCredentialDigest returns a stable hex digest of the stored OAuth identity
 // for provider so Config.Fingerprint changes on sign-in, sign-out, or account
 // switch without rebuilding pooled gateways on routine access-token refreshes.

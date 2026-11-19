@@ -17,6 +17,7 @@ TaskSmith ships with core tools built directly into the daemon binary and execut
 | `grep` | `read` | `safe` | Search for regex patterns across files with line numbers and file path filtering. |
 | `glob` | `read` | `safe` | Find files matching wildcard patterns (e.g., `**/*.go`, `src/**/*.tsx`). |
 | `web_fetch`| `net` | `outside` | Fetch web pages or REST API endpoints, converting HTML into clean Markdown for context injection. |
+| `web_search` | `net` | `outside` | Run a web search from the daemon host and return ranked titles, URLs, and snippets with optional domain filters. |
 | `ask_question` | `read` | `safe` | Prompt the user with interactive single-select, multi-select, or free-form questionnaires. |
 | `todos` | `write` | `safe` | Create and update the session's structured task checklist. |
 | `load_skill` | `read` | `safe` | Load specialized domain instructions and runbooks from a workspace or built-in skill. |

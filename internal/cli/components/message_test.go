@@ -792,6 +792,84 @@ func TestWebFetchToolWidget(t *testing.T) {
 	}
 }
 
+func TestWebSearchToolWidget(t *testing.T) {
+	render := renderComponent(t, 100)
+
+	// Running
+	toolRunning := store.ToolPart{
+		ID:     "ws-1",
+		Status: store.ToolRunning,
+		Call: &api.ToolCall{
+			ID:   "ws-1",
+			Name: "web_search",
+			Args: map[string]any{"query": "go generics"},
+		},
+	}
+	got := render(MessageTool(MessageToolProps{Tool: toolRunning}))
+	if !strings.Contains(got, "○ Searching") || !strings.Contains(got, "go generics") {
+		t.Fatalf("unexpected web_search running output: %q", got)
+	}
+	if strings.Contains(got, "results)") {
+		t.Fatalf("running web_search should not show a result count: %q", got)
+	}
+
+	// Succeeded with results
+	out := api.WebSearchOutput{
+		Query: "go generics",
+		Results: []api.WebSearchResult{
+			{Title: "Go Generics", URL: "https://go.dev/blog/generics"},
+			{Title: "Proposal", URL: "https://github.com/golang/proposal"},
+		},
+	}
+	outData, _ := json.Marshal(out)
+	toolSucceeded := store.ToolPart{
+		ID:     "ws-2",
+		Status: store.ToolSucceeded,
+		Call:   toolRunning.Call,
+		Response: &api.Message{
+			ID:                "resp-ws",
+			Role:              api.RoleTool,
+			ToolCallID:        "ws-2",
+			Name:              "web_search",
+			StructuredContent: outData,
+		},
+	}
+	got = render(MessageTool(MessageToolProps{Tool: toolSucceeded}))
+	if !strings.Contains(got, "● Searched") || !strings.Contains(got, "(2 results)") {
+		t.Fatalf("unexpected web_search succeeded output: %q", got)
+	}
+
+	// Empty result set
+	emptyOut, _ := json.Marshal(api.WebSearchOutput{Query: "go generics"})
+	toolSucceeded.Response.StructuredContent = emptyOut
+	got = render(MessageTool(MessageToolProps{Tool: toolSucceeded}))
+	if !strings.Contains(got, "(0 results)") {
+		t.Fatalf("expected '(0 results)', got %q", got)
+	}
+
+	// Failed call renders with the normalized output query
+	failed := store.ToolPart{
+		ID:     "ws-3",
+		Status: store.ToolFailed,
+		Call: &api.ToolCall{
+			ID:   "ws-3",
+			Name: "web_search",
+			Args: map[string]any{"query": "  go   generics  "},
+		},
+		Response: &api.Message{
+			ID:         "resp-ws-fail",
+			Role:       api.RoleTool,
+			ToolCallID: "ws-3",
+			Name:       "web_search",
+			IsError:    true,
+		},
+	}
+	got = render(MessageTool(MessageToolProps{Tool: failed}))
+	if !strings.Contains(got, "● Searched") || !strings.Contains(got, "go   generics") {
+		t.Fatalf("unexpected failed web_search output: %q", got)
+	}
+}
+
 func TestDownloadToolWidget(t *testing.T) {
 	render := renderComponent(t, 100)
 

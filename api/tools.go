@@ -385,6 +385,7 @@ type ViewOutput struct {
 // WebFetchInput defines the input parameters for the web_fetch tool.
 type WebFetchInput struct {
 	URL     string            `json:"url" jsonschema:"Target HTTP or HTTPS URL to fetch."`
+	Format  string            `json:"format,omitempty" jsonschema:"Output format for fetched content: \"markdown\" (default, converts HTML to Markdown and pretty-prints JSON/XML), \"text\" (extracts plain text from HTML and pretty-prints JSON/XML), or \"html\" (returns the raw unmodified response body)."`
 	Headers map[string]string `json:"headers,omitempty" jsonschema:"Optional HTTP request headers."`
 }
 
@@ -394,6 +395,28 @@ type WebFetchOutput struct {
 	StatusCode  int    `json:"status_code" jsonschema:"HTTP response status code."`
 	ContentType string `json:"content_type,omitempty" jsonschema:"Response Content-Type header."`
 	Text        string `json:"text,omitempty" jsonschema:"Decoded text response body."`
+}
+
+// WebSearchResult represents an item in results.
+type WebSearchResult struct {
+	Title   string `json:"title" jsonschema:"Title of the search result."`
+	URL     string `json:"url" jsonschema:"Destination URL of the search result."`
+	Snippet string `json:"snippet,omitempty" jsonschema:"Short description or snippet of the search result."`
+}
+
+// WebSearchInput defines the input parameters for the web_search tool.
+type WebSearchInput struct {
+	Query          string   `json:"query" jsonschema:"Search query."`
+	AllowedDomains []string `json:"allowed_domains,omitempty" jsonschema:"Optional host filter; only results whose host matches one of these domains are returned."`
+	BlockedDomains []string `json:"blocked_domains,omitempty" jsonschema:"Optional host filter; results whose host matches one of these domains are dropped. Takes precedence over allowed_domains."`
+	Limit          int      `json:"limit,omitempty" jsonschema:"Maximum number of results to return (default 10, max 20)."`
+}
+
+// WebSearchOutput defines the structured output of the web_search tool.
+type WebSearchOutput struct {
+	Query     string            `json:"query" jsonschema:"Normalized search query that was executed."`
+	Results   []WebSearchResult `json:"results" jsonschema:"Search results in ranking order."`
+	Truncated bool              `json:"truncated,omitempty" jsonschema:"True when the results page carried more results than the limit."`
 }
 
 // WriteInput defines the input parameters for the write tool.

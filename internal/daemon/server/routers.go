@@ -228,9 +228,21 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/workspace/status", w.getWorkspaceStatus),
 		PostRoute("/v1/workspace/init", w.postWorkspaceInit),
 		PostRoute("/v1/providers/verify", w.postVerifyProvider),
+		GetRoute("/v1/providers", w.listProviders),
 		PostRoute("/v1/providers/{name}/auth", w.postProviderAuth),
 		GetRoute("/v1/providers/{name}/auth", w.getProviderAuthStatus),
+		PostRoute("/v1/providers/{name}/auth/callback", w.postProviderAuthCallback),
+		DeleteRoute("/v1/providers/{name}/auth", w.deleteProviderAuth),
 	}
+}
+
+func (w *workspaceRouter) listProviders(rw http.ResponseWriter, r *http.Request) {
+	providers, err := w.b.ListProviders(r.Context())
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, providers)
 }
 
 func (w *workspaceRouter) postProviderAuth(rw http.ResponseWriter, r *http.Request) {
@@ -246,6 +258,31 @@ func (w *workspaceRouter) postProviderAuth(rw http.ResponseWriter, r *http.Reque
 func (w *workspaceRouter) getProviderAuthStatus(rw http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	resp, err := w.b.GetProviderAuthStatus(r.Context(), name)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
+}
+
+func (w *workspaceRouter) postProviderAuthCallback(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	req, err := DecodeJSON[api.ProviderAuthCallbackRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	resp, err := w.b.CompleteProviderAuth(r.Context(), name, req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
+}
+
+func (w *workspaceRouter) deleteProviderAuth(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	resp, err := w.b.LogoutProviderAuth(r.Context(), name)
 	if err != nil {
 		WriteError(rw, err)
 		return

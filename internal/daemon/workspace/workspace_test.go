@@ -892,7 +892,7 @@ Builtin %s tool.
 var builtinToolNames = []string{
 	"ask_question", "bash", "download", "edit", "glob", "grep", "invoke_agent",
 	"load_rule", "load_skill", "ls", "manage_agents", "remove", "tasks", "todos",
-	"tool_search", "view", "web_fetch", "write",
+	"tool_search", "view", "web_fetch", "web_search", "write",
 }
 
 // TestCatalogValidationWarnings verifies that warp.Registry.Validate() failures

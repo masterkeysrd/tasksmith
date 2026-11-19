@@ -81,6 +81,7 @@ func NewRootCmd() *cobra.Command {
 		newExecCmd(rootOpts),
 		newDaemonCmd(rootOpts),
 		newVersionCmd(rootOpts),
+		newAuthCmd(rootOpts),
 		newSandboxRelayCmd(),
 	)
 

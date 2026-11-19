@@ -245,7 +245,16 @@ func DeriveGrantRules(toolName string, action api.ActionType, target string) []s
 				FormatRule(toolName, target),
 			})
 		}
-		return []string{FormatRule(toolName, target)}
+		// A non-URL net target (e.g. a web_search query) cannot be narrowed
+		// to a host, so always offer the tool-wide rule; the literal query is
+		// only useful — and only parseable — when it carries no parentheses.
+		if strings.ContainsAny(target, "()") {
+			return []string{FormatRule(toolName, "*")}
+		}
+		return deduplicateRules([]string{
+			FormatRule(toolName, target),
+			FormatRule(toolName, "*"),
+		})
 	default:
 		return []string{FormatRule(toolName, target)}
 	}
