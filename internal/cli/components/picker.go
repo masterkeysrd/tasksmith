@@ -129,7 +129,6 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	scheme := theme.UseTheme()
 	winSize := trail.UseWindowSize()
 
-	cursor, setCursor := kitex.UseState(initialCursor(props.Options))
 	filter, setFilter := kitex.UseState("")
 	modal, setModal := kitex.UseState(pickerModalState{mode: pickerModeBrowse})
 	notice, setNotice := kitex.UseState("")
@@ -159,47 +158,17 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		return filterOptions(props.Options, filter())
 	}, []any{props.Options, filter()})
 
-	// Reconcile cursor when filtered length shrinks
-	kitex.UseEffect(func() {
-		cur := cursor()
-		if len(filtered) == 0 {
-			if cur != 0 {
-				setCursor(0)
-			}
-		} else if cur >= len(filtered) {
-			setCursor(len(filtered) - 1)
-		}
-	}, []any{len(filtered)})
-
-	cur := cursor()
-	if len(filtered) > 0 {
-		if cur >= len(filtered) {
-			cur = len(filtered) - 1
-		}
-		if cur < 0 {
-			cur = 0
-		}
-	} else {
-		cur = 0
-	}
+	cursor := components.UseCursor(len(filtered), initialCursor(props.Options))
+	cur := cursor.Index
 
 	handleBrowseKey := func(ke event.KeyEvent) bool {
 		if notice() != "" {
 			setNotice("")
 		}
+		if cursor.HandleKey(ke) {
+			return true
+		}
 		switch {
-		case ke.MatchString("up", "k", "ctrl+p"):
-			if cur > 0 {
-				setCursor(cur - 1)
-			}
-			return true
-
-		case ke.MatchString("down", "j", "ctrl+n"):
-			if cur < len(filtered)-1 {
-				setCursor(cur + 1)
-			}
-			return true
-
 		case ke.MatchString("enter"):
 			if len(filtered) > 0 && props.OnSelect != nil {
 				props.OnSelect(filtered[cur])
@@ -330,7 +299,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 				OnChange: func(e event.Event) {
 					if ie, ok := e.(*event.InputEvent); ok {
 						setFilter(ie.Value)
-						setCursor(0)
+						cursor.Set(0)
 					}
 				},
 				OnKeyDown: func(e event.Event) {

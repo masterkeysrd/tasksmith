@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -109,9 +108,10 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 	}, []any{props.SubagentID})
 
 	rev, setRev := kitex.UseState(0)
-	scrollPos, setScrollPos := kitex.UseState(0)
-	autoScroll, setAutoScroll := kitex.UseState(true)
-	scrollBoxRef := kitex.UseRef[dom.Element](nil)
+	scroll := uicomponents.UseScroll(uicomponents.ScrollOptions{
+		FollowTail: true,
+		ExtraDeps:  []any{rev()},
+	})
 
 	kitex.UseEffectCleanup(func() func() {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -145,16 +145,6 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 		return cancel
 	}, []any{props.SubagentID})
 
-	kitex.UseLayoutEffect(func() {
-		if el := scrollBoxRef.Current; el != nil {
-			if autoScroll() {
-				el.ScrollTo(0, 9999)
-			} else {
-				el.ScrollTo(0, scrollPos())
-			}
-		}
-	}, []any{rev(), scrollPos(), autoScroll()})
-
 	var perms []api.PermissionRequest
 	var questions []api.QuestionRequest
 	if sub != nil {
@@ -169,7 +159,7 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 	}
 	hasPrompt := len(perms) > 0 || len(questions) > 0
 
-	trail.UseInput(func(_ string, k event.KeyEvent) {
+	trail.UseInput(func(input string, k event.KeyEvent) {
 		if k.MatchString("esc", "escape") {
 			if props.OnClose != nil {
 				props.OnClose()
@@ -177,44 +167,18 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 			return
 		}
 
-		if k.MatchString("pgup", "ctrl+u", "b", "ctrl+b") {
-			setAutoScroll(false)
-			cur := scrollPos()
-			if cur > 8 {
-				setScrollPos(cur - 8)
-			} else {
-				setScrollPos(0)
+		if !hasPrompt {
+			if scroll.HandleKey(input, k) {
+				return
 			}
-			return
-		}
-		if k.MatchString("pgdown", "ctrl+d", "f", "ctrl+f") {
-			setScrollPos(scrollPos() + 8)
+			if k.MatchString("x") && sub != nil && sub.Status != api.StatusIdle {
+				_ = store.KillSubagent(props.SubagentID)
+			}
 			return
 		}
 
-		if !hasPrompt {
-			switch {
-			case k.MatchString("up", "k", "ctrl+p"):
-				setAutoScroll(false)
-				cur := scrollPos()
-				if cur > 0 {
-					setScrollPos(cur - 1)
-				}
-			case k.MatchString("down", "j", "ctrl+n"):
-				setScrollPos(scrollPos() + 1)
-			case k.MatchString("space"):
-				setScrollPos(scrollPos() + 8)
-			case k.MatchString("home", "g"):
-				setAutoScroll(false)
-				setScrollPos(0)
-			case k.MatchString("end", "G"):
-				setAutoScroll(true)
-				setScrollPos(9999)
-			case k.MatchString("x"):
-				if sub != nil && sub.Status != api.StatusIdle {
-					_ = store.KillSubagent(props.SubagentID)
-				}
-			}
+		if k.MatchString("pgup", "ctrl+u", "b", "ctrl+b", "pgdown", "ctrl+d", "f", "ctrl+f") {
+			scroll.HandleKey(input, k)
 		}
 	})
 
@@ -264,7 +228,7 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 			Style: style.S().Foreground(scheme.Color.Text.Secondary),
 		}, trail.Text(" · worktree")))
 	}
-	if !autoScroll() && scrollPos() > 0 {
+	if !scroll.AutoScroll && scroll.Pos > 0 {
 		headerChildren = append(headerChildren, trail.Span(trail.SpanProps{
 			Style: style.S().Foreground(scheme.Color.Text.Secondary),
 		}, trail.Text(" [scrolled up]")))
@@ -304,7 +268,7 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 	}
 
 	chatBox := trail.Box(trail.BoxProps{
-		Ref: scrollBoxRef,
+		Ref: scroll.Ref,
 		Style: style.S().
 			MaxHeight(style.Cells(18)).
 			OverflowY(style.OverflowAuto).

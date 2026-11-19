@@ -17,11 +17,21 @@ transcripts, or the daemon belongs in `cli/components`.
 | Component | Kind | Props that matter |
 | --- | --- | --- |
 | `OptionList` | `trail.FC` | `Options []Option`, `Selected int`, `MaxVisible`, `Columns []Column`, `EmptyText`, `Styles *OptionListStyles`, `GroupLabel func(Option) string` |
+| `ActionMenu` | `trail.FC` | `Items []ActionMenuItem` (`ID`, `Label`, `Shortcut`, `Badge`, `BadgeStyle`), `InitialIndex`, `Selected *int`, `Numbered`, `Indent`, `Disabled`, `UnselectedStyle`, `OnChange`, `OnSelect` |
+| `ScrollViewer` | `trail.FCC` | `Header []trail.Node`, `HeaderMarginBottom`, `Meta []trail.Node`, `Markdown`, `EmptyText`, `InitialScroll`, `OnScroll`, `MaxHeight`, `OuterStyle`, `ViewportStyle`, `Disabled`, `FollowTail`, `ExtraDeps`, `Actions []ScrollViewerAction`, `Bindings`, `OnClose`, variadic `Children` |
 | `Autocomplete` | `trail.FC` | `State AutocompleteState`, `Views map[string]AutocompleteView`, `Bindings []KeyBinding` |
 | `KeyboardHint` | `trail.FC` | `Bindings []KeyBinding`; renders `nil` when empty |
 | `Markdown` | `kitex.FC` | `Source`, `Style`, `PlainCodeBlocks`, `OnAttachmentClick func(refType, rawValue string)`, `IsDirectory func(path string) bool` |
 | `CodeBlock` | `kitex.FC` | `Code`, `Lang`, `Style`, `HideHeader`, `ShowLineNumbers`, `StartLine`, `Compact`, `Wrap`, `GutterMinWidth` |
 | `Button` | `kitex.FCC` | `Key`, `Variant`, `Color`, `Disabled`, `Active`, `OnClick` |
+
+Hooks and navigation helpers in `internal/ui/components`:
+
+| Helper | Signature / Purpose |
+| --- | --- |
+| `UseCursor` | `UseCursor(count, initial int) Cursor` — bounded list cursor (`Index`, `Set`, `Move`, `HandleKey` for `up`/`k`/`ctrl+p`, `down`/`j`/`ctrl+n`) |
+| `StepCursor` / `ClampCursor` | Stateless cursor bounds and key-step helpers for state structs (e.g. multi-step forms) |
+| `UseScroll` | `UseScroll(ScrollOptions) ScrollState` — vertical scroll state, `ScrollTo` layout sync, `FollowTail`, `PageOnly`, `ExtraDeps`, and `HandleKey` |
 
 Supporting types:
 
@@ -63,6 +73,11 @@ Notes that save time:
   non-nil `Icon` takes precedence over `CellNodes[0]`.
 - `Markdown` renders `@file:` / `@sym:` / `@skill:` pills; they become static badges unless
   `OnAttachmentClick` is set.
+- Reach for `ActionMenu` for embedded numbered/shortcut menus with aligned badges (instead of
+  looping rows + `UseInput` manually), and `ScrollViewer` (passing custom body nodes as variadic
+  children since it is `trail.FCC`) for scrollable Markdown/inspector views. For custom composite
+  scroll panes that also host prompts or menus, use `UseScroll` (`PageOnly: true` or `FollowTail: true`)
+  and `UseCursor`.
 
 ## `internal/cli/components`
 

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -111,49 +110,10 @@ type ruleMarkdownProps struct {
 }
 
 var ruleMarkdownViewer = trail.FC("RuleMarkdownViewer", func(props ruleMarkdownProps) trail.Node {
-	scrollPos, setScrollPos := kitex.UseState(0)
-	scrollBoxRef := kitex.UseRef[dom.Element](nil)
-
-	kitex.UseLayoutEffect(func() {
-		if el := scrollBoxRef.Current; el != nil {
-			el.ScrollTo(0, scrollPos())
-		}
-	}, []any{scrollPos()})
-
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape"):
-			if props.onClose != nil {
-				props.onClose()
-			}
-		case k.MatchString("enter"):
-			store.RemoveSlot(props.slotID)
-			store.Send("@rule:" + props.rule.Name + " ")
-		case k.MatchString("up", "k", "ctrl+p"):
-			cur := scrollPos()
-			if cur > 0 {
-				setScrollPos(cur - 1)
-			}
-		case k.MatchString("down", "j", "ctrl+n"):
-			setScrollPos(scrollPos() + 1)
-		case k.MatchString("pgup", "b", "ctrl+u", "ctrl+b"):
-			cur := scrollPos()
-			if cur > 8 {
-				setScrollPos(cur - 8)
-			} else {
-				setScrollPos(0)
-			}
-		case k.MatchString("pgdown", "space", "f", "ctrl+d", "ctrl+f"):
-			setScrollPos(scrollPos() + 8)
-		case k.MatchString("home", "g"):
-			setScrollPos(0)
-		case k.MatchString("end", "G"):
-			setScrollPos(9999)
-		}
-	})
-
 	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
+	outerStyle := style.S().Border(
+		style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default),
+	)
 
 	scope := RuleScope(props.rule)
 	estTokens := props.rule.Tokens
@@ -167,69 +127,48 @@ var ruleMarkdownViewer = trail.FC("RuleMarkdownViewer", func(props ruleMarkdownP
 	metaStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
 	descStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
 
-	var children []trail.Node
-
 	headerItems := []trail.Node{
 		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(fmt.Sprintf("Rule: %s  ", props.rule.Name))),
 		trail.Span(trail.SpanProps{Style: scopeBadgeStyle}, trail.Text(fmt.Sprintf("[%s]  ", scope))),
 		trail.Span(trail.SpanProps{Style: descStyle}, trail.Text(fmt.Sprintf("(est. %s)", tokStr))),
 	}
-	if cur := scrollPos(); cur > 0 {
-		headerItems = append(headerItems, trail.Span(trail.SpanProps{Style: descStyle}, trail.Text(fmt.Sprintf("  •  line +%d", cur))))
-	}
-	headerLine := trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
-	}, headerItems...)
-	children = append(children, headerLine)
 
+	var meta []trail.Node
 	if props.rule.Description != "" {
-		children = append(children, trail.Span(trail.SpanProps{Style: descStyle}, trail.Text(props.rule.Description)))
+		meta = append(meta, trail.Span(trail.SpanProps{Style: descStyle}, trail.Text(props.rule.Description)))
 	}
 	if props.rule.Priority != 0 {
-		children = append(children, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text(fmt.Sprintf("Priority: %d", props.rule.Priority))))
+		meta = append(meta, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text(fmt.Sprintf("Priority: %d", props.rule.Priority))))
 	}
-	children = append(children, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text("Triggers: "+ruleTriggersSummary(props.rule))))
+	meta = append(meta, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text("Triggers: "+ruleTriggersSummary(props.rule))))
 	if props.rule.Triggers.UseWhen != "" {
-		children = append(children, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text("When to use: "+props.rule.Triggers.UseWhen)))
+		meta = append(meta, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text("When to use: "+props.rule.Triggers.UseWhen)))
 	}
 
-	var mdContent trail.Node
-	if strings.TrimSpace(props.rule.Instructions) != "" {
-		mdContent = uicomponents.Markdown(uicomponents.MarkdownProps{
-			Source: props.rule.Instructions,
-		})
-	} else {
-		mdContent = trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Muted),
-		}, trail.Text("(no instructions defined for this rule)"))
-	}
-
-	scrollBoxStyle := style.S().
-		Width(style.Percent(100)).
-		MaxHeight(style.Cells(18)).
-		OverflowY(style.OverflowAuto).
-		ScrollbarY(true)
-
-	children = append(children, trail.Box(trail.BoxProps{
-		Ref:   scrollBoxRef,
-		Style: scrollBoxStyle,
-	}, mdContent))
-
-	children = append(children, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
+	return uicomponents.ScrollViewer(uicomponents.ScrollViewerProps{
+		Header:             headerItems,
+		HeaderMarginBottom: 1,
+		Meta:               meta,
+		Markdown:           props.rule.Instructions,
+		EmptyText:          "(no instructions defined for this rule)",
+		OuterStyle:         &outerStyle,
+		OnClose:            props.onClose,
+		Actions: []uicomponents.ScrollViewerAction{
+			{
+				Keys: []string{"enter"},
+				Handler: func() {
+					store.RemoveSlot(props.slotID)
+					store.Send("@rule:" + props.rule.Name + " ")
+				},
+			},
+		},
 		Bindings: []uicomponents.KeyBinding{
 			{Key: "↑/↓ or j/k", Label: "Scroll"},
 			{Key: "pgup/pgdn", Label: "Page"},
 			{Key: "esc", Label: "Return to rules"},
 			{Key: "enter", Label: "Attach rule"},
 		},
-	}))
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	}, children...)
+	})
 })
 
 type emptyRulesViewProps struct {

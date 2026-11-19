@@ -47,29 +47,16 @@ type planReviewState struct {
 // with a toggleable scrollable Markdown plan viewer.
 var PlanReviewPrompt = trail.FC("PlanReviewPrompt", func(props PlanReviewPromptProps) trail.Node {
 	scheme := theme.UseTheme()
-	winSize := trail.UseWindowSize()
 	state, setState := kitex.UseState(planReviewState{})
 	feedbackRef := kitex.UseRef[dom.Element](nil)
-	scrollBoxRef := kitex.UseRef[dom.Element](nil)
 
 	s := state()
 	req := props.Request
-
-	viewerMaxHeight := 18
-	if winSize.Height > 0 {
-		viewerMaxHeight = max(10, min(28, winSize.Height-6))
-	}
 
 	trail.UseFocus(feedbackRef, trail.FocusOptions{
 		AutoFocus: true,
 		IsActive:  s.editing && !s.submitting,
 	})
-
-	kitex.UseLayoutEffect(func() {
-		if el := scrollBoxRef.Current; el != nil {
-			el.ScrollTo(0, s.scrollPos)
-		}
-	}, []any{s.viewing, s.scrollPos})
 
 	submit := func(selectedID, feedback string, canceled bool) {
 		if props.OnSubmit == nil || s.submitting {
@@ -105,39 +92,7 @@ var PlanReviewPrompt = trail.FC("PlanReviewPrompt", func(props PlanReviewPromptP
 
 	trail.UseInput(func(input string, k event.KeyEvent) {
 		cur := state()
-		if cur.submitting || cur.editing {
-			return
-		}
-		if cur.viewing {
-			switch {
-			case input == "p" || input == "P" || input == "q" || k.MatchString("p", "q", "esc", "escape", "enter"):
-				cur.viewing = false
-				setState(cur)
-			case k.MatchString("up", "k", "ctrl+p"):
-				if cur.scrollPos > 0 {
-					cur.scrollPos--
-					setState(cur)
-				}
-			case k.MatchString("down", "j", "ctrl+n"):
-				cur.scrollPos++
-				setState(cur)
-			case k.MatchString("pgup", "b", "ctrl+u", "ctrl+b"):
-				if cur.scrollPos > 8 {
-					cur.scrollPos -= 8
-				} else {
-					cur.scrollPos = 0
-				}
-				setState(cur)
-			case input == " " || k.MatchString("pgdown", "space", "f", "ctrl+d", "ctrl+f"):
-				cur.scrollPos += 8
-				setState(cur)
-			case input == "G" || k.MatchString("end"):
-				cur.scrollPos = 9999
-				setState(cur)
-			case input == "g" || k.MatchString("home"):
-				cur.scrollPos = 0
-				setState(cur)
-			}
+		if cur.submitting || cur.editing || cur.viewing {
 			return
 		}
 		switch {
@@ -147,36 +102,6 @@ var PlanReviewPrompt = trail.FC("PlanReviewPrompt", func(props PlanReviewPromptP
 			setState(cur)
 		case k.MatchString("esc", "escape"):
 			submit("", "", true)
-		case k.MatchString("up", "k", "ctrl+p"):
-			if cur.cursor > 0 {
-				cur.cursor--
-				setState(cur)
-			}
-		case k.MatchString("down", "j", "ctrl+n"):
-			if cur.cursor < len(planReviewOptions)-1 {
-				cur.cursor++
-				setState(cur)
-			}
-		case input == "1":
-			submit(planReviewOptions[0].id, "", false)
-		case input == "2":
-			submit(planReviewOptions[1].id, "", false)
-		case input == "3":
-			submit(planReviewOptions[2].id, "", false)
-		case input == "4" || input == "r" || input == "R" || k.MatchString("r"):
-			cur.cursor = 3
-			cur.editing = true
-			cur.err = ""
-			setState(cur)
-		case k.MatchString("enter"):
-			opt := planReviewOptions[cur.cursor]
-			if opt.id == "keep_planning" {
-				cur.editing = true
-				cur.err = ""
-				setState(cur)
-				return
-			}
-			submit(opt.id, "", false)
 		}
 	})
 
@@ -204,37 +129,32 @@ var PlanReviewPrompt = trail.FC("PlanReviewPrompt", func(props PlanReviewPromptP
 			trail.Span(trail.SpanProps{Style: mutedStyle}, trail.Text(fmt.Sprintf("  (%d lines)", lineCount))),
 		)
 	}
-	if s.viewing && s.scrollPos > 0 {
-		headerNodes = append(headerNodes,
-			trail.Span(trail.SpanProps{Style: mutedStyle}, trail.Text(fmt.Sprintf("  •  line +%d", s.scrollPos))),
-		)
-	}
 
-	children := []trail.Node{
-		trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow).Width(style.Percent(100))}, headerNodes...),
-	}
-
+	var children []trail.Node
 	if s.viewing {
-		var previewNode trail.Node
-		if hasContent {
-			previewNode = components.Markdown(components.MarkdownProps{Source: planContent})
-		} else {
-			previewNode = trail.Span(trail.SpanProps{Style: mutedStyle}, trail.Text("(empty plan file)"))
+		closeViewer := func() {
+			cur := state()
+			cur.viewing = false
+			setState(cur)
 		}
-
 		previewBorder := style.SingleBorder().Top(true).Bottom(true).Left(false).Right(false).Color(scheme.Color.Border.Default)
-		previewBox := trail.Box(trail.BoxProps{
-			Ref: scrollBoxRef,
-			Style: style.S().
-				Width(style.Percent(100)).
-				MaxHeight(style.Cells(viewerMaxHeight)).
-				OverflowY(style.OverflowAuto).
-				ScrollbarY(true).
-				Border(previewBorder).
-				Margin(1, 0),
-		}, previewNode)
-
-		children = append(children, previewBox, components.KeyboardHint(components.KeyboardHintProps{
+		viewportStyle := style.S().Border(previewBorder).Margin(1, 0)
+		children = append(children, components.ScrollViewer(components.ScrollViewerProps{
+			Header:        headerNodes,
+			Markdown:      planContent,
+			EmptyText:     "(empty plan file)",
+			InitialScroll: s.scrollPos,
+			OnScroll: func(pos int) {
+				cur := state()
+				cur.scrollPos = pos
+				setState(cur)
+			},
+			ViewportStyle: &viewportStyle,
+			Disabled:      s.submitting,
+			OnClose:       closeViewer,
+			Actions: []components.ScrollViewerAction{
+				{Keys: []string{"p", "P", "q", "enter"}, Handler: closeViewer},
+			},
 			Bindings: []components.KeyBinding{
 				{Key: "↑/↓ or j/k", Label: "Scroll"},
 				{Key: "pgup/pgdn", Label: "Page"},
@@ -243,24 +163,48 @@ var PlanReviewPrompt = trail.FC("PlanReviewPrompt", func(props PlanReviewPromptP
 			},
 		}))
 	} else {
-		children = append(children, trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow).Width(style.Percent(100)).Margin(1, 0),
-		},
-			trail.Span(trail.SpanProps{Style: optionStyle}, trail.Text("Approve implementation plan?")),
-			trail.Span(trail.SpanProps{Style: mutedStyle}, trail.Text("  (press p to view full plan)")),
-		))
+		children = append(children,
+			trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow).Width(style.Percent(100))}, headerNodes...),
+			trail.Box(trail.BoxProps{
+				Style: style.S().FlexDirection(style.FlexRow).Width(style.Percent(100)).Margin(1, 0),
+			},
+				trail.Span(trail.SpanProps{Style: optionStyle}, trail.Text("Approve implementation plan?")),
+				trail.Span(trail.SpanProps{Style: mutedStyle}, trail.Text("  (press p to view full plan)")),
+			),
+		)
 
+		menuItems := make([]components.ActionMenuItem, len(planReviewOptions))
 		for i, opt := range planReviewOptions {
-			prefix := "  "
-			rowStyle := optionStyle
-			if i == s.cursor {
-				prefix = "❯ "
-				rowStyle = selectedStyle
+			item := components.ActionMenuItem{
+				ID:    opt.id,
+				Label: opt.label,
 			}
-			children = append(children, trail.Box(trail.BoxProps{Style: style.S().Width(style.Percent(100))},
-				trail.Span(trail.SpanProps{Style: rowStyle}, trail.Text(fmt.Sprintf("%s%d. %s", prefix, i+1, opt.label))),
-			))
+			if opt.id == "keep_planning" {
+				item.Shortcut = "r"
+			}
+			menuItems[i] = item
 		}
+		children = append(children, components.ActionMenu(components.ActionMenuProps{
+			Items:    menuItems,
+			Selected: &s.cursor,
+			Numbered: true,
+			Disabled: s.editing || s.submitting,
+			OnChange: func(index int) {
+				cur := state()
+				cur.cursor = index
+				setState(cur)
+			},
+			OnSelect: func(_ int, item components.ActionMenuItem) {
+				if item.ID == "keep_planning" {
+					cur := state()
+					cur.editing = true
+					cur.err = ""
+					setState(cur)
+					return
+				}
+				submit(item.ID, "", false)
+			},
+		}))
 
 		if s.editing {
 			children = append(children, trail.Box(trail.BoxProps{

@@ -56,7 +56,6 @@ var StatusLineEditor = trail.FC("StatusLineEditor", func(slotID string) trail.No
 
 	original := kitex.UseRef(store.GetStatusLine())
 	draft, setDraft := kitex.UseState(original.Current)
-	cursor, setCursor := kitex.UseState(0)
 
 	// Apply the draft live so the real status line previews the edits.
 	kitex.UseEffect(func() {
@@ -75,6 +74,10 @@ var StatusLineEditor = trail.FC("StatusLineEditor", func(slotID string) trail.No
 		return append(slices.Clone(enabled), disabled...)
 	}
 
+	all := rows()
+	cursor := uicomponents.UseCursor(len(all), 0)
+	cur := cursor.Index
+
 	labelFor := func(id store.StatusLineSegmentID) (string, string) {
 		for _, seg := range statusLineSegmentLabels {
 			if seg.id == id {
@@ -85,21 +88,14 @@ var StatusLineEditor = trail.FC("StatusLineEditor", func(slotID string) trail.No
 	}
 
 	trail.UseInput(func(_ string, k event.KeyEvent) {
-		all := rows()
-		cur := min(cursor(), len(all)-1)
+		if cursor.HandleKey(k) {
+			return
+		}
 		switch {
 		case k.MatchString("esc", "escape"):
 			_, _ = store.ApplyStatusLine(original.Current)
 			store.RemoveSlot(slotID)
 			store.AppendCommandOutput("/statusline", "Exited /statusline without saving.")
-		case k.MatchString("up", "k"):
-			if cur > 0 {
-				setCursor(cur - 1)
-			}
-		case k.MatchString("down", "j"):
-			if cur < len(all)-1 {
-				setCursor(cur + 1)
-			}
 		case k.MatchString("space", "enter", "t"):
 			id := all[cur]
 			cfg := draft()
@@ -112,14 +108,14 @@ var StatusLineEditor = trail.FC("StatusLineEditor", func(slotID string) trail.No
 				break
 			}
 			setDraft(cfg)
-			setCursor(min(cur, len(statusLineSegmentLabels)-1))
+			cursor.Set(min(cur, len(statusLineSegmentLabels)-1))
 		case k.MatchString("left", "h"):
 			cfg := draft()
 			if i := slices.Index(cfg.Segments, all[cur]); i > 0 {
 				cfg.Segments = slices.Clone(cfg.Segments)
 				cfg.Segments[i-1], cfg.Segments[i] = cfg.Segments[i], cfg.Segments[i-1]
 				setDraft(cfg)
-				setCursor(cur - 1)
+				cursor.Move(-1)
 			}
 		case k.MatchString("right", "l"):
 			cfg := draft()
@@ -127,7 +123,7 @@ var StatusLineEditor = trail.FC("StatusLineEditor", func(slotID string) trail.No
 				cfg.Segments = slices.Clone(cfg.Segments)
 				cfg.Segments[i], cfg.Segments[i+1] = cfg.Segments[i+1], cfg.Segments[i]
 				setDraft(cfg)
-				setCursor(cur + 1)
+				cursor.Move(1)
 			}
 		case k.MatchString("c"):
 			cfg := draft()
@@ -154,9 +150,6 @@ var StatusLineEditor = trail.FC("StatusLineEditor", func(slotID string) trail.No
 	disabledStyle := style.S().Foreground(scheme.Color.Text.Muted)
 	cursorStyle := style.S().Foreground(scheme.Color.Icon.Primary)
 	compactStyle := style.S().Foreground(scheme.Color.Mode.Plan)
-
-	all := rows()
-	cur := min(cursor(), len(all)-1)
 
 	var nodes []trail.Node
 	nodes = append(nodes, trail.Box(trail.BoxProps{Style: titleStyle},

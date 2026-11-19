@@ -168,8 +168,7 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 
 	tab, setTab := kitex.UseState(sandboxTabPolicy)
 	scopeIndex, setScopeIndex := kitex.UseState(0) // 0: Project, 1: Global
-	cursor, setCursor := kitex.UseState(0)
-	offset, setOffset := kitex.UseState(0) // Tab 3 viewport scroll position
+	offset, setOffset := kitex.UseState(0)         // Tab 3 viewport scroll position
 	inInput, setInInput := kitex.UseState(false)
 	editing, setEditing := kitex.UseState("") // non-empty while editing a pattern in place
 	inputText, setInputText := kitex.UseState("")
@@ -199,18 +198,13 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 
 	policyRows := sandboxPolicyRows()
 
-	// clampCursor keeps the cursor inside the active tab's row count.
+	// UseCursor clamps the cursor to the active tab's row count.
 	maxRows := len(policyRows)
 	if tab() == sandboxTabExcluded {
 		maxRows = len(excluded)
 	}
-	cur := cursor()
-	if tab() != sandboxTabResolved && maxRows > 0 && cur >= maxRows {
-		cur = maxRows - 1
-	}
-	if cur < 0 {
-		cur = 0
-	}
+	cursor := components.UseCursor(maxRows, 0)
+	cur := cursor.Index
 
 	var resolvedContent []sandboxLine
 	if tab() == sandboxTabResolved {
@@ -243,7 +237,7 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 			} else {
 				setTab(sandboxTabResolved)
 			}
-			setCursor(0)
+			cursor.Set(0)
 			setOffset(0)
 			clearError()
 		case k.MatchString("tab", "right"):
@@ -252,22 +246,22 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 			} else {
 				setTab(sandboxTabPolicy)
 			}
-			setCursor(0)
+			cursor.Set(0)
 			setOffset(0)
 			clearError()
 		case k.MatchString("1"):
 			setTab(sandboxTabPolicy)
-			setCursor(0)
+			cursor.Set(0)
 			setOffset(0)
 			clearError()
 		case k.MatchString("2"):
 			setTab(sandboxTabExcluded)
-			setCursor(0)
+			cursor.Set(0)
 			setOffset(0)
 			clearError()
 		case k.MatchString("3"):
 			setTab(sandboxTabResolved)
-			setCursor(0)
+			cursor.Set(0)
 			setOffset(0)
 			clearError()
 		case tab() != sandboxTabResolved && k.MatchString("s"):
@@ -276,19 +270,19 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 			} else {
 				setScopeIndex(0)
 			}
-			setCursor(0)
+			cursor.Set(0)
 			clearError()
 		case k.MatchString("up", "k", "ctrl+p"):
 			if tab() == sandboxTabResolved {
 				setOffset(max(0, pos-1))
-			} else if cur > 0 {
-				setCursor(cur - 1)
+			} else {
+				cursor.HandleKey(k)
 			}
 		case k.MatchString("down", "j", "ctrl+n"):
 			if tab() == sandboxTabResolved {
 				setOffset(min(maxOffset, pos+1))
-			} else if cur < maxRows-1 {
-				setCursor(cur + 1)
+			} else {
+				cursor.HandleKey(k)
 			}
 		case tab() == sandboxTabResolved && k.MatchString("pgup"):
 			setOffset(max(0, pos-viewport))

@@ -29,6 +29,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -2012,8 +2013,8 @@ func TestMCPMenuDigit(t *testing.T) {
 		{name: "no text", key: key.Key{}, want: 0},
 	}
 	for _, tt := range tests {
-		if got := mcpMenuDigit(tt.key); got != tt.want {
-			t.Errorf("%s: mcpMenuDigit = %d, want %d", tt.name, got, tt.want)
+		if got := uicomponents.MenuDigit(tt.key); got != tt.want {
+			t.Errorf("%s: MenuDigit = %d, want %d", tt.name, got, tt.want)
 		}
 	}
 }

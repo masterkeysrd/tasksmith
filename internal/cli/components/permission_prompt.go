@@ -21,12 +21,6 @@ type PermissionPromptProps struct {
 	OnDecision func(req api.PermissionRequest, dec api.PermissionDecision)
 }
 
-type permissionOptionRow struct {
-	label    string
-	scopeTag string
-	decision api.PermissionDecision
-}
-
 func compactSingleLine(s string, maxRunes int) string {
 	return format.CompactSingleLine(s, maxRunes)
 }
@@ -35,7 +29,6 @@ func compactSingleLine(s string, maxRunes int) string {
 var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptProps) trail.Node {
 	scheme := theme.UseTheme()
 
-	cursor, setCursor := kitex.UseState(0)
 	scope, setScope := kitex.UseState(api.ScopeSession)
 	feedbackMode, setFeedbackMode := kitex.UseState(false)
 	feedbackText, setFeedbackText := kitex.UseState("")
@@ -56,15 +49,7 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 	}
 
 	totalRows := 1 + len(patterns) + 1
-
-	// Ensure cursor is within bounds
-	cur := cursor()
-	if cur >= totalRows {
-		cur = totalRows - 1
-	}
-	if cur < 0 {
-		cur = 0
-	}
+	cursor := components.UseCursor(totalRows, 0)
 
 	submitDecision := func(dec api.PermissionDecision) {
 		if props.OnDecision != nil {
@@ -88,23 +73,10 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 				setScope(api.ScopeSession)
 			}
 
-		case k.MatchString("up", "k", "ctrl+p"):
-			if cur > 0 {
-				setCursor(cur - 1)
-			}
-
-		case k.MatchString("down", "j", "ctrl+n"):
-			if cur < totalRows-1 {
-				setCursor(cur + 1)
-			}
-
-		case input == "y" || input == "Y" || k.MatchString("y"):
-			submitDecision(api.PermissionDecision{Kind: api.DecisionAllowOnce})
-
 		case input == "a" || input == "A" || k.MatchString("a"):
 			pat := patterns[0]
-			if cur >= 1 && cur <= len(patterns) {
-				pat = patterns[cur-1]
+			if cursor.Index >= 1 && cursor.Index <= len(patterns) {
+				pat = patterns[cursor.Index-1]
 			}
 			submitDecision(api.PermissionDecision{
 				Kind:         api.DecisionAllowSession,
@@ -112,68 +84,11 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 				Scope:        scope(),
 			})
 
-		case input == "n" || input == "N" || k.MatchString("n"):
-			submitDecision(api.PermissionDecision{Kind: api.DecisionReject})
-
 		case input == "r" || input == "R" || k.MatchString("r"):
 			setFeedbackMode(true)
 			setFeedbackText("")
-			setCursor(totalRows - 1)
-
-		case k.MatchString("enter"):
-			switch {
-			case cur == 0:
-				submitDecision(api.PermissionDecision{Kind: api.DecisionAllowOnce})
-			case cur >= 1 && cur <= len(patterns):
-				submitDecision(api.PermissionDecision{
-					Kind:         api.DecisionAllowSession,
-					GrantPattern: patterns[cur-1],
-					Scope:        scope(),
-				})
-			default:
-				submitDecision(api.PermissionDecision{Kind: api.DecisionReject})
-			}
+			cursor.Set(totalRows - 1)
 		}
-	})
-
-	var optionRows []permissionOptionRow
-
-	// Row 0: Yes, allow once
-	optionRows = append(optionRows, permissionOptionRow{
-		label: "Yes, allow once",
-		decision: api.PermissionDecision{
-			Kind: api.DecisionAllowOnce,
-		},
-	})
-
-	// Rows 1 .. len(patterns): Always allow
-	maxAllowLen := 0
-	for _, pat := range patterns {
-		lbl := "Always allow " + compactSingleLine(pat, 60)
-		if len(lbl) > maxAllowLen {
-			maxAllowLen = len(lbl)
-		}
-	}
-
-	for _, pat := range patterns {
-		displayPat := compactSingleLine(pat, 60)
-		optionRows = append(optionRows, permissionOptionRow{
-			label:    "Always allow " + displayPat,
-			scopeTag: fmt.Sprintf("[%s]", scope()),
-			decision: api.PermissionDecision{
-				Kind:         api.DecisionAllowSession,
-				GrantPattern: pat,
-				Scope:        scope(),
-			},
-		})
-	}
-
-	// Last row: No, deny
-	optionRows = append(optionRows, permissionOptionRow{
-		label: "No, deny",
-		decision: api.PermissionDecision{
-			Kind: api.DecisionReject,
-		},
 	})
 
 	// Styles
@@ -182,9 +97,29 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 	toolStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)
 	dotStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
 	targetStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
-	selectedStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
 	unselectedStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
 	scopeStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Agent.Permission)
+
+	menuItems := make([]components.ActionMenuItem, 0, totalRows)
+	menuItems = append(menuItems, components.ActionMenuItem{
+		ID:       "allow_once",
+		Label:    "Yes, allow once",
+		Shortcut: "y",
+	})
+	scopeTag := fmt.Sprintf("[%s]", scope())
+	for _, pat := range patterns {
+		menuItems = append(menuItems, components.ActionMenuItem{
+			ID:         "allow_scope:" + pat,
+			Label:      "Always allow " + compactSingleLine(pat, 60),
+			Badge:      scopeTag,
+			BadgeStyle: &scopeStyle,
+		})
+	}
+	menuItems = append(menuItems, components.ActionMenuItem{
+		ID:       "deny",
+		Label:    "No, deny",
+		Shortcut: "n",
+	})
 
 	perm := props.Request
 
@@ -241,33 +176,27 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 	}
 
 	// Option rows & vertically aligned colored [scope]
-	boxChildren = append(boxChildren, trail.Newline(1))
-	for i, r := range optionRows {
-		isSel := i == cur
-		prefix := "  "
-		rowStyle := unselectedStyle
-		if isSel {
-			prefix = "❯ "
-			rowStyle = selectedStyle
-		}
-
-		var rowSpans []trail.Node
-		if r.scopeTag != "" {
-			padLen := max(maxAllowLen-len(r.label)+3, 1)
-			padding := strings.Repeat(" ", padLen)
-			rowSpans = append(rowSpans,
-				trail.Span(trail.SpanProps{Style: rowStyle}, trail.Text(prefix+r.label+padding)),
-				trail.Span(trail.SpanProps{Style: scopeStyle}, trail.Text(r.scopeTag)),
-			)
-		} else {
-			rowSpans = append(rowSpans,
-				trail.Span(trail.SpanProps{Style: rowStyle}, trail.Text(prefix+r.label)),
-			)
-		}
-		boxChildren = append(boxChildren, trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow),
-		}, rowSpans...))
-	}
+	boxChildren = append(boxChildren, trail.Newline(1), components.ActionMenu(components.ActionMenuProps{
+		Items:           menuItems,
+		Selected:        &cursor.Index,
+		Disabled:        feedbackMode(),
+		UnselectedStyle: &unselectedStyle,
+		OnChange:        cursor.Set,
+		OnSelect: func(index int, _ components.ActionMenuItem) {
+			switch {
+			case index == 0:
+				submitDecision(api.PermissionDecision{Kind: api.DecisionAllowOnce})
+			case index >= 1 && index <= len(patterns):
+				submitDecision(api.PermissionDecision{
+					Kind:         api.DecisionAllowSession,
+					GrantPattern: patterns[index-1],
+					Scope:        scope(),
+				})
+			default:
+				submitDecision(api.PermissionDecision{Kind: api.DecisionReject})
+			}
+		},
+	}))
 
 	// Inline feedback input
 	if feedbackMode() {

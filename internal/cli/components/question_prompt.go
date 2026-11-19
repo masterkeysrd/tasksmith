@@ -240,17 +240,12 @@ var QuestionPrompt = trail.FC("QuestionPrompt", func(props QuestionPromptProps) 
 		if q.Type == string(api.QuestionTypeConfirm) {
 			rows = 2
 		}
+		if next, ok := components.StepCursor(n.cursor, rows, k); ok {
+			n.cursor = next
+			update(n)
+			return
+		}
 		switch {
-		case k.MatchString("up", "k", "ctrl+p"):
-			if n.cursor > 0 {
-				n.cursor--
-			}
-			update(n)
-		case k.MatchString("down", "j", "ctrl+n"):
-			if n.cursor < rows-1 {
-				n.cursor++
-			}
-			update(n)
 		case q.Type == string(api.QuestionTypeMulti) && (input == " " || k.MatchString("space")):
 			if n.cursor == len(q.Options) {
 				n.editing, n.input = true, n.answers[n.step].Text

@@ -9,9 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/masterkeysrd/kite/dom"
-	"github.com/masterkeysrd/kite/event"
-	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -146,44 +143,7 @@ type mcpToolDetailProps struct {
 // the input schema it expects and, for a prohibited tool, the way to permit it.
 var mcpToolDetailView = trail.FC("MCPToolDetail", func(props mcpToolDetailProps) trail.Node {
 	scheme := theme.UseTheme()
-	scrollPos, setScrollPos := kitex.UseState(0)
-	scrollBoxRef := kitex.UseRef[dom.Element](nil)
 	winSize := trail.UseWindowSize()
-
-	kitex.UseLayoutEffect(func() {
-		if el := scrollBoxRef.Current; el != nil {
-			el.ScrollTo(0, scrollPos())
-		}
-	}, []any{scrollPos()})
-
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape"):
-			if props.onBack != nil {
-				props.onBack()
-			}
-		case k.MatchString("up", "ctrl+p"):
-			if cur := scrollPos(); cur > 0 {
-				setScrollPos(cur - 1)
-			}
-		case k.MatchString("down", "ctrl+n"):
-			setScrollPos(scrollPos() + 1)
-		case k.MatchString("pgup", "ctrl+u", "ctrl+b"):
-			if cur := scrollPos(); cur > 8 {
-				setScrollPos(cur - 8)
-			} else {
-				setScrollPos(0)
-			}
-		case k.MatchString("pgdown", "ctrl+d", "ctrl+f"):
-			setScrollPos(scrollPos() + 8)
-		case k.MatchString("g"):
-			setScrollPos(0)
-		case k.MatchString("G"):
-			setScrollPos(9999)
-		case k.MatchString("e") && props.onEnable != nil:
-			props.onEnable()
-		}
-	})
 
 	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
 	headingStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
@@ -245,31 +205,27 @@ var mcpToolDetailView = trail.FC("MCPToolDetail", func(props mcpToolDetailProps)
 	}
 
 	bindings := []uicomponents.KeyBinding{{Key: "↑/↓", Label: "Scroll"}}
+	var actions []uicomponents.ScrollViewerAction
 	if props.onEnable != nil {
 		bindings = append(bindings, uicomponents.KeyBinding{Key: "e", Label: "Enable in manifest"})
+		actions = append(actions, uicomponents.ScrollViewerAction{
+			Keys:    []string{"e"},
+			Handler: props.onEnable,
+		})
 	}
 	bindings = append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Back to tools"})
-	rows = append(rows, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-		Bindings: bindings,
-	}))
 
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	},
-		trail.Box(trail.BoxProps{
-			Ref: scrollBoxRef,
-			Style: style.S().
-				Width(style.Percent(100)).
-				MaxHeight(style.Cells(mcpInspectorHeight(winSize.Height))).
-				OverflowY(style.OverflowAuto).
-				ScrollbarY(true),
-		}, trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexColumn),
-		}, rows...)),
+	outerStyle := style.S().Border(
+		style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default),
 	)
+
+	return uicomponents.ScrollViewer(uicomponents.ScrollViewerProps{
+		MaxHeight:  mcpInspectorHeight(winSize.Height),
+		OuterStyle: &outerStyle,
+		OnClose:    props.onBack,
+		Actions:    actions,
+		Bindings:   bindings,
+	}, rows...)
 })
 
 // mcpToolParameters renders a tool's input schema as parameter rows, required

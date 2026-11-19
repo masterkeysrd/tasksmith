@@ -14,7 +14,6 @@ import (
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
-	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
@@ -806,20 +805,9 @@ type mcpInspectorProps struct {
 
 // mcpInspector renders one server's metadata and everything discovered on it.
 var mcpInspector = trail.FC("MCPServerInspector", func(props mcpInspectorProps) trail.Node {
-	scrollPos, setScrollPos := kitex.UseState(0)
-	scrollBoxRef := kitex.UseRef[dom.Element](nil)
+	scroll := uicomponents.UseScroll(uicomponents.ScrollOptions{PageOnly: true})
 	scheme := theme.UseTheme()
 	winSize := trail.UseWindowSize()
-
-	kitex.UseLayoutEffect(func() {
-		if el := scrollBoxRef.Current; el != nil {
-			el.ScrollTo(0, scrollPos())
-		}
-	}, []any{scrollPos()})
-
-	// The menu cursor is local to this view, and a refresh that shrinks the menu
-	// clamps it rather than letting it point past the last entry.
-	cursor, setCursor := kitex.UseState(0)
 
 	actions := mcpMenuActions{
 		onBack:      props.onBack,
@@ -830,74 +818,38 @@ var mcpInspector = trail.FC("MCPServerInspector", func(props mcpInspectorProps) 
 		onRestart:   props.onRestart,
 	}
 	items := mcpMenuFor(props.server)
-
-	// A refresh can shrink the menu, for instance when a server loses its prompts,
-	// so the cursor is clamped rather than allowed to point past the last entry.
-	if cursor() >= len(items) {
-		setCursor(len(items) - 1)
+	menuItems := make([]uicomponents.ActionMenuItem, len(items))
+	for i, item := range items {
+		menuItems[i] = uicomponents.ActionMenuItem{
+			ID:       fmt.Sprintf("%d", i),
+			Label:    item.Label,
+			Shortcut: item.Key,
+		}
 	}
-	current := max(cursor(), 0)
 
-	selectItem := func(index int) {
-		if index < 0 || index >= len(items) {
+	trail.UseInput(func(input string, k event.KeyEvent) {
+		if k.MatchString("esc", "escape") {
+			actions.run(mcpMenuBack)
 			return
 		}
-		setCursor(index)
-		actions.run(items[index].Action)
-	}
-
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape"):
-			actions.run(mcpMenuBack)
-		case k.MatchString("up", "ctrl+p"):
-			if current > 0 {
-				setCursor(current - 1)
-			}
-		case k.MatchString("down", "ctrl+n"):
-			if current < len(items)-1 {
-				setCursor(current + 1)
-			}
-		case k.MatchString("enter"):
-			selectItem(current)
-		case k.MatchString("pgup", "ctrl+u", "ctrl+b"):
-			if cur := scrollPos(); cur > 8 {
-				setScrollPos(cur - 8)
-			} else {
-				setScrollPos(0)
-			}
-		case k.MatchString("pgdown", "ctrl+d", "ctrl+f"):
-			setScrollPos(scrollPos() + 8)
-		case k.MatchString("g"):
-			setScrollPos(0)
-		case k.MatchString("G"):
-			setScrollPos(9999)
-		}
-
-		// The letter shortcuts stay so a returning user never has to walk the menu
-		// to do the two things they do most.
-		for i, item := range items {
-			if item.Key == "" {
-				continue
-			}
-			if k.MatchString(item.Key) {
-				setCursor(i)
-				actions.run(item.Action)
-				return
-			}
-		}
-
-		// A digit picks the matching entry, which is the fastest path on a screen
-		// whose entries are numbered anyway.
-		if digit := mcpMenuDigit(k.Key); digit > 0 {
-			selectItem(digit - 1)
-		}
+		scroll.HandleKey(input, k)
 	})
 
 	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
+	unselectedStyle := style.S().Foreground(scheme.Color.Text.Secondary)
 
 	children := mcpCardRows(scheme, props.server, winSize.Width)
-	children = append(children, mcpMenuRows(scheme, items, current))
+	children = append(children, blankRow(), uicomponents.ActionMenu(uicomponents.ActionMenuProps{
+		Items:           menuItems,
+		Numbered:        true,
+		Indent:          mcpCardIndent,
+		UnselectedStyle: &unselectedStyle,
+		OnSelect: func(index int, _ uicomponents.ActionMenuItem) {
+			if index >= 0 && index < len(items) {
+				actions.run(items[index].Action)
+			}
+		},
+	}))
 
 	children = append(children, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
 		Bindings: mcpInspectorBindings(items, winSize.Width),
@@ -910,7 +862,7 @@ var mcpInspector = trail.FC("MCPServerInspector", func(props mcpInspectorProps) 
 			FlexDirection(style.FlexColumn),
 	},
 		trail.Box(trail.BoxProps{
-			Ref: scrollBoxRef,
+			Ref: scroll.Ref,
 			Style: style.S().
 				Width(style.Percent(100)).
 				MaxHeight(style.Cells(mcpInspectorHeight(winSize.Height))).
@@ -921,48 +873,6 @@ var mcpInspector = trail.FC("MCPServerInspector", func(props mcpInspectorProps) 
 		}, children...)),
 	)
 })
-
-// mcpMenuDigit maps a digit key press to the menu entry it selects, or 0 when the
-// key is not a digit. Only the digits that exist on screen mean anything, which
-// the caller checks against the menu length.
-func mcpMenuDigit(k key.Key) int {
-	if k.Mod != 0 || k.Text == "" || len([]rune(k.Text)) != 1 {
-		return 0
-	}
-	digit := []rune(k.Text)[0]
-	if digit < '1' || digit > '9' {
-		return 0
-	}
-	return int(digit - '0')
-}
-
-// mcpMenuRows renders the numbered action menu with its cursor.
-func mcpMenuRows(scheme *theme.Scheme, items []mcpMenuItem, current int) trail.Node {
-	rows := []trail.Node{trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexRow),
-	}, trail.Span(trail.SpanProps{}, trail.Text("")))}
-
-	cursorStyle := style.S().Bold(true).Foreground(scheme.Color.Icon.Primary)
-	labelStyle := style.S().Foreground(scheme.Color.Text.Secondary)
-	for i, item := range items {
-		marker := "  "
-		styleFor := labelStyle
-		if i == current {
-			marker = "❯ "
-			styleFor = cursorStyle
-		}
-		rows = append(rows, mcpDetailLine(
-			trail.Span(trail.SpanProps{
-				Style: cursorStyle.WhiteSpace(style.WhiteSpacePre),
-			}, trail.Text(strings.Repeat(" ", mcpCardIndent)+marker)),
-			trail.Span(trail.SpanProps{Style: styleFor},
-				trail.Text(fmt.Sprintf("%d. %s", i+1, item.Label))),
-		))
-	}
-	return trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexColumn),
-	}, rows...)
-}
 
 // mcpMenuHint names a menu action for the shortcut hint row, where the full menu
 // label ("Attach resource (3)") would be too wide to sit beside the other keys.

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -180,46 +179,10 @@ type toolInspectorProps struct {
 }
 
 var toolInspector = trail.FC("ToolInspector", func(props toolInspectorProps) trail.Node {
-	scrollPos, setScrollPos := kitex.UseState(0)
-	scrollBoxRef := kitex.UseRef[dom.Element](nil)
-
-	kitex.UseLayoutEffect(func() {
-		if el := scrollBoxRef.Current; el != nil {
-			el.ScrollTo(0, scrollPos())
-		}
-	}, []any{scrollPos()})
-
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape"):
-			if props.onClose != nil {
-				props.onClose()
-			}
-		case k.MatchString("up", "k", "ctrl+p"):
-			cur := scrollPos()
-			if cur > 0 {
-				setScrollPos(cur - 1)
-			}
-		case k.MatchString("down", "j", "ctrl+n"):
-			setScrollPos(scrollPos() + 1)
-		case k.MatchString("pgup", "b", "ctrl+u", "ctrl+b"):
-			cur := scrollPos()
-			if cur > 8 {
-				setScrollPos(cur - 8)
-			} else {
-				setScrollPos(0)
-			}
-		case k.MatchString("pgdown", "space", "f", "ctrl+d", "ctrl+f"):
-			setScrollPos(scrollPos() + 8)
-		case k.MatchString("home", "g"):
-			setScrollPos(0)
-		case k.MatchString("end", "G"):
-			setScrollPos(9999)
-		}
-	})
-
 	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
+	outerStyle := style.S().Border(
+		style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default),
+	)
 
 	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
 	scopeBadgeStyle := style.S().Bold(true).Foreground(scheme.Color.Icon.Primary)
@@ -242,26 +205,19 @@ var toolInspector = trail.FC("ToolInspector", func(props toolInspectorProps) tra
 		}, trail.Span(trail.SpanProps{Style: labelStyle}, trail.Text(text)))
 	}
 
-	var children []trail.Node
-
 	headerItems := []trail.Node{
 		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(fmt.Sprintf("Tool: %s  ", props.tool.Name))),
 		trail.Span(trail.SpanProps{Style: scopeBadgeStyle}, trail.Text(fmt.Sprintf("[%s]  ", ToolScope(props.tool)))),
 		trail.Span(trail.SpanProps{Style: statusBadgeStyle}, trail.Text(toolStatusBadge(props.tool)+"  ")),
 		trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text(fmt.Sprintf("(est. %s tok)", format.Tokens(props.tool.Tokens)))),
 	}
-	if cur := scrollPos(); cur > 0 {
-		headerItems = append(headerItems, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text(fmt.Sprintf("  •  line +%d", cur))))
-	}
-	children = append(children, trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
-	}, headerItems...))
 
+	var meta []trail.Node
 	if props.tool.DisplayName != "" && props.tool.DisplayName != props.tool.Name {
-		children = append(children, line(trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text("Display name: "+props.tool.DisplayName))))
+		meta = append(meta, line(trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text("Display name: "+props.tool.DisplayName))))
 	}
 	if props.tool.Description != "" {
-		children = append(children, line(trail.Span(trail.SpanProps{Style: descStyle}, trail.Text(props.tool.Description))))
+		meta = append(meta, line(trail.Span(trail.SpanProps{Style: descStyle}, trail.Text(props.tool.Description))))
 	}
 
 	annotationText := toolAnnotationBadges(props.tool)
@@ -281,7 +237,7 @@ var toolInspector = trail.FC("ToolInspector", func(props toolInspectorProps) tra
 		annotationText = "— (no safety annotations declared)"
 	}
 
-	children = append(children,
+	meta = append(meta,
 		sectionLabel("Command"),
 		line(trail.Span(trail.SpanProps{
 			Style: style.S().Foreground(scheme.Color.Text.Secondary).WhiteSpace(style.WhiteSpacePreWrap),
@@ -317,33 +273,18 @@ var toolInspector = trail.FC("ToolInspector", func(props toolInspectorProps) tra
 		}
 	}
 
-	scrollBoxStyle := style.S().
-		Width(style.Percent(100)).
-		MaxHeight(style.Cells(18)).
-		OverflowY(style.OverflowAuto).
-		ScrollbarY(true)
-
-	children = append(children, trail.Box(trail.BoxProps{
-		Ref:   scrollBoxRef,
-		Style: scrollBoxStyle,
-	}, trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexColumn),
-	}, schemaBlocks...)))
-
-	children = append(children, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
+	return uicomponents.ScrollViewer(uicomponents.ScrollViewerProps{
+		Header:             headerItems,
+		HeaderMarginBottom: 1,
+		Meta:               meta,
+		OuterStyle:         &outerStyle,
+		OnClose:            props.onClose,
 		Bindings: []uicomponents.KeyBinding{
 			{Key: "↑/↓ or j/k", Label: "Scroll"},
 			{Key: "pgup/pgdn", Label: "Page"},
 			{Key: "esc", Label: "Return to tools"},
 		},
-	}))
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	}, children...)
+	}, schemaBlocks...)
 })
 
 type emptyToolsViewProps struct {
