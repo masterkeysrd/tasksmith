@@ -1510,6 +1510,49 @@ func TestConversationNotDelegatedWithoutSubagents(t *testing.T) {
 	}
 }
 
+func TestInvokeAgentSubagentDoesNotMakeIdleParentCancelable(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	bgSub := api.Session{
+		ID:        "sub-bg-1",
+		ParentID:  "sess-1",
+		Title:     "Explore repository",
+		Status:    api.StatusThinking,
+		Activity:  "Searching files",
+		CreatedAt: time.Now(),
+		Config:    api.SessionConfig{Agent: "explore"},
+	}
+	parentSnap := &api.Session{
+		ID:        "sess-1",
+		Status:    api.StatusIdle,
+		Subagents: []api.Session{bgSub},
+	}
+
+	UpsertSubagent(bgSub)
+	globalConversation.setSessionID("sess-1")
+	globalConversation.loadTimelineSnapshot(parentSnap, nil, nil)
+	if st := GetStream(); st.Streaming || st.Delegated {
+		t.Fatalf("idle parent with invoke_agent subagent must not be Streaming or Delegated, got %+v", st)
+	}
+
+	globalConversation.ReconcileStreamStatus(parentSnap)
+	if st := GetStream(); st.Streaming || st.Delegated {
+		t.Fatalf("ReconcileStreamStatus must keep idle parent non-Streaming with invoke_agent subagent, got %+v", st)
+	}
+
+	// Sending a regular prompt while an invoke_agent subagent runs must not
+	// label the stream as Delegated ("subagent running • esc to cancel").
+	globalConversation.addPendingUser("msg-2", "follow-up question")
+	if st := GetStream(); !st.Streaming || st.Delegated {
+		t.Fatalf("expected regular prompt Streaming=true Delegated=false while invoke_agent subagent runs, got %+v", st)
+	}
+}
+
 func TestConversationParentTurnClearsDelegated(t *testing.T) {
 	ResetSession()
 	ResetStream()

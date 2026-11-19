@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -528,6 +529,115 @@ func TestChildTurnCompletionNotification(t *testing.T) {
 	}
 	if !foundSubagentCompleted {
 		t.Fatal("expected parent harness state messages to receive subagent completion message")
+	}
+}
+
+func TestParentCancelPreservesInvokeAgentSubagents(t *testing.T) {
+	ctx := context.Background()
+	childStarted := make(chan struct{})
+	releaseChild := make(chan struct{})
+	parentStarted := make(chan struct{})
+
+	var childOnce sync.Once
+	var blockedParent atomic.Bool
+	prov := &fakeProvider{
+		handler: func(callCtx context.Context, req *llm.Request) ([]string, string, error) {
+			var promptText string
+			for _, m := range req.Messages {
+				promptText += m.GetContent().Text() + "\n"
+			}
+			if strings.Contains(promptText, "SUBAGENT_BG_WORK") {
+				childOnce.Do(func() { close(childStarted) })
+				select {
+				case <-releaseChild:
+					return []string{"Background exploration finished."}, uuid.NewString(), nil
+				case <-callCtx.Done():
+					return nil, "", callCtx.Err()
+				}
+			}
+			if strings.Contains(promptText, "PARENT_CANCEL_TARGET") && !strings.Contains(promptText, "<subagent_completed") && !blockedParent.Swap(true) {
+				close(parentStarted)
+				<-callCtx.Done()
+				return nil, "", callCtx.Err()
+			}
+			return []string{"Processed background subagent result."}, uuid.NewString(), nil
+		},
+	}
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	parent, err := New(ctx, Config{
+		ID:          uuid.NewString(),
+		Title:       "Parent Session",
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New parent failed: %v", err)
+	}
+	defer func() { _ = parent.Close() }()
+
+	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+		Agent:  "explore",
+		Title:  "Explore repo",
+		Prompt: "SUBAGENT_BG_WORK",
+	})
+	if err != nil {
+		t.Fatalf("InvokeSubagent failed: %v", err)
+	}
+	<-childStarted
+
+	child, ok := parent.Child(out.SessionID)
+	if !ok {
+		t.Fatalf("child not found in parent")
+	}
+	if child.IsCommandDelegated() {
+		t.Fatal("invoke_agent child must not be marked CommandDelegated")
+	}
+
+	if err := parent.Send(ctx, api.SendRequest{Content: "PARENT_CANCEL_TARGET"}); err != nil {
+		t.Fatalf("parent.Send: %v", err)
+	}
+	<-parentStarted
+
+	// Pressing Esc cancels the parent turn, NOT the invoke_agent background subagent.
+	if err := parent.Cancel(ctx); err != nil {
+		t.Fatalf("parent.Cancel: %v", err)
+	}
+
+	child.Lock()
+	childRunning := child.Running
+	child.Unlock()
+	if !childRunning {
+		t.Fatal("expected invoke_agent subagent to keep running after parent.Cancel")
+	}
+
+	close(releaseChild)
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+	if err := parent.Wait(ctx); err != nil {
+		t.Fatalf("parent.Wait: %v", err)
+	}
+
+	state, err := parent.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("parent.Harness.LoadState: %v", err)
+	}
+	var sawCompleted bool
+	for _, m := range state.Messages {
+		if u, ok := m.(*message.User); ok && harness.SystemKindOf(u) == harness.SystemKindSubagent &&
+			strings.Contains(u.GetContent().Text(), "Background exploration finished.") {
+			sawCompleted = true
+		}
+	}
+	if !sawCompleted {
+		t.Fatal("expected surviving invoke_agent subagent to deliver <subagent_completed> to parent")
 	}
 }
 

@@ -173,7 +173,7 @@ func refreshSubagentState() {
 // refreshSubagentStateLocked republishes when the number of running children has
 // changed since the last publish. It must be called with acc.mu held.
 func (acc *conversationAccumulator) refreshSubagentStateLocked() {
-	if acc.runningSubagents == len(GetRunningSubagents()) {
+	if acc.runningSubagents == len(GetRunningDelegatedSubagents()) {
 		return
 	}
 	acc.publishLocked()
@@ -1111,7 +1111,7 @@ func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entr
 			acc.status, acc.sessionStatus, acc.err = StreamWaitingPlanReview, sess.Status, nil
 			acc.parentTurnActive = true
 		case api.StatusIdle, "":
-			if hasRunningSubagents(sess.Subagents) {
+			if hasRunningDelegatedSubagents(sess.Subagents) {
 				acc.status, acc.sessionStatus, acc.err = StreamRunning, api.StatusThinking, nil
 				acc.parentTurnActive = false
 			}
@@ -1179,7 +1179,7 @@ func (acc *conversationAccumulator) ReconcileStreamStatus(sess *api.Session) {
 			acc.err = nil
 			acc.parentTurnActive = true
 		case api.StatusIdle, "":
-			if !hasRunningSubagents(sess.Subagents) {
+			if !hasRunningDelegatedSubagents(sess.Subagents) {
 				return
 			}
 			acc.status = StreamRunning
@@ -1196,7 +1196,7 @@ func (acc *conversationAccumulator) ReconcileStreamStatus(sess *api.Session) {
 		// unless the session is actively waiting on delegated child subagents.
 		switch sess.Status {
 		case api.StatusIdle:
-			if hasRunningSubagents(sess.Subagents) {
+			if hasRunningDelegatedSubagents(sess.Subagents) {
 				acc.parentTurnActive = false
 				acc.discardDraftLocked()
 			} else {
@@ -1223,9 +1223,9 @@ func (acc *conversationAccumulator) ReconcileStreamStatus(sess *api.Session) {
 	acc.publishLocked()
 }
 
-func hasRunningSubagents(subs []api.Session) bool {
+func hasRunningDelegatedSubagents(subs []api.Session) bool {
 	for _, s := range subs {
-		if s.Status != "" && s.Status != api.StatusIdle {
+		if s.Status != "" && s.Status != api.StatusIdle && IsCommandDelegatedSubagent(s) {
 			return true
 		}
 	}
@@ -1252,7 +1252,7 @@ func inFlightTurnStart(sess *api.Session, entries []api.TimelineEntry) time.Time
 	}
 	if start.IsZero() && sess != nil {
 		for _, sub := range sess.Subagents {
-			if sub.Status != "" && sub.Status != api.StatusIdle && !sub.CreatedAt.IsZero() {
+			if sub.Status != "" && sub.Status != api.StatusIdle && IsCommandDelegatedSubagent(sub) && !sub.CreatedAt.IsZero() {
 				if start.IsZero() || sub.CreatedAt.Before(start) {
 					start = sub.CreatedAt
 				}
@@ -1666,9 +1666,10 @@ func (acc *conversationAccumulator) publishLocked() {
 	}
 	acc.wasStreaming = isStreaming
 
-	// A session with running children but no turn of its own is waiting on them,
-	// which is a different thing to tell the user than "I am thinking".
-	running := len(GetRunningSubagents())
+	// A session with running delegated-command children but no turn of its own is
+	// waiting on them, which is a different thing to tell the user than "I am
+	// thinking". Autonomous invoke_agent workers run independently in TasksBar.
+	running := len(GetRunningDelegatedSubagents())
 	acc.runningSubagents = running
 	delegated := isStreaming && !acc.parentTurnActive && running > 0
 

@@ -83,6 +83,7 @@ func ToAPISession(sess *Session) api.Session {
 		Todos:              todos,
 		Queue:              queueItems,
 		ParentID:           sess.ParentID,
+		CommandDelegated:   sess.IsCommandDelegated(),
 		ForkedFrom:         sess.ForkedFrom,
 		WorkDir:            sess.WorkDir,
 		Subagents:          subagents,

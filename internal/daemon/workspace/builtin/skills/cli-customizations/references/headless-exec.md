@@ -58,7 +58,7 @@ Control frames (one JSON object per line, schema `api.ExecInputFrame`):
 | `question` | `question` (`api.QuestionResponse`) | answer a pending question |
 | `plan_review` | `plan_review` (`api.PlanReviewDecision`) | approve or give feedback on a pending `plan_review_requested` prompt (`request_id`, `tool_call_id`, `approved`, optional `mode`, `feedback`, `canceled`) |
 | `config` | `config` (`api.UpdateSessionRequest`) | update the session configuration |
-| `cancel` | — | cancel the in-flight turn |
+| `cancel` | — | cancel the in-flight turn (`invoke_agent` subagents keep running unless `"session_id"` targets a specific subagent) |
 | `close` | — | finish once pending turns complete |
 
 In `text` mode a pending permission, question, or plan review cannot be answered: the run terminates

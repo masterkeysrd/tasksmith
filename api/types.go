@@ -925,6 +925,10 @@ type Session struct {
 	Todos              []TodoItem          `json:"todos,omitempty"`
 	Queue              []QueueItem         `json:"queue,omitempty"`
 	ParentID           string              `json:"parent_id,omitempty"`
+	// CommandDelegated reports that this child session executes a user-invoked
+	// delegated slash command (as opposed to an autonomous invoke_agent worker),
+	// so parent turn cancellation (Esc) cancels it alongside the parent turn.
+	CommandDelegated bool `json:"command_delegated,omitempty"`
 	// ForkedFrom records the session ID this session was forked from. It is
 	// provenance only: a fork is a top-level thread and never appears in the
 	// source session's subagent tree.

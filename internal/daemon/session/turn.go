@@ -211,30 +211,48 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 	return s.startTurn(hInput)
 }
 
-// Cancel interrupts any active conversational turn executing on this session.
+// Cancel interrupts any active conversational turn executing on this session
+// (and any user-invoked delegated slash-command child), leaving autonomous
+// invoke_agent background subagents and background tasks running.
 func (s *Session) Cancel(ctx context.Context) error {
 	if s == nil {
 		return errors.New("session: uninitialized session")
 	}
 	for _, ch := range s.Children() {
-		_ = ch.Cancel(ctx)
+		if ch.IsCommandDelegated() {
+			_ = ch.Cancel(ctx)
+		}
 	}
 	s.Lock()
 	cancel := s.cancel
 	done := s.done
-	s.queue = nil
+	hadVisibleQueue := len(s.visibleQueueLocked()) > 0
+	s.queue = slices.DeleteFunc(s.queue, func(it queueItem) bool {
+		return it.Kind == api.QueueKindMessage || it.Kind == api.QueueKindCommand
+	})
 	s.Unlock()
 
-	s.cancelHostApprovals(context.Canceled)
-	if done == nil || cancel == nil {
-		return nil
+	if hadVisibleQueue {
+		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QueueUpdatedEvent{
+			SessionID: s.ID,
+		})
 	}
 
-	cancel()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		return ctx.Err()
+	s.cancelHostApprovals(context.Canceled)
+	if done != nil && cancel != nil {
+		cancel()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	s.Lock()
+	canDrain := len(s.queue) > 0 && !s.Running && !s.waitingForInteractionLocked() && !s.closing
+	s.Unlock()
+	if canDrain {
+		_ = s.startTurn(harness.Input{})
 	}
 	return nil
 }
@@ -814,7 +832,13 @@ func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 	s.PendingPermissions = nil
 	s.PendingQuestions = nil
 	s.PendingPlanReviews = nil
-	s.queue = nil
+	if canceled {
+		s.queue = slices.DeleteFunc(s.queue, func(it queueItem) bool {
+			return it.Kind == api.QueueKindMessage || it.Kind == api.QueueKindCommand
+		})
+	} else {
+		s.queue = nil
+	}
 	s.Status = api.StatusIdle
 	s.FinishedAt = time.Now().UTC()
 	s.err = err

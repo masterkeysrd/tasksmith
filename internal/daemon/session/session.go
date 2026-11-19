@@ -45,7 +45,10 @@ type Config struct {
 	ParentID string
 	WorkDir  string
 	Parent   *Session
-	Session  api.SessionConfig
+	// CommandDelegated marks a child session spawned for a user-invoked
+	// delegated slash command rather than an autonomous invoke_agent subagent.
+	CommandDelegated bool
+	Session          api.SessionConfig
 	// InitialPermissions optionally seeds a new session's session-scoped
 	// permission grants. It is used when forking so the branch keeps the
 	// approvals the source session already earned.
@@ -143,6 +146,7 @@ func initSession(ctx context.Context, sess *Session, cfg Config) error {
 	if sess.parent != nil {
 		sess.ParentID = sess.parent.ID
 	}
+	sess.commandDelegated = cfg.CommandDelegated || (sess.ParentID != "" && strings.HasPrefix(strings.TrimSpace(sess.Title), "/"))
 	if strings.TrimSpace(sess.WorkDir) == "" {
 		sess.WorkDir = cfg.Workspace.RootDir()
 	}
@@ -318,9 +322,10 @@ type Session struct {
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 
-	parent   *Session   `json:"-"`
-	children []*Session `json:"-"`
-	db       *sql.DB    `json:"-"`
+	parent           *Session   `json:"-"`
+	children         []*Session `json:"-"`
+	commandDelegated bool
+	db               *sql.DB `json:"-"`
 
 	Permissions api.Permissions            `json:"-"`
 	PermManager permissions.SessionManager `json:"-"`
@@ -390,44 +395,45 @@ func (s *Session) Clone() *Session {
 	cpConfig := s.Config
 	cpConfig.Thinking = ptr.Clone(s.Config.Thinking)
 	cp := &Session{
-		ID:          s.ID,
-		Title:       s.Title,
-		Config:      cpConfig,
-		ParentID:    s.ParentID,
-		ForkedFrom:  s.ForkedFrom,
-		WorkDir:     s.WorkDir,
-		parent:      s.parent,
-		children:    slices.Clone(s.children),
-		db:          s.db,
-		Diagnostics: slices.Clone(s.Diagnostics),
-		CreatedAt:   s.CreatedAt,
-		UpdatedAt:   s.UpdatedAt,
-		Permissions: s.Permissions.Clone(),
-		PermManager: s.PermManager,
-		permRoot:    s.permRoot,
-		sandboxCfg:  s.sandboxCfg,
-		Root:        s.Root,
-		Sandbox:     s.Sandbox,
-		sbxPolicy:   s.sbxPolicy,
-		sbxNetwork:  s.sbxNetwork,
-		Timeline:    s.Timeline,
-		Journal:     s.Journal,
-		Tools:       s.Tools,
-		Tasks:       s.Tasks,
-		Harness:     s.Harness,
-		Std:         s.Std,
-		mediaStore:  s.mediaStore,
-		spiller:     s.spiller,
-		workspace:   s.workspace,
-		gateway:     s.gateway,
-		catalog:     s.catalog,
-		metrics:     s.metrics,
-		reloadLock:  s.reloadLock,
-		publisher:   s.publisher,
-		logger:      s.logger,
-		bgCtx:       s.bgCtx,
-		wg:          s.wg,
-		onUpdate:    s.onUpdate,
+		ID:               s.ID,
+		Title:            s.Title,
+		Config:           cpConfig,
+		ParentID:         s.ParentID,
+		ForkedFrom:       s.ForkedFrom,
+		WorkDir:          s.WorkDir,
+		parent:           s.parent,
+		children:         slices.Clone(s.children),
+		commandDelegated: s.commandDelegated,
+		db:               s.db,
+		Diagnostics:      slices.Clone(s.Diagnostics),
+		CreatedAt:        s.CreatedAt,
+		UpdatedAt:        s.UpdatedAt,
+		Permissions:      s.Permissions.Clone(),
+		PermManager:      s.PermManager,
+		permRoot:         s.permRoot,
+		sandboxCfg:       s.sandboxCfg,
+		Root:             s.Root,
+		Sandbox:          s.Sandbox,
+		sbxPolicy:        s.sbxPolicy,
+		sbxNetwork:       s.sbxNetwork,
+		Timeline:         s.Timeline,
+		Journal:          s.Journal,
+		Tools:            s.Tools,
+		Tasks:            s.Tasks,
+		Harness:          s.Harness,
+		Std:              s.Std,
+		mediaStore:       s.mediaStore,
+		spiller:          s.spiller,
+		workspace:        s.workspace,
+		gateway:          s.gateway,
+		catalog:          s.catalog,
+		metrics:          s.metrics,
+		reloadLock:       s.reloadLock,
+		publisher:        s.publisher,
+		logger:           s.logger,
+		bgCtx:            s.bgCtx,
+		wg:               s.wg,
+		onUpdate:         s.onUpdate,
 	}
 	if s.State != nil {
 		cp.State = s.State.Clone()
@@ -1062,6 +1068,15 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 	return nil
 }
 
+// IsCommandDelegated reports whether this child session was spawned for a
+// user-invoked delegated slash command rather than invoke_agent.
+func (s *Session) IsCommandDelegated() bool {
+	if s == nil {
+		return false
+	}
+	return s.commandDelegated
+}
+
 // Close closes session-scoped runtime resources like the Sandbox.
 func (s *Session) Close() error {
 	for _, ch := range s.Children() {
@@ -1069,7 +1084,11 @@ func (s *Session) Close() error {
 	}
 	s.Lock()
 	s.closing = true
+	cancel := s.cancel
 	s.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	s.cancelHostApprovals(errors.New("session: closed"))
 	s.Lock()
 	defer s.Unlock()

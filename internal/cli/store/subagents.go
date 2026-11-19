@@ -44,12 +44,31 @@ func UseSubagents() []api.Session {
 	return *subs
 }
 
+// IsCommandDelegatedSubagent reports whether sub represents a user-invoked
+// delegated slash command rather than an autonomous invoke_agent subagent.
+func IsCommandDelegatedSubagent(sub api.Session) bool {
+	return sub.CommandDelegated || strings.HasPrefix(strings.TrimSpace(sub.Title), "/")
+}
+
 // UseRunningSubagents subscribes a component to the active session's running subagents.
 func UseRunningSubagents() []api.Session {
 	all := UseSubagents()
 	var running []api.Session
 	for _, s := range all {
 		if s.Status != "" && s.Status != api.StatusIdle {
+			running = append(running, s)
+		}
+	}
+	return running
+}
+
+// UseRunningDelegatedSubagents subscribes a component to running delegated
+// slash-command subagents (excluding autonomous invoke_agent background workers).
+func UseRunningDelegatedSubagents() []api.Session {
+	all := UseSubagents()
+	var running []api.Session
+	for _, s := range all {
+		if s.Status != "" && s.Status != api.StatusIdle && IsCommandDelegatedSubagent(s) {
 			running = append(running, s)
 		}
 	}
@@ -83,6 +102,19 @@ func GetRunningSubagents() []api.Session {
 	var running []api.Session
 	for _, s := range all {
 		if s.Status != "" && s.Status != api.StatusIdle {
+			running = append(running, s)
+		}
+	}
+	return running
+}
+
+// GetRunningDelegatedSubagents returns running delegated slash-command subagents
+// (excluding autonomous invoke_agent background subagents).
+func GetRunningDelegatedSubagents() []api.Session {
+	all := GetSubagents()
+	var running []api.Session
+	for _, s := range all {
+		if s.Status != "" && s.Status != api.StatusIdle && IsCommandDelegatedSubagent(s) {
 			running = append(running, s)
 		}
 	}

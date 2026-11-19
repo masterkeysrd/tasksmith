@@ -59,7 +59,7 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 		return turnStats{StartedAt: s.TurnStartedAt, BaseInput: s.BaseInput, BaseOutput: s.BaseOutput, CallInput: s.CallInput, CallOutput: s.CallOutput}
 	})
 	totals := store.UseUsageTotals()
-	runningSubs := store.UseRunningSubagents()
+	runningSubs := store.UseRunningDelegatedSubagents()
 
 	var msgs []store.Message
 	if msgsPtr != nil {

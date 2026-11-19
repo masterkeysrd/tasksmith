@@ -75,7 +75,7 @@ stdin is a stream of newline-delimited JSON **control frames** (`api.ExecInputFr
 | `{"type":"question","question":{...}}` | `question` | `api.QuestionResponse` | Answer a live `question_requested` prompt. |
 | `{"type":"plan_review","plan_review":{...}}` | `plan_review` | `api.PlanReviewDecision` | Answer a live `plan_review_requested` prompt from `exit_plan_mode`. |
 | `{"type":"config","config":{...}}` | `config` | `api.UpdateSessionRequest` | Change `mode`, `model`, `agent`, `title`, or `thinking` mid-session. |
-| `{"type":"cancel"}` | — | `client.Cancel` | Abort the in-flight turn; the session stays open for more frames. |
+| `{"type":"cancel"}` | — | `client.Cancel` | Abort the in-flight turn (`invoke_agent` subagents keep running unless `"session_id"` targets a specific subagent); the session stays open for more frames. |
 | `{"type":"close"}` | — | — | Drain pending turns, print the terminal result, exit. |
 
 Payload field names (all snake_case, from the canonical `api/` structs):
