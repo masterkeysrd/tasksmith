@@ -192,8 +192,8 @@ github.com/ollama/ollama v0.40.16 h1:+T7umrchMgduPAk/fTEShqvYZLG5gze+DHB/aI8tPpQ
 github.com/ollama/ollama v0.40.16/go.mod h1:VB1qenaqFHAY/oJ9tMYSg9cJjehUpa9gL45FzN4/rsg=
 github.com/onsi/gomega v1.34.1 h1:EUMJIKUjM8sKjYbtxQI9A4z2o+rruxnzNvpknOXie6k=
 github.com/onsi/gomega v1.34.1/go.mod h1:kU1QgUvBDLXBJq618Xvm2LUX6rSAfRaFRTcdOeDLwwY=
-github.com/openai/openai-go/v3 v3.99.0 h1:Pc2z4NLWJ1dtwk7Trx4LlWNBMwcT5z99Q7cT0H6xcWM=
-github.com/openai/openai-go/v3 v3.99.0/go.mod h1:rpJT0W8BAp3rmc3a4HpqeuwpBF6tB6OdUPTXB0rFLGE=
+github.com/openai/openai-go/v3 v3.101.0 h1:fd8QwVaOoN6VUZdsX2Z6ANLnc70KnfJvjXscLk5Kolc=
+github.com/openai/openai-go/v3 v3.101.0/go.mod h1:rpJT0W8BAp3rmc3a4HpqeuwpBF6tB6OdUPTXB0rFLGE=
 github.com/pb33f/go-yaml v0.1.1 h1:yWGmhVdwzionRnSc/hEJwcfq6PaZL2QdYzyReXBbX7Q=
 github.com/pb33f/go-yaml v0.1.1/go.mod h1:QvWdkHP5VjFYAeHMQUkaPQqREaQnBNOXmWzAjNrnSdo=
 github.com/pb33f/ordered-map/v2 v2.3.2 h1:wDyaZ2Pv9QLh64X4utCeD5Zoi9nIv2aW3lwv172O5PQ=
