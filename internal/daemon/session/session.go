@@ -1449,35 +1449,6 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		}
 	}
 
-	if s.permRoot != nil {
-		if eff, err := s.permRoot.Effective(); err == nil {
-			if len(eff.DisabledTools) > 0 || len(eff.DisabledMCPs) > 0 {
-				disabledSet := make(map[string]struct{}, len(eff.DisabledTools))
-				for _, dt := range eff.DisabledTools {
-					disabledSet[dt] = struct{}{}
-				}
-				disabledMcps := make(map[string]struct{}, len(eff.DisabledMCPs))
-				for _, dm := range eff.DisabledMCPs {
-					disabledMcps[dm] = struct{}{}
-				}
-				filtered := allowedToolNames[:0]
-				for _, name := range allowedToolNames {
-					if _, ok := disabledSet[name]; ok {
-						continue
-					}
-					parts := strings.SplitN(name, "__", 2)
-					if len(parts) == 2 {
-						if _, ok := disabledMcps[parts[0]]; ok {
-							continue
-						}
-					}
-					filtered = append(filtered, name)
-				}
-				allowedToolNames = filtered
-			}
-		}
-	}
-
 	var readDirs []string
 	if outputsDir := s.outputsDir(); outputsDir != "" {
 		readDirs = append(readDirs, outputsDir)

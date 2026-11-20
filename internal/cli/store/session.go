@@ -1421,6 +1421,14 @@ func RefreshWorkspaceTools(ctx context.Context, agent string) (int, error) {
 	return refreshWorkspaceToolsForce(ctx, Client(), agent, false)
 }
 
+// ForceRefreshWorkspaceTools refetches tools for the effective agent and
+// replaces the AppState cache even when it already looks fresh. Use it after a
+// daemon-side mutation (such as enabling or disabling a tool) whose response is
+// not agent-classified.
+func ForceRefreshWorkspaceTools(ctx context.Context) (int, error) {
+	return refreshWorkspaceToolsForce(ctx, Client(), effectiveToolAgent(), true)
+}
+
 // refreshWorkspaceTools fetches the workspace tools classified for agent and
 // caches them in AppState. The fetch is skipped when the cache already holds
 // tools for the same agent, unless force is true.

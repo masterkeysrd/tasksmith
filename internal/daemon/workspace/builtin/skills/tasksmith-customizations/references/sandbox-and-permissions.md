@@ -89,12 +89,12 @@ Every key is optional; an empty document leaves the built-in `default` permissio
 | `defaultMode` | `"default"` \| `"accept_edits"` \| `"plan"` \| `"ask"` \| `"auto"` | `"default"` | Starting permission mode for new sessions in this scope. |
 | `allow` | string[] | `[]` | `tool(pattern)` rules that pre-authorize matching tool plans. |
 | `deny` | string[] | `[]` | `tool(pattern)` rules that reject matching tool plans outright. |
-| `disabledTools` | string[] | `[]` | Built-in or workspace tool names disabled in this scope. |
-| `disabledMcps` | string[] | `[]` | MCP server names disabled in this scope. |
+
+Tool and MCP availability is not configured here: it is deterministic from WARP manifests (`spec.enabled`) and `WORKSPACE.md` policies (`spec.policies.tools.exclude`, `spec.policies.mcps.exclude`). A legacy document carrying `disabledTools`/`disabledMcps` keys still decodes; the keys are ignored.
 
 ### Merge rules & `tool(pattern)` syntax
 
-- **Scope merge**: `project.defaultMode` overrides `global.defaultMode` when non-empty; `allow`, `deny`, `disabledTools`, and `disabledMcps` merge as deduplicated unions across `global` and `project`. `deny` always beats `allow`.
+- **Scope merge**: `project.defaultMode` overrides `global.defaultMode` when non-empty; `allow` and `deny` merge as deduplicated unions across `global` and `project`. `deny` always beats `allow`.
 - **Rule format**: every entry in `allow` and `deny` must parse as `tool(pattern)` with non-empty `tool` and `pattern` (no nested parentheses). Wildcard `*(*)` matches every tool and target.
 - **Common pattern shapes**:
   - Commands: `bash(git *)`, `bash(go test *)` (prefix `*` matches commands starting with that prefix).

@@ -29,6 +29,8 @@ type ProviderModelEdit struct {
 	Aliases []string
 	Context int
 	Output  int
+	// Catalog seeds a new model with metadata from its provider.
+	Catalog *warp.ProviderModel
 }
 
 // ProviderRecord is one provider name as the workspace resolves it across
@@ -485,10 +487,19 @@ func (w *Workspace) UpdateProviderModels(name string, models []ProviderModelEdit
 		pm := warp.ProviderModel{}
 		if cur, declared := existing[id]; declared {
 			pm = *cur.DeepCopy()
+		} else if m.Catalog != nil {
+			pm = *m.Catalog.DeepCopy()
 		}
 		pm.ID = id
 		pm.Name = cmp.Or(strings.TrimSpace(m.Name), id)
-		pm.Label = strings.TrimSpace(m.Label)
+		if m.Catalog != nil && existing[id] == nil {
+			if pm.Name == id {
+				pm.Name = cmp.Or(m.Catalog.Name, id)
+			}
+			pm.Label = cmp.Or(strings.TrimSpace(m.Label), pm.Label)
+		} else {
+			pm.Label = strings.TrimSpace(m.Label)
+		}
 		pm.Aliases = normalizeAliasList(m.Aliases)
 		if m.Context > 0 || m.Output > 0 {
 			if m.Context > 0 {

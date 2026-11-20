@@ -192,9 +192,14 @@ func ToggleOnboardingMCP(mcp string) {
 	})
 }
 
-// GoToStep transitions directly to targetStep while recording current step in history.
+// GoToStep transitions directly to targetStep while recording current step in
+// history. The user scope has no repository, so nothing a tool-selection step
+// chooses could be written deterministically; it is skipped there.
 func GoToStep(targetStep OnboardingStep) {
 	updateOnboarding(func(s *OnboardingState) {
+		if targetStep == StepTools && s.Scope == "user" {
+			targetStep = StepReview
+		}
 		if s.Step != targetStep {
 			s.History = append(s.History, s.Step)
 			s.Step = targetStep

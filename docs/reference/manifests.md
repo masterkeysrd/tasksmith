@@ -105,11 +105,12 @@ Ensure error handling wraps sentinels using `%w`.
 | `defaultAgent` | string | Persona activated for new sessions (defaults to `main`). |
 | `plugins` | array of objects | External plugin resources to load: `source`, `version`, `namespace`, `imports.include`, `imports.exclude`. |
 | `policies.tools.include` | array of strings | Tool grant glob patterns allowed in this workspace. |
-| `policies.tools.exclude` | array of strings | Tool denial glob patterns blocked in this workspace. |
+| `policies.tools.exclude` | array of strings | Tool denial glob patterns; matching tools are unavailable in this workspace (never registered, listed `[Disabled]` in `/tools`, toggleable there). |
 | `policies.tools.dangerous` | string | Policy for `isDangerous` tools: `allow`, `ask`, or `deny` (default `ask`). |
 | `policies.tools.openWorld` | string | Policy for `isOpenWorld` tools: `allow`, `ask`, or `deny` (default `allow`). |
 | `policies.tools.readOnly` | boolean | When `true`, only `isReadOnly` tools are allowed. |
 | `policies.tools.ask` | array of strings | Tool glob patterns that require approval. |
+| `policies.mcps.exclude` | array of strings | MCP server glob patterns; matching servers never connect, expose no tools, and list `[Disabled]` in `/mcp` (toggleable there). |
 
 *The Markdown body below the frontmatter serves as workspace-level system instructions inherited by all agents.*
 
@@ -578,6 +579,7 @@ Executes project linting rules and returns diagnostic reports.
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
+| `enabled` | boolean | Set `false` to opt the tool out everywhere its manifest loads; it lists `[Disabled]` in `/tools` and can be re-enabled from there (which removes the flag). Omitted means enabled. |
 | `command` | array of strings | Executable binary and argument list. Each element is an independent argv entry — never a shell command line. Elements may contain command templates (see below). |
 | `env` | map[string]string | Environment variables injected into the process. Values are used verbatim (not templated). The host daemon environment is never inherited. |
 | `inputSchema` | object | JSON Schema describing the tool's input arguments. Call arguments are validated against it before execution. |
@@ -699,6 +701,7 @@ spec:
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
+| `enabled` | boolean | Set `false` to keep the server from ever connecting or exposing tools; it lists `[Disabled]` in `/mcp` and can be re-enabled from there (which removes the flag). Omitted means enabled. |
 | `type` | string | Transport protocol: `stdio`, `sse`, or `http`. |
 | `command` | array of strings | Command line and arguments for `stdio` process execution. |
 | `endpoint` | string | HTTP/SSE server URL for network-based MCP servers. |

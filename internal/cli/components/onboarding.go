@@ -729,6 +729,9 @@ func renderReviewStep(props OnboardingWizardProps, state store.OnboardingState, 
 		}
 	}
 	changes = append(changes, "• ~/.config/tasksmith/permissions.json (defaultMode: "+string(state.DefaultMode)+")")
+	if excluded := countToggledOff(state.DisabledTools) + countToggledOff(state.DisabledMCPs); excluded > 0 && state.Scope != "user" {
+		changes = append(changes, fmt.Sprintf("+ WORKSPACE.md policies (%d tool/MCP exclusions)", excluded))
+	}
 	changes = append(changes, "• trust.json, workspace.json")
 
 	options := []uicomponents.Option{
@@ -778,6 +781,19 @@ func renderReviewStep(props OnboardingWizardProps, state store.OnboardingState, 
 			}
 		},
 	})
+}
+
+// countToggledOff reports how many entries in an onboarding toggle map were
+// switched off, so the review step can state how many exclusions will be
+// written into WORKSPACE.md policies.
+func countToggledOff(m map[string]bool) int {
+	n := 0
+	for _, disabled := range m {
+		if disabled {
+			n++
+		}
+	}
+	return n
 }
 
 func toTrustStatus(s api.WorkspaceStatus) api.TrustStatus {

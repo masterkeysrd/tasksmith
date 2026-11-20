@@ -166,8 +166,12 @@ type InitWorkspaceRequest struct {
 	AuthEnv       string            `json:"auth_env,omitempty"`
 	DefaultModels map[string]string `json:"default_models,omitempty"`
 	DefaultMode   PermissionMode    `json:"default_mode,omitempty"`
-	DisabledTools []string          `json:"disabled_tools,omitempty"`
-	DisabledMCPs  []string          `json:"disabled_mcps,omitempty"`
+	// DisabledTools and DisabledMCPs are onboarding choices. They are written
+	// deterministically into the workspace's WORKSPACE.md policies
+	// (spec.policies.tools.exclude / spec.policies.mcps.exclude), never into
+	// permissions.json. Ignored for the "user" scope, which has no repository.
+	DisabledTools []string `json:"disabled_tools,omitempty"`
+	DisabledMCPs  []string `json:"disabled_mcps,omitempty"`
 }
 
 // ContextBreakdown categorizes token usage within the context window.
@@ -317,6 +321,23 @@ const (
 	// (for example the subagent tools for an agent with no subagents), so it is
 	// neither loaded, deferred, nor explicitly denied.
 	ToolStatusInactive ToolStatus = "inactive"
+	// ToolStatusDisabled marks a tool the workspace itself switched off — either
+	// its manifest declares spec.enabled: false or WORKSPACE.md excludes it —
+	// so it is never offered to any agent. /tools can re-enable it.
+	ToolStatusDisabled ToolStatus = "disabled"
+)
+
+// DisabledReason explains why a tool or MCP server is unavailable, which also
+// decides where re-enabling it is written.
+type DisabledReason string
+
+const (
+	// DisabledByManifest means the resource's own manifest declares
+	// spec.enabled: false; re-enabling patches that manifest.
+	DisabledByManifest DisabledReason = "manifest"
+	// DisabledByWorkspacePolicy means the workspace's WORKSPACE.md policies
+	// exclude the resource; re-enabling removes the WORKSPACE.md entry.
+	DisabledByWorkspacePolicy DisabledReason = "workspace_policy"
 )
 
 // Tool describes an available built-in or custom executable tool in the workspace.
@@ -334,6 +355,27 @@ type Tool struct {
 	// Status is the tool's availability for the agent the request was scoped to.
 	// It is empty when the listing was not scoped to an agent.
 	Status ToolStatus `json:"status,omitempty"`
+	// Enabled reports whether the tool can reach an agent at all: its manifest
+	// (and, for an MCP tool, its parent server) is enabled and WORKSPACE.md does
+	// not exclude it. Disabled tools stay listed so /tools can re-enable them.
+	Enabled bool `json:"enabled"`
+	// DisabledBy names why an unavailable tool is unavailable, and therefore
+	// where re-enabling it lands. Empty when Enabled.
+	DisabledBy DisabledReason `json:"disabled_by,omitempty"`
+}
+
+// SetToolEnabledRequest patches availability for one tool. Disabling a
+// workspace-tier tool writes spec.enabled: false to its own manifest; disabling
+// an inherited or built-in tool adds a WORKSPACE.md tools policy exclusion.
+// Enabling removes whichever exclusion applies.
+type SetToolEnabledRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SetMCPEnabledRequest patches availability for one MCP server, following the
+// same placement rules as SetToolEnabledRequest.
+type SetMCPEnabledRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 type ThinkingValue struct {
@@ -1225,25 +1267,21 @@ const (
 	EffectDeny  PermissionEffect = "deny"
 )
 
-// Permissions holds allow and deny rules, default mode, and disabled tools/mcps for a single scope.
+// Permissions holds allow and deny rules and the default mode for a single scope.
 type Permissions struct {
-	Schema        int            `json:"schema,omitempty"`
-	DefaultMode   PermissionMode `json:"defaultMode,omitempty"`
-	DisabledTools []string       `json:"disabledTools,omitempty"`
-	DisabledMCPs  []string       `json:"disabledMcps,omitempty"`
-	Allow         []string       `json:"allow,omitempty"`
-	Deny          []string       `json:"deny,omitempty"`
+	Schema      int            `json:"schema,omitempty"`
+	DefaultMode PermissionMode `json:"defaultMode,omitempty"`
+	Allow       []string       `json:"allow,omitempty"`
+	Deny        []string       `json:"deny,omitempty"`
 }
 
 // Clone returns a deep copy of Permissions.
 func (p Permissions) Clone() Permissions {
 	return Permissions{
-		Schema:        p.Schema,
-		DefaultMode:   p.DefaultMode,
-		DisabledTools: slices.Clone(p.DisabledTools),
-		DisabledMCPs:  slices.Clone(p.DisabledMCPs),
-		Allow:         slices.Clone(p.Allow),
-		Deny:          slices.Clone(p.Deny),
+		Schema:      p.Schema,
+		DefaultMode: p.DefaultMode,
+		Allow:       slices.Clone(p.Allow),
+		Deny:        slices.Clone(p.Deny),
 	}
 }
 
@@ -1428,6 +1466,14 @@ type MCPServer struct {
 	Tools       []MCPToolSummary     `json:"tools,omitempty"`
 	Prompts     []MCPPromptSummary   `json:"prompts,omitempty"`
 	Resources   []MCPResourceSummary `json:"resources,omitempty"`
+	// Enabled reports whether the server may connect at all: its manifest
+	// declares no spec.enabled: false and WORKSPACE.md does not exclude it.
+	// Disabled servers never spawn, expose zero tools/prompts/resources, and
+	// stay listed so /mcp can re-enable them.
+	Enabled bool `json:"enabled"`
+	// DisabledBy names why a disabled server is unavailable, and therefore where
+	// re-enabling it lands. Empty when Enabled.
+	DisabledBy DisabledReason `json:"disabledBy,omitempty"`
 }
 
 // MCPAuthResponse reports how a user should authorize an MCP server.

@@ -72,24 +72,15 @@ func providerStatusIconStyle(scheme *theme.Scheme, status string) style.Style {
 func providerStatusLabel(status string) string {
 	switch status {
 	case "active":
-		return "Active"
+		return "Ready"
 	case "local":
 		return "Local"
 	case "disabled":
 		return "Disabled"
 	case "missing_auth":
-		return "Missing Auth"
+		return "Needs sign-in"
 	default:
 		return status
-	}
-}
-
-func providerStatusRowStyle(scheme *theme.Scheme, status string) style.Style {
-	switch status {
-	case "missing_auth":
-		return style.S().Foreground(scheme.Color.Text.Warning)
-	default:
-		return style.S().Foreground(scheme.Color.Text.Muted)
 	}
 }
 
@@ -131,37 +122,27 @@ func providerGroupOrders(providers []api.WorkspaceProvider) []api.WorkspaceProvi
 	return ordered
 }
 
-// providerRowStatus summarizes a provider row's right column: status word,
-// endpoint/type detail, and model count.
 func providerRowStatus(p api.WorkspaceProvider) string {
-	label := providerStatusLabel(p.Status)
-	// "(shadow)" marks a mute: only a disabled workspace override that shadows
-	// an enabled inherited manifest earns it — an enabled full override is just
-	// that provider's live config.
 	if p.Shadowed && !p.Enabled {
-		label += " (shadow)"
+		return "Disabled (shadow)"
 	}
-	detail := strings.TrimSpace(p.Type)
-	if detail == "" {
-		detail = "provider"
+	return providerStatusLabel(p.Status)
+}
+
+func providerModelCount(models []api.ProviderModelInfo) string {
+	if models == nil {
+		return ""
 	}
-	if endpoint := strings.TrimSpace(p.Endpoint); endpoint != "" && p.Status == "missing_auth" {
-		detail = endpoint
+	if len(models) == 1 {
+		return "1 model"
 	}
-	count := len(p.Models)
-	models := "no models"
-	if count == 1 {
-		models = "1 model"
-	} else if count > 1 {
-		models = fmt.Sprintf("%d models", count)
-	}
-	return fmt.Sprintf("%-12s %s · %s", label, detail, models)
+	return fmt.Sprintf("%d models", len(models))
 }
 
 // providerScopeHeading names one scope group with the directory its manifests
 // live in, taken from the first provider in the group.
 func providerScopeHeading(p api.WorkspaceProvider) string {
-	title := providerScopeName(p) + " providers"
+	title := providerScopeName(p)
 	manifest := strings.TrimSpace(p.Path)
 	if manifest == "" {
 		return title
@@ -170,7 +151,7 @@ func providerScopeHeading(p api.WorkspaceProvider) string {
 	if dir == "." || dir == "/" || dir == "" {
 		return title
 	}
-	return title + " (" + components.ShortenHomePath(filepath.FromSlash(dir)) + ")"
+	return title + " · " + components.ShortenHomePath(filepath.FromSlash(dir))
 }
 
 func providerByName(list []api.WorkspaceProvider, name string) api.WorkspaceProvider {
@@ -180,13 +161,6 @@ func providerByName(list []api.WorkspaceProvider, name string) api.WorkspaceProv
 		}
 	}
 	return api.WorkspaceProvider{Name: name}
-}
-
-func providerCountSubtitle(count int) string {
-	if count == 1 {
-		return "1 provider"
-	}
-	return fmt.Sprintf("%d providers", count)
 }
 
 type providersBrowserProps struct {
@@ -211,9 +185,8 @@ type providersBrowserState struct {
 
 // providersBrowser renders the interactive provider browser inside <Slot />.
 var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserProps) trail.Node {
-	c := store.Client()
 	scheme := theme.UseTheme()
-	winSize := trail.UseWindowSize()
+	c := store.Client()
 
 	providers, setProviders := kitex.UseState[[]api.WorkspaceProvider](nil)
 	loading, setLoading := kitex.UseState(true)
@@ -447,7 +420,7 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 			message = note
 		}
 		return mcpEmptyNotice(mcpEmptyNoticeProps{
-			title:   "Manage model providers (0 configured)",
+			title:   "Manage model providers",
 			message: message,
 			action: func() {
 				store.RemoveSlot(props.slotID)
@@ -461,30 +434,22 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 	listed := providerGroupOrders(providers())
 	headings := make(map[string]string, len(providerScopeOrder))
 	options := make([]uicomponents.Option, len(listed))
+	statusWidth := len("Disabled (shadow)") + 2
+	countWidth := len("10 models")
 	for i, p := range listed {
 		scope := providerScopeName(p)
 		if _, seen := headings[scope]; !seen {
 			headings[scope] = providerScopeHeading(p)
 		}
-		status := providerRowStatus(p)
+		status, count := providerRowStatus(p), providerModelCount(p.Models)
+		statusWidth = max(statusWidth, len(status)+2)
+		countWidth = max(countWidth, len(count))
 		options[i] = uicomponents.Option{
-			Value:       p.Name,
-			Label:       p.Name,
-			Description: status,
-			Search:      p.Type + " " + p.Endpoint,
-			Cells:       []string{p.Name, status},
-			Icon:        mcpIconNode(providerStatusIcon(p.Status), providerStatusIconStyle(scheme, p.Status)),
-			CellNodes: []trail.Node{
-				nil,
-				mcpBadgeNode(status, providerStatusRowStyle(scheme, p.Status)),
-			},
+			Value: p.Name,
+			Label: p.Name,
+			Cells: []string{p.Name, status, count},
+			Icon:  mcpIconNode(providerStatusIcon(p.Status), providerStatusIconStyle(scheme, p.Status)),
 		}
-	}
-
-	title := "Manage model providers"
-	subtitle := providerCountSubtitle(len(listed))
-	if note := strings.TrimSpace(notice()); note != "" {
-		subtitle = subtitle + " · " + note
 	}
 
 	enterModels := func(name string) {
@@ -493,13 +458,24 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 		setState(providersBrowserState{pane: providersPaneModels, provider: &p})
 	}
 
-	pickerProps := components.NewPicker(title, options, func(opt uicomponents.Option) {
+	pickerProps := components.NewPicker("Manage model providers", options, func(opt uicomponents.Option) {
 		enterModels(opt.Value)
 	})
-	pickerProps.Subtitle = subtitle
+	pickerProps.Subtitle = strings.TrimSpace(notice())
 	pickerProps.Columns = []uicomponents.Column{
 		{Width: 0, Align: style.TextAlignLeft},
-		{Width: min(max(winSize.Width-34, 30), 56), Align: style.TextAlignLeft},
+		{Width: statusWidth, Align: style.TextAlignLeft},
+		{Width: countWidth, Align: style.TextAlignRight},
+	}
+	pickerProps.Footer = func(opt uicomponents.Option) string {
+		p := providerByName(listed, opt.Value)
+		if p.Endpoint == "" {
+			return p.Type
+		}
+		if p.Type == "" {
+			return p.Endpoint
+		}
+		return p.Type + " · " + p.Endpoint
 	}
 	pickerProps.GroupLabel = func(opt uicomponents.Option) string {
 		for _, p := range listed {

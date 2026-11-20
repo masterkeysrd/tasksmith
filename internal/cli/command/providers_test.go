@@ -75,7 +75,7 @@ func testWorkspaceProviders() []api.WorkspaceProvider {
 			Enabled: true, Status: "active", Writable: true,
 			DefaultModel: "a-fast",
 			Models: []api.ProviderModelInfo{
-				{ID: "a-fast", Name: "a-fast", Aliases: []string{"default"}},
+				{ID: "a-fast", Name: "a-fast", Label: "Fast model", Context: 1000000, Aliases: []string{"default"}},
 				{ID: "a-mid", Name: "a-mid"},
 			},
 		},
@@ -251,14 +251,24 @@ func TestProvidersBrowserListsGroupsAndToggles(t *testing.T) {
 	f := mountProvidersCommand(t)
 	env := mcpMountActiveSlot(t)
 
-	if !strings.Contains(env.DumpText(), "prova") || !strings.Contains(env.DumpText(), "provb") {
-		t.Fatalf("browser missing providers:\n%s", env.DumpText())
+	frame := env.DumpText()
+	if !strings.Contains(frame, "Workspace · ~/proj/.agents/providers") || !strings.Contains(frame, "User · ~/.config/tasksmith/agents/providers") {
+		t.Fatalf("scope group headings missing:\n%s", frame)
 	}
-	if !strings.Contains(env.DumpText(), "Workspace providers") || !strings.Contains(env.DumpText(), "User providers") {
-		t.Fatalf("scope group headings missing:\n%s", env.DumpText())
+	for _, want := range []string{"❯ ✔ prova Ready 2 models", "⚠ provb Needs sign-in 1 model"} {
+		found := false
+		for line := range strings.Lines(frame) {
+			if strings.Join(strings.Fields(line), " ") == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing row %q in frame:\n%s", want, frame)
+		}
 	}
-	if !strings.Contains(env.DumpText(), "Missing Auth") {
-		t.Fatalf("status column missing:\n%s", env.DumpText())
+	if strings.Contains(frame, "2 providers") {
+		t.Fatalf("unexpected provider row decoration:\n%s", frame)
 	}
 
 	// Space on the highlighted row (prova sorts first) disables it through the
@@ -312,6 +322,23 @@ func TestProvidersBrowserEnterOpensModelsPane(t *testing.T) {
 	}
 	if !strings.Contains(text, "a-fast") || !strings.Contains(text, "a-mid") {
 		t.Fatalf("models pane missing declared models:\n%s", text)
+	}
+
+	frame := strings.Join(strings.Fields(text), " ")
+	if !strings.Contains(frame, "Fast model (default) a-fast 1.0M ctx · @default") ||
+		strings.Contains(text, "★") || strings.Contains(text, "|") {
+		t.Fatalf("unexpected model columns:\n%s", text)
+	}
+	env.SendKey(key.Key{Code: key.KeyDown})
+	if frame, moved := waitForText(env, time.Second, func(s string) bool { return strings.Contains(s, "❯ a-mid") }); !moved {
+		t.Fatalf("cursor did not move to the second model:\n%s", frame)
+	}
+	env.SendKey(key.Key{Code: 'd', Text: "d"})
+	text, ok = waitForText(env, 2*time.Second, func(s string) bool {
+		return strings.Contains(s, "a-mid (default)") && !strings.Contains(s, "Fast model (default)")
+	})
+	if !ok {
+		t.Fatalf("staged default marker did not move:\n%s", text)
 	}
 
 	// Esc returns to the browser rather than closing the whole command.
@@ -483,7 +510,7 @@ func TestProvidersAliasPaneLoadsAndSaves(t *testing.T) {
 		t.Fatal("models pane did not open")
 	}
 	env.SendKey(key.Key{Code: key.KeyF2})
-	text, ok := waitForText(env, 2*time.Second, func(s string) bool { return strings.Contains(s, "Model aliases · prova/a-fast") })
+	text, ok := waitForText(env, 2*time.Second, func(s string) bool { return strings.Contains(s, "Model aliases · prova/Fast model") })
 	if !ok {
 		t.Fatalf("alias editor did not open:\n%s", text)
 	}
@@ -621,14 +648,14 @@ func TestModelPickerAliasEditorOpensOnF2(t *testing.T) {
 
 // TestProviderRowStatusShadowSuffix proves "(shadow)" marks a mute only: a
 // disabled workspace override over an enabled inherited manifest earns the
-// suffix, while an enabled full workspace override renders as plain "Active".
+// suffix, while an enabled full workspace override renders as plain "Ready".
 func TestProviderRowStatusShadowSuffix(t *testing.T) {
 	mute := providerRowStatus(api.WorkspaceProvider{Name: "prov", Type: "openai", Status: "disabled", Shadowed: true})
 	if !strings.HasPrefix(mute, "Disabled (shadow)") {
 		t.Errorf("muted shadow row = %q, want Disabled (shadow) prefix", mute)
 	}
 	override := providerRowStatus(api.WorkspaceProvider{Name: "prov", Type: "openai", Status: "active", Shadowed: true, Enabled: true})
-	if !strings.HasPrefix(override, "Active ") || strings.Contains(override, "(shadow)") {
-		t.Errorf("enabled full override row = %q, want Active without (shadow)", override)
+	if override != "Ready" {
+		t.Errorf("enabled full override row = %q, want Ready without (shadow)", override)
 	}
 }

@@ -302,6 +302,14 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 			},
 		}
 	}
+	if len(opts.DisabledMCPs) > 0 {
+		excluded := cloneSlice(opts.DisabledMCPs)
+		sort.Strings(excluded)
+		if policies == nil {
+			policies = &warp.Policies{}
+		}
+		policies.MCPs = &warp.ResourceFilter{Exclude: excluded}
+	}
 
 	var defaultModels *warp.ModelDefaults
 	if len(opts.DefaultModels) > 0 {

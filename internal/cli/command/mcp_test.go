@@ -404,6 +404,7 @@ func mcpTestServers() []api.MCPServer {
 			Command:     []string{"npx", "-y", "@acme/notes-mcp"},
 			AuthType:    "",
 			Status:      api.MCPStatusConnected,
+			Enabled:     true,
 			Tools: []api.MCPToolSummary{
 				{Name: "notes__echo", RawName: "echo", Description: "Echo text", Allowed: true, Annotations: api.ToolAnnotation{IsReadOnly: true}},
 				{Name: "notes__purge", RawName: "purge", Description: "Delete notes", Allowed: false},
@@ -428,6 +429,7 @@ func mcpTestServers() []api.MCPServer {
 			Endpoint:  "https://mcp.example.test/sse",
 			AuthType:  "oauth2",
 			Status:    api.MCPStatusAuthRequired,
+			Enabled:   true,
 			AuthURL:   "https://example.com/authorize?server=sentry",
 			Tools:     []api.MCPToolSummary{{Name: "sentry__search", RawName: "search", Allowed: true}},
 		},
@@ -445,6 +447,7 @@ func mcpToolDetailServer() api.MCPServer {
 		Transport: "stdio",
 		Command:   []string{"middleman", "mcp"},
 		Status:    api.MCPStatusConnected,
+		Enabled:   true,
 		Tools: []api.MCPToolSummary{
 			{
 				Name:        "middleman__apply_rule_override",
@@ -1347,7 +1350,7 @@ func TestMCPBrowserServerListHasNoFilterInput(t *testing.T) {
 	if strings.Contains(out, "Filter:") {
 		t.Errorf("server list must not offer a filter input, it steals the action keys:\n%s", out)
 	}
-	for _, want := range []string{"a Auth", "r Restart", "R Reload"} {
+	for _, want := range []string{"e Toggle", "a Auth", "r Restart"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list should advertise %q so the key is discoverable:\n%s", want, out)
 		}
@@ -1455,6 +1458,7 @@ func TestMCPInspectorShowsProhibitedItems(t *testing.T) {
 		"  2. Run prompt (2)",
 		"  3. Attach resource (2)",
 		"  4. Reconnect",
+		"  5. Disable server",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("inspector output missing %q:\n%s", want, out)
@@ -1479,7 +1483,8 @@ func TestMCPInspectorShowsProhibitedItems(t *testing.T) {
 		"Authorize at:     https://example.com/authorize?server=sentry",
 		"❯ 1. Authenticate",
 		"  2. Reconnect",
-		"  3. Back to servers",
+		"  3. Disable server",
+		"  4. Back to servers",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("auth-pending overview missing %q:\n%s", want, out)
@@ -1501,6 +1506,7 @@ func TestMCPInspectorNotConnectedNotice(t *testing.T) {
 		Name:      "ghost",
 		Status:    api.MCPStatusError,
 		Transport: "stdio",
+		Enabled:   true,
 		Error:     "connect refused",
 	}}))
 	for _, want := range []string{"✘ failed to connect", "Error:            connect refused", "Capabilities:     none"} {
@@ -1637,7 +1643,7 @@ func TestMCPInspectorMenuForStatus(t *testing.T) {
 	for _, item := range mcpMenuFor(pending) {
 		labels = append(labels, item.Label)
 	}
-	wantPending := []string{"Authenticate", "Reconnect", "Back to servers"}
+	wantPending := []string{"Authenticate", "Reconnect", "Disable server", "Back to servers"}
 	if !reflect.DeepEqual(labels, wantPending) {
 		t.Errorf("auth-pending menu = %v, want %v", labels, wantPending)
 	}
@@ -1646,18 +1652,38 @@ func TestMCPInspectorMenuForStatus(t *testing.T) {
 	for _, item := range mcpMenuFor(connected) {
 		labels = append(labels, item.Label)
 	}
-	wantConnected := []string{"View tools (2)", "Run prompt (2)", "Attach resource (2)", "Reconnect"}
+	wantConnected := []string{"View tools (2)", "Run prompt (2)", "Attach resource (2)", "Reconnect", "Disable server"}
 	if !reflect.DeepEqual(labels, wantConnected) {
 		t.Errorf("connected menu = %v, want %v", labels, wantConnected)
 	}
 
 	// A server that discovered nothing offers only a retry.
 	labels = labels[:0]
-	for _, item := range mcpMenuFor(api.MCPServer{Name: "ghost", Status: api.MCPStatusError}) {
+	for _, item := range mcpMenuFor(api.MCPServer{Name: "ghost", Status: api.MCPStatusError, Enabled: true}) {
 		labels = append(labels, item.Label)
 	}
-	if !reflect.DeepEqual(labels, []string{"Reconnect"}) {
-		t.Errorf("failed server menu = %v, want [Reconnect]", labels)
+	if !reflect.DeepEqual(labels, []string{"Reconnect", "Disable server"}) {
+		t.Errorf("failed server menu = %v, want [Reconnect Disable server]", labels)
+	}
+
+	// A disabled server offers only re-enabling: nothing is connected to
+	// inspect, restart, or authorize.
+	labels = labels[:0]
+	for _, item := range mcpMenuFor(api.MCPServer{Name: "off", Status: api.MCPStatusDisconnected}) {
+		labels = append(labels, item.Label)
+	}
+	if !reflect.DeepEqual(labels, []string{"Enable (patch spec.enabled)", "Back to servers"}) {
+		t.Errorf("disabled server menu = %v, want [Enable (patch spec.enabled) Back to servers]", labels)
+	}
+
+	// An exclusion by WORKSPACE.md policy names itself so the user knows where
+	// the change lands.
+	labels = labels[:0]
+	for _, item := range mcpMenuFor(api.MCPServer{Name: "off", DisabledBy: api.DisabledByWorkspacePolicy}) {
+		labels = append(labels, item.Label)
+	}
+	if !reflect.DeepEqual(labels, []string{"Enable (remove WORKSPACE.md exclusion)", "Back to servers"}) {
+		t.Errorf("policy-excluded server menu = %v, want [Enable (remove WORKSPACE.md exclusion) Back to servers]", labels)
 	}
 
 	// An OAuth server that is already connected can still re-authorize, so the
@@ -1668,7 +1694,7 @@ func TestMCPInspectorMenuForStatus(t *testing.T) {
 	for _, item := range mcpMenuFor(oauthConnected) {
 		labels = append(labels, item.Label)
 	}
-	wantOAuth := []string{"View tools (2)", "Run prompt (2)", "Attach resource (2)", "Authenticate", "Reconnect"}
+	wantOAuth := []string{"View tools (2)", "Run prompt (2)", "Attach resource (2)", "Authenticate", "Reconnect", "Disable server"}
 	if !reflect.DeepEqual(labels, wantOAuth) {
 		t.Errorf("connected OAuth menu = %v, want %v", labels, wantOAuth)
 	}
@@ -3041,6 +3067,7 @@ func TestMCPRowStatusPrioritizesStatusDiagnostics(t *testing.T) {
 		Name:        "github",
 		Description: "GitHub repositories, issues, and pull requests",
 		Status:      api.MCPStatusError,
+		Enabled:     true,
 		Error:       `connect MCP server "github": sending "initialize": rejected by transport: 401 Unauthorized`,
 	}
 	got := mcpRowStatus(failing, 0)
@@ -3058,21 +3085,30 @@ func TestMCPRowStatusPrioritizesStatusDiagnostics(t *testing.T) {
 		t.Errorf("shortened status %q should still name the state", shortened)
 	}
 
-	bareFailure := api.MCPServer{Name: "broken", Status: api.MCPStatusError}
+	bareFailure := api.MCPServer{Name: "broken", Status: api.MCPStatusError, Enabled: true}
 	if got := mcpRowStatus(bareFailure, 0); got != "failed to connect" {
 		t.Errorf("error without a reason = %q", got)
 	}
 
-	pending := api.MCPServer{Name: "linear", Description: "whatever", Status: api.MCPStatusAuthRequired}
+	pending := api.MCPServer{Name: "linear", Description: "whatever", Status: api.MCPStatusAuthRequired, Enabled: true}
 	if got := mcpRowStatus(pending, 0); got != "needs authentication" {
 		t.Errorf("pending authorization = %q, want needs authentication", got)
 	}
 
-	if got := mcpRowStatus(api.MCPServer{Status: api.MCPStatusConnecting}, 0); got != "connecting…" {
+	if got := mcpRowStatus(api.MCPServer{Status: api.MCPStatusConnecting, Enabled: true}, 0); got != "connecting…" {
 		t.Errorf("connecting = %q", got)
 	}
-	if got := mcpRowStatus(api.MCPServer{Status: api.MCPStatusDisconnected, Error: "dial refused"}, 0); got != "disconnected" {
+	if got := mcpRowStatus(api.MCPServer{Status: api.MCPStatusDisconnected, Enabled: true, Error: "dial refused"}, 0); got != "disconnected" {
 		t.Errorf("disconnected = %q, want the neutral label", got)
+	}
+
+	// A disabled server reports what switched it off, whatever its last
+	// connection state was.
+	if got := mcpRowStatus(api.MCPServer{Status: api.MCPStatusError, Error: "stale"}, 0); got != "disabled (spec.enabled)" {
+		t.Errorf("disabled = %q, want the manifest reason", got)
+	}
+	if got := mcpRowStatus(api.MCPServer{Enabled: false, DisabledBy: api.DisabledByWorkspacePolicy}, 0); got != "disabled (WORKSPACE.md policy)" {
+		t.Errorf("policy-excluded = %q, want the policy reason", got)
 	}
 }
 

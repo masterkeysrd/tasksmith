@@ -8,6 +8,7 @@ Tool manifests are discovered in the usual resource scopes, commonly under `.age
 
 | `spec` field | Type | Meaning |
 | --- | --- | --- |
+| `enabled` | bool | Set `false` to opt the tool out everywhere its manifest loads; it then lists as `[Disabled]` instead of registering. Omitted means enabled. |
 | `command` | string[] | Executable and static arguments; required for a command-backed tool. |
 | `env` | map | Environment values supplied to the process. |
 | `inputSchema` | object | JSON Schema for the arguments supplied by the model. |
@@ -60,9 +61,11 @@ Run the project checks and report failures.
 
 Custom and MCP tools are not listed in an agent's `spec.tools` by default, so they load as **deferred** tools (`DeferLoading: true`): they are registered in the session's tool container but withheld from the initial model context. When a session resolves at least one deferred tool, TaskSmith automatically activates the built-in `tool_search` tool as an eager tool. `tool_search` runs a BM25 keyword search over the deferred tools' names, descriptions, and parameters and returns the matching tool names, which then become available for direct invocation on subsequent turns. When a session has no deferred tools, `tool_search` is not registered.
 
-To make a custom or MCP tool eager instead of deferred, list its name in the agent's `spec.tools`. Run `/tools` in the CLI to see each tool's resolved status for the active agent (`[Eager]`, `[Deferred]`, `[Denied]`, `[Inactive]`) and to hot-reload manifests edited on disk.
+To make a custom or MCP tool eager instead of deferred, list its name in the agent's `spec.tools`. Run `/tools` in the CLI to see each tool's resolved status for the active agent (`[Eager]`, `[Deferred]`, `[Denied]`, `[Disabled]`, `[Inactive]`) and to hot-reload manifests edited on disk.
 
-Three built-ins are exceptions to "eager only if listed": `tool_search`, `load_rule`, and `read_mcp_resource` activate themselves when the workspace gives them something to do (a deferred tool, a conditional rule, a connected server with a permitted resource). `policies.tools` still governs them, so denying one removes it.
+A tool or MCP server is unavailable only through manifests, never a hidden runtime switch: its own manifest declares `spec.enabled: false` (a `[Disabled]` manifest opt-out that travels with the resource), or the repository's `WORKSPACE.md` excludes it via `spec.policies.tools.exclude` / `spec.policies.mcps.exclude` (a per-repository `[Disabled]` policy exclusion that also covers built-in and user-scope resources). Disabled resources stay visible in resource listings. Toggles can edit writable workspace manifests and repository exclusions. To enable a resource disabled in a user-scope manifest, edit that manifest directly.
+
+Three built-ins are exceptions to "eager only if listed": `tool_search`, `load_rule`, and `read_mcp_resource` activate themselves when the workspace gives them something to do (a deferred tool, a conditional rule, a connected server with a permitted resource). `policies.tools` still governs them. Disabling `tool_search` also removes deferred tools from the agent’s context.
 
 ## MCP definitions
 
@@ -72,6 +75,7 @@ The filters and annotation overrides below are **enforced**. A tool excluded by 
 
 | `spec` field | Type | Meaning in the WARP definition |
 | --- | --- | --- |
+| `enabled` | bool | Set `false` to keep the server from ever connecting or exposing tools; it then lists as `[Disabled]`. Omitted means enabled. |
 | `type` | string | Transport: `stdio` (default), `sse`, `http`, or `streamable-http`. |
 | `command` | string[] | Executable and arguments for a `stdio` server. |
 | `endpoint` | string | Server URL for an HTTP-based transport. |

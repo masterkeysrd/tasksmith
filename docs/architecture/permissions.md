@@ -70,10 +70,11 @@ Before any session initializes or executes agent instructions, the directory pas
   - Workspace `.env` files are ignored, preventing untrusted repositories from harvesting or exfiltrating local environment variables.
   - All file mutations require interactive authorization, and shell execution is strictly restricted.
 
-### 6. Monotonic Context Exclusion
-Persistent permission settings in `permissions.json` (`disabledTools` and `disabledMcps`) form a monotonic union across global and project configurations:
-- Disabled tools and MCP servers are pruned directly from the agent's tool definitions during turn assembly.
-- Because disabled tools never enter the model's token context, the model cannot attempt to invoke them, eliminating hallucinated calls and execution denials.
+### 6. Deterministic Context Exclusion
+Tool and MCP availability is resolved entirely from workspace manifests before a session assembles any prompt — there is no runtime disabled-list in `permissions.json` (legacy `disabledTools`/`disabledMcps` keys decode but are ignored):
+- A resource is unavailable when its own manifest declares `spec.enabled: false` or when `WORKSPACE.md` `spec.policies.tools.exclude` / `spec.policies.mcps.exclude` matches it; a disabled MCP server's discovered tools ride the server's verdict.
+- Unavailable tools and servers are pruned from the agent's tool definitions during catalog population, so they never enter the model's token context and the model cannot attempt to invoke them, eliminating hallucinated calls and execution denials.
+- Because the verdict is a pure function of checked-in manifests, toggling availability is a manifest write (`spec.enabled` patch or `WORKSPACE.md` exclusion edit), and every client observing the same workspace resolves the same tool set.
 
 ### 7. Unsandboxed Execution Namespace
 Per-command kernel-sandbox bypasses live in a dedicated permission namespace so ordinary approvals can never authorize them:

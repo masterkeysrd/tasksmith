@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -72,10 +73,210 @@ type catalogState struct {
 	workspaceTokens int
 	toolTokens      map[string]int
 
+	// availability is the per-rebuild tool/MCP availability decision table.
+	// Stores may hold unavailable resources (for [Disabled] listings), so every
+	// execution path reads availability here instead of assuming a listing is
+	// already filtered.
+	availability *availabilityIndex
+
 	// validationWarnings holds non-fatal diagnostic messages produced by
 	// registry.Validate() (structural correctness and cross-reference checks
 	// across WORKSPACE.md and all loaded resources).
 	validationWarnings []string
+}
+
+// availabilityIndex is the per-rebuild decision table for tool and MCP
+// availability. Manifest listings include disabled resources so /tools and /mcp
+// can present and re-enable them, so every execution path must consult this
+// index instead of assuming the effective listing is already filtered.
+//
+// A resource is unavailable when it is disabled (spec.enabled: false, or for an
+// MCP tool when its parent server is disabled) or excluded by the workspace's
+// WORKSPACE.md policies. disabled and excluded are kept apart because the
+// listings distinguish a manifest opt-out ([Disabled], toggle re-enables the
+// manifest) from a workspace policy exclusion ([Denied], toggle edits the
+// WORKSPACE.md exclude entry).
+type availabilityIndex struct {
+	disabledTools map[string]bool
+	excludedTools map[string]bool
+	disabledMCPs  map[string]bool
+	excludedMCPs  map[string]bool
+}
+
+func (idx *availabilityIndex) toolAvailable(name string) bool {
+	if idx == nil {
+		return true
+	}
+	return !idx.disabledTools[name] && !idx.excludedTools[name]
+}
+
+func (idx *availabilityIndex) mcpAvailable(name string) bool {
+	if idx == nil {
+		return true
+	}
+	return !idx.disabledMCPs[name] && !idx.excludedMCPs[name]
+}
+
+func (idx *availabilityIndex) toolDisabledBy(name string) api.DisabledReason {
+	if idx == nil {
+		return ""
+	}
+	switch {
+	case idx.disabledTools[name]:
+		return api.DisabledByManifest
+	case idx.excludedTools[name]:
+		return api.DisabledByWorkspacePolicy
+	default:
+		return ""
+	}
+}
+
+func (idx *availabilityIndex) mcpDisabledBy(name string) api.DisabledReason {
+	if idx == nil {
+		return ""
+	}
+	switch {
+	case idx.disabledMCPs[name]:
+		return api.DisabledByManifest
+	case idx.excludedMCPs[name]:
+		return api.DisabledByWorkspacePolicy
+	default:
+		return ""
+	}
+}
+
+// matchResourcePattern mirrors WARP's unexported policy matcher: a pattern is
+// tried against the resource's short, namespace-qualified, and fully qualified
+// identities with path.Match semantics. Keep in sync with warp.matchResourcePattern.
+func matchResourcePattern(pattern, shortName, nsName, qualifiedName string) bool {
+	if m, _ := path.Match(pattern, shortName); m {
+		return true
+	}
+	if m, _ := path.Match(pattern, nsName); m {
+		return true
+	}
+	if m, _ := path.Match(pattern, qualifiedName); m {
+		return true
+	}
+	return false
+}
+
+// resourceIdentities returns the three identities WARP policy patterns match.
+func resourceIdentities(res warp.Resource) (string, string, string) {
+	short := res.GetName()
+	return short, res.GetNamespace() + "/" + short, res.QualifiedName()
+}
+
+// toolPolicyExcluded reports whether a workspace tools policy denies a resource
+// by name: an include allowlist that does not match, or an exclude pattern that
+// does. Annotation-based actions (dangerous/openWorld/readOnly) are the
+// permission gate's concern and are deliberately not evaluated here.
+func toolPolicyExcluded(policy *warp.ToolPolicies, res warp.Resource) bool {
+	if policy == nil {
+		return false
+	}
+	short, nsName, qualified := resourceIdentities(res)
+	if len(policy.Include) > 0 {
+		matched := false
+		for _, pat := range policy.Include {
+			if matchResourcePattern(pat, short, nsName, qualified) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return true
+		}
+	}
+	for _, pat := range policy.Exclude {
+		if matchResourcePattern(pat, short, nsName, qualified) {
+			return true
+		}
+	}
+	return false
+}
+
+// mcpFilterExcluded mirrors WARP's MCP identity filter: "*" always matches
+// (path.Match's star never crosses a namespace separator), then include and
+// exclude patterns run against the server's three identities.
+func mcpFilterExcluded(filter *warp.ResourceFilter, res warp.Resource) bool {
+	if filter == nil {
+		return false
+	}
+	short, nsName, qualified := resourceIdentities(res)
+	matchesAny := func(patterns []string) bool {
+		for _, pat := range patterns {
+			if pat == "*" || matchResourcePattern(pat, short, nsName, qualified) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(filter.Include) > 0 && !matchesAny(filter.Include) {
+		return true
+	}
+	if len(filter.Exclude) > 0 && matchesAny(filter.Exclude) {
+		return true
+	}
+	return false
+}
+
+// buildAvailability computes the disabled/excluded decision table for one
+// rebuild from the raw (disabled-inclusive) tool and MCP listings plus the
+// workspace's WORKSPACE.md policies.
+func buildAvailability(policies *warp.Policies, tools []*warp.Tool, mcps []*warp.MCP) *availabilityIndex {
+	idx := &availabilityIndex{
+		disabledTools: make(map[string]bool),
+		excludedTools: make(map[string]bool),
+		disabledMCPs:  make(map[string]bool),
+		excludedMCPs:  make(map[string]bool),
+	}
+	var toolPolicy *warp.ToolPolicies
+	var mcpFilter *warp.ResourceFilter
+	if policies != nil {
+		toolPolicy = policies.Tools
+		mcpFilter = policies.MCPs
+	}
+
+	serverByName := make(map[string]*warp.MCP, len(mcps))
+	for _, m := range mcps {
+		if m == nil {
+			continue
+		}
+		serverByName[m.Metadata.Name] = m
+		if !m.Spec.IsEnabled() {
+			idx.disabledMCPs[m.Metadata.Name] = true
+		}
+		if mcpFilterExcluded(mcpFilter, m) {
+			idx.excludedMCPs[m.Metadata.Name] = true
+		}
+	}
+
+	for _, t := range tools {
+		if t == nil {
+			continue
+		}
+		name := t.Metadata.Name
+		if !t.Spec.IsEnabled() {
+			idx.disabledTools[name] = true
+		}
+		if toolPolicyExcluded(toolPolicy, t) {
+			idx.excludedTools[name] = true
+		}
+		// A tool discovered from an MCP server rides that server's availability:
+		// a disabled or excluded server exposes zero tools.
+		if serverName, _, ok := warp.ParseMCPToolName(name); ok {
+			if server, found := serverByName[serverName]; found {
+				if !server.Spec.IsEnabled() {
+					idx.disabledTools[name] = true
+				}
+				if mcpFilterExcluded(mcpFilter, server) {
+					idx.excludedTools[name] = true
+				}
+			}
+		}
+	}
+	return idx
 }
 
 // Catalog acts as an in-memory query and resolution proxy over a warp.Registry
@@ -334,20 +535,42 @@ func (c *Catalog) populate() {
 		st.workspaceTokens = tokenizer.Estimate(wsPrompt)
 	}
 
-	// 1. Tools
+	// 1. Tools and MCP servers. Disabled manifests (spec.enabled: false) are
+	// listed so /tools and /mcp can render them as [Disabled] and offer
+	// re-enabling; availability itself is decided by the per-rebuild index
+	// below, which Tools()/ToolNames()/MCPs()/the partition all consult.
 	var toolsList []*warp.Tool
 	rawTools := resolver.ListResources(warp.QueryOptions{
-		Kinds:     []warp.Kind{warp.KindTool},
-		Effective: true,
+		Kinds:           []warp.Kind{warp.KindTool},
+		Effective:       true,
+		IncludeDisabled: true,
 	})
 	for _, r := range rawTools {
 		if t, ok := r.(*warp.Tool); ok {
 			toolsList = append(toolsList, t)
 		}
 	}
+	var mcpDefs []*warp.MCP
+	rawMCPs := resolver.ListResources(warp.QueryOptions{
+		Kinds:           []warp.Kind{warp.KindMCP},
+		Effective:       true,
+		IncludeDisabled: true,
+	})
+	for _, r := range rawMCPs {
+		if m, ok := r.(*warp.MCP); ok {
+			mcpDefs = append(mcpDefs, m)
+		}
+	}
+	st.availability = buildAvailability(c.Policies(), toolsList, mcpDefs)
+
 	toolSnapshots := make([]ToolSnapshot, 0, len(toolsList))
 	for _, t := range toolsList {
 		snapshot := c.newToolSnapshot(t)
+		snapshot.Enabled = st.availability.toolAvailable(snapshot.Name)
+		snapshot.DisabledBy = st.availability.toolDisabledBy(snapshot.Name)
+		if !snapshot.Enabled {
+			snapshot.Status = api.ToolStatusDisabled
+		}
 		st.toolTokens[snapshot.Name] = snapshot.Tokens
 		toolSnapshots = append(toolSnapshots, snapshot)
 	}
@@ -505,16 +728,16 @@ func (c *Catalog) populate() {
 	}
 	c.agents.Replace(agentList...)
 
-	// 7. MCP servers
-	var mcpList []MCPSnapshot
-	rawMCPs := resolver.ListResources(warp.QueryOptions{
-		Kinds:     []warp.Kind{warp.KindMCP},
-		Effective: true,
-	})
-	for _, r := range rawMCPs {
-		if m, ok := r.(*warp.MCP); ok {
-			mcpList = append(mcpList, c.newMCPSnapshot(m))
-		}
+	// 7. MCP server snapshots, from the same disabled-inclusive listing as the
+	// availability index. The store keeps unavailable servers so /mcp can
+	// render them as [Disabled] and re-enable them; MCPs() (the spawn list
+	// behind MCPDefinitions()) filters through the index instead.
+	mcpList := make([]MCPSnapshot, 0, len(mcpDefs))
+	for _, m := range mcpDefs {
+		snap := c.newMCPSnapshot(m)
+		snap.Enabled = st.availability.mcpAvailable(snap.Name)
+		snap.DisabledBy = st.availability.mcpDisabledBy(snap.Name)
+		mcpList = append(mcpList, snap)
 	}
 	c.mcps.Replace(mcpList...)
 
@@ -567,6 +790,7 @@ func (s *catalogState) clone() *catalogState {
 	out := &catalogState{
 		workspaceTokens: s.workspaceTokens,
 		toolTokens:      make(map[string]int, len(s.toolTokens)),
+		availability:    s.availability,
 	}
 	maps.Copy(out.toolTokens, s.toolTokens)
 	if len(s.validationWarnings) > 0 {
@@ -641,6 +865,10 @@ func (c *Catalog) SetDeniedMCPTools(def *warp.MCP, raw []*warp.Tool) {
 // sorted by name.
 func (c *Catalog) DeniedMCPToolSnapshots() []ToolSnapshot {
 	snaps := c.denied.Snapshot().All()
+	snaps = slices.DeleteFunc(snaps, func(s ToolSnapshot) bool {
+		server, _, ok := warp.ParseMCPToolName(s.Name)
+		return ok && !c.IsMCPServerAvailable(server)
+	})
 	slices.SortFunc(snaps, func(a, b ToolSnapshot) int { return strings.Compare(a.Name, b.Name) })
 	return snaps
 }
@@ -718,6 +946,9 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 	explicitlyNamed := c.explicitlyNamedAgentTools(resolved)
 	for _, t := range resolved.Tools {
 		name := t.Metadata.Name
+		if !c.IsToolAvailable(name) {
+			continue
+		}
 		// MCP tools are discovered at runtime and can be numerous, so they stay
 		// deferred unless the agent names one outright in spec.tools.
 		if _, _, isMCP := warp.ParseMCPToolName(name); isMCP && !explicitlyNamed[name] {
@@ -762,6 +993,10 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 		}
 	}
 
+	if !c.IsToolAvailable("tool_search") {
+		return ToolPartition{Eager: eager}
+	}
+
 	var deferred []string
 	for _, t := range c.Tools() {
 		name := t.Metadata.Name
@@ -804,13 +1039,24 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 // agent policy ceiling blocks them, and inactive otherwise (conditional
 // built-ins whose preconditions are unmet, for example).
 func (c *Catalog) ToolStatuses(resolved *warp.ResolvedAgent) map[string]api.ToolStatus {
-	tools := c.Tools()
-	statuses := make(map[string]api.ToolStatus, len(tools))
+	idx := c.availability()
+	// Classify over the full snapshot superset so a disabled tool reports
+	// [Disabled] instead of falling through to inactive/denied.
+	snaps := c.ToolSnapshots()
+	statuses := make(map[string]api.ToolStatus, len(snaps))
 	// Policy-prohibited MCP tools are not in the effective list, so classify them
 	// directly; they are blocked regardless of the agent's own policy.
 	denied := c.DeniedMCPToolSnapshots()
+	var available []*warp.Tool
+	for _, snap := range snaps {
+		if !idx.toolAvailable(snap.Name) {
+			statuses[snap.Name] = api.ToolStatusDisabled
+			continue
+		}
+		available = append(available, snap.Def)
+	}
 	if resolved == nil {
-		for _, t := range tools {
+		for _, t := range available {
 			statuses[t.Metadata.Name] = api.ToolStatusEager
 		}
 		for _, snap := range denied {
@@ -828,7 +1074,7 @@ func (c *Catalog) ToolStatuses(resolved *warp.ResolvedAgent) map[string]api.Tool
 	}
 
 	hasDeferred := len(partition.Deferred) > 0
-	for _, t := range tools {
+	for _, t := range available {
 		name := t.Metadata.Name
 		if _, ok := statuses[name]; ok {
 			continue
@@ -1454,6 +1700,10 @@ func (c *Catalog) newToolSnapshot(t *warp.Tool) ToolSnapshot {
 		InputSchema:  maps.Clone(t.Spec.InputSchema),
 		OutputSchema: maps.Clone(t.Spec.OutputSchema),
 		Tokens:       toolTokens,
+		// populate() overwrites this with the availability index verdict; the
+		// default serves the resolveByKind fallback, which only ever resolves
+		// enabled manifests.
+		Enabled: true,
 	}
 	if t.Spec.Annotations != nil {
 		tool.Annotations = api.ToolAnnotation{
@@ -1501,6 +1751,27 @@ func (c *Catalog) MCPServerForTool(t *warp.Tool) *warp.MCP {
 	return c.mcpServerForTool(t)
 }
 
+// availability returns the tool/MCP decision table of the current snapshot.
+// A nil index (a catalog that was never populated) treats everything available.
+func (c *Catalog) availability() *availabilityIndex {
+	return c.snapshot().availability
+}
+
+// IsToolAvailable reports whether a tool can reach an agent in this workspace:
+// its manifest (and, for MCP tools, its parent server) is enabled and neither
+// is excluded by the workspace's WORKSPACE.md policies. Disabled tools remain
+// in listings so /tools can present and re-enable them.
+func (c *Catalog) IsToolAvailable(name string) bool {
+	return c.availability().toolAvailable(name)
+}
+
+// IsMCPServerAvailable reports whether an MCP server may connect in this
+// workspace: its manifest is enabled and the workspace's WORKSPACE.md policies
+// do not exclude it.
+func (c *Catalog) IsMCPServerAvailable(name string) bool {
+	return c.availability().mcpAvailable(name)
+}
+
 // ToolSnapshots returns all effective tool snapshots in scope, sorted by
 // metadata name. Each snapshot carries the pre-materialized api.Tool
 // presentation (scope, schemas, annotations, and token cost) alongside the
@@ -1509,15 +1780,20 @@ func (c *Catalog) ToolSnapshots() []ToolSnapshot {
 	return c.tools.Snapshot().All()
 }
 
-// Tools returns all effective tools in scope, sorted by metadata name.
+// Tools returns all available tools in scope, sorted by metadata name. Tools
+// disabled through spec.enabled or excluded by WORKSPACE.md policies are
+// omitted; use ToolSnapshots for the superset with availability flags.
 func (c *Catalog) Tools() []*warp.Tool {
 	snaps := c.tools.Snapshot().All()
-	if len(snaps) == 0 {
-		return nil
+	idx := c.availability()
+	out := make([]*warp.Tool, 0, len(snaps))
+	for _, s := range snaps {
+		if idx.toolAvailable(s.Name) {
+			out = append(out, s.Def)
+		}
 	}
-	out := make([]*warp.Tool, len(snaps))
-	for i, s := range snaps {
-		out[i] = s.Def
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -1539,7 +1815,7 @@ func (c *Catalog) ToolNames() []string {
 
 // GetTool resolves an effective tool by name or qualified name.
 func (c *Catalog) GetTool(name string) (*warp.Tool, bool) {
-	if snap, ok := c.GetToolSnapshot(name); ok {
+	if snap, ok := c.GetToolSnapshot(name); ok && snap.Enabled {
 		return snap.Def, true
 	}
 	return nil, false
@@ -1558,7 +1834,11 @@ func (c *Catalog) GetToolSnapshot(name string) (ToolSnapshot, bool) {
 		}
 		if res, ok := c.resolveByKind(warp.KindTool, name); ok {
 			if t, ok := res.(*warp.Tool); ok {
-				return c.newToolSnapshot(t), true
+				snap := c.newToolSnapshot(t)
+				policies := c.Policies()
+				snap.Enabled = c.IsToolAvailable(snap.Name) && t.Spec.IsEnabled() &&
+					(policies == nil || !toolPolicyExcluded(policies.Tools, t))
+				return snap, true
 			}
 		}
 	}
@@ -1589,6 +1869,10 @@ func (c *Catalog) newMCPSnapshot(m *warp.MCP) MCPSnapshot {
 		Command:     slices.Clone(m.Spec.Command),
 		Endpoint:    m.Spec.Endpoint,
 		Status:      api.MCPStatusDisconnected,
+		// populate() overwrites this with the availability index verdict; the
+		// default serves the resolveByKind fallback, which only ever resolves
+		// enabled manifests.
+		Enabled: true,
 	}
 	if m.Spec.Auth != nil {
 		server.AuthType = strings.TrimSpace(m.Spec.Auth.Type)
@@ -1603,16 +1887,21 @@ func (c *Catalog) MCPSnapshots() []MCPSnapshot {
 	return c.mcps.Snapshot().All()
 }
 
-// MCPs returns all effective MCP server definitions in scope, sorted by metadata
-// name.
+// MCPs returns all available MCP server definitions in scope, sorted by
+// metadata name. Servers disabled through spec.enabled or excluded by
+// WORKSPACE.md policies are omitted, so the MCP manager never spawns them;
+// use MCPSnapshots for the superset with availability flags.
 func (c *Catalog) MCPs() []*warp.MCP {
 	snaps := c.mcps.Snapshot().All()
-	if len(snaps) == 0 {
-		return nil
+	idx := c.availability()
+	out := make([]*warp.MCP, 0, len(snaps))
+	for _, s := range snaps {
+		if idx.mcpAvailable(s.Name) {
+			out = append(out, s.Def)
+		}
 	}
-	out := make([]*warp.MCP, len(snaps))
-	for i, s := range snaps {
-		out[i] = s.Def
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -1635,7 +1924,11 @@ func (c *Catalog) GetMCPSnapshot(name string) (MCPSnapshot, bool) {
 		}
 		if res, ok := c.resolveByKind(warp.KindMCP, name); ok {
 			if m, ok := res.(*warp.MCP); ok {
-				return c.newMCPSnapshot(m), true
+				snap := c.newMCPSnapshot(m)
+				policies := c.Policies()
+				snap.Enabled = c.IsMCPServerAvailable(snap.Name) && m.Spec.IsEnabled() &&
+					(policies == nil || !mcpFilterExcluded(policies.MCPs, m))
+				return snap, true
 			}
 		}
 	}
@@ -1644,7 +1937,7 @@ func (c *Catalog) GetMCPSnapshot(name string) (MCPSnapshot, bool) {
 
 // GetMCP resolves an effective MCP server definition by name or qualified name.
 func (c *Catalog) GetMCP(name string) (*warp.MCP, bool) {
-	if snap, ok := c.GetMCPSnapshot(name); ok {
+	if snap, ok := c.GetMCPSnapshot(name); ok && snap.Enabled {
 		return snap.Def, true
 	}
 	return nil, false

@@ -12,7 +12,7 @@ require (
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.7-0.20261118073631-ce28699d019e
 	github.com/masterkeysrd/loom v0.0.10-0.20261118071242-cc99c4a24217
-	github.com/masterkeysrd/warp v0.0.7-0.20261116034747-3a99d999f6cc
+	github.com/masterkeysrd/warp v0.0.7-0.20261120020207-9b2980bf4ae4
 	github.com/mattn/go-isatty v0.0.24
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/ollama/ollama v0.40.16
@@ -20,7 +20,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/mod v0.43.0
-	golang.org/x/net v0.62.0
+	golang.org/x/net v0.63.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sys v0.50.0
 	google.golang.org/genai v1.77.0
@@ -82,7 +82,7 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
-	github.com/sergi/go-diff v1.4.0 // indirect
+	github.com/sergi/go-diff v1.4.5 // indirect
 	github.com/skeema/knownhosts v1.3.3 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
@@ -106,6 +106,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.1 // indirect
+	go.yaml.in/yaml/v4 v4.0.0 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/text v0.44.0 // indirect

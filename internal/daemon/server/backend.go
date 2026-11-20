@@ -32,6 +32,9 @@ type WorkspaceBackend interface {
 	GetSkill(ctx context.Context, workspace, name string) (*api.Skill, error)
 	ListRules(ctx context.Context, workspace string) ([]api.Rule, error)
 	ListTools(ctx context.Context, workspace, agent string) ([]api.Tool, error)
+	// SetToolEnabled patches tool availability (manifest spec.enabled or a
+	// WORKSPACE.md tools policy exclusion) and reloads the workspace.
+	SetToolEnabled(ctx context.Context, workspace, name string, enabled bool) ([]api.Tool, error)
 	ListModels(ctx context.Context, workspace string) ([]api.Model, error)
 	GetModel(ctx context.Context, workspace, id string) (*api.Model, error)
 	// GetModelQuota returns a nil payload when the model's provider does not
@@ -79,6 +82,9 @@ type WorkspaceBackend interface {
 // prompt rendering, resource reads, and manifest policy updates.
 type MCPBackend interface {
 	ListMCPs(ctx context.Context, workspace string) ([]api.MCPServer, error)
+	// SetMCPEnabled patches MCP server availability (manifest spec.enabled or
+	// a WORKSPACE.md MCPs policy exclusion) and reloads the workspace.
+	SetMCPEnabled(ctx context.Context, workspace, name string, enabled bool) ([]api.MCPServer, error)
 	RestartMCP(ctx context.Context, workspace, name string) (api.MCPServer, error)
 	AuthenticateMCP(ctx context.Context, workspace, name string) (api.MCPAuthResponse, error)
 	// CompleteMCPAuth feeds a redirect URL the user copied from their browser to

@@ -106,7 +106,16 @@ Long-running tools behave like background bash commands: a call that outlives th
 
 ### Checking What The Agent Actually Sees
 
-Run `/tools` to browse every built-in and custom tool with its status for the active agent. A tool that is `[Deferred]` is registered but withheld from the initial context until the agent finds it through `tool_search`; to make a custom tool `[Eager]`, list its name in the agent's `spec.tools`. `[Denied]` means a workspace or agent tool policy blocks it, and `[Inactive]` means the current session does not activate it at all. Press `i` in the browser to inspect a tool's rendered command, annotations, and JSON schemas.
+Run `/tools` to browse every built-in and custom tool with its status for the active agent. A tool that is `[Deferred]` is registered but withheld from the initial context until the agent finds it through `tool_search`; to make a custom tool `[Eager]`, list its name in the agent's `spec.tools`. `[Denied]` means an agent tool policy blocks it, and `[Inactive]` means the current session does not activate it at all. Press `i` in the browser to inspect a tool's rendered command, annotations, and JSON schemas.
+
+### Enabling And Disabling Tools
+
+A tool is unavailable only through manifests — never a hidden runtime switch — in exactly two ways:
+
+- **`spec.enabled: false`** in the tool's own manifest opts it out everywhere that manifest loads. The opt-out travels with the resource and is visible in version control.
+- **`spec.policies.tools.exclude`** in `WORKSPACE.md` excludes the named tool from this repository only. This is also how built-in and global user-scope tools get switched off without touching any shared file.
+
+Unavailable tools stay listed in `/tools` with a `[Disabled]` badge and never enter the model's context. Press `space` on one to toggle it: disabling patches `spec.enabled: false` into a workspace-scope manifest when the tool has one, otherwise adds the name to the `WORKSPACE.md` exclusion list; enabling removes whichever opt-out exists. Both edits are saved in workspace manifests. Disabling `tool_search` also removes deferred tools from the agent’s tool list and prompt.
 
 ---
 
@@ -225,6 +234,8 @@ The daemon connects each declared server in the background when its workspace op
 | `auth_required` | The server could not authenticate. With `authUrl` set, an interactive authorization flow is waiting; otherwise a static credential is missing or was rejected. |
 | `error` | The last attempt failed; `error` explains why. |
 | `disconnected` | No connection has been attempted or the workspace has no MCP runtime. |
+
+A server can also be **disabled** — `spec.enabled: false` in its own manifest, or an entry in `WORKSPACE.md` `spec.policies.mcps.exclude` for this repository only. Disabled servers never spawn, expose zero tools, and never enter the model's context, but they stay listed in `/mcp` with a `[Disabled]` marker so you can re-enable them. Press `e` (or `space`) on a server to toggle it: disabling patches the manifest when the server has a workspace-scope one, otherwise writes the `WORKSPACE.md` exclusion; enabling removes whichever opt-out exists. Restarting or authorizing a disabled server is refused until you enable it.
 
 Because connections happen in the background, a server that is still `connecting` when a session starts contributes no tools yet. When it finishes connecting, open sessions pick the server's tools up automatically and they become invocable on the next turn — no restart, no reload, and no need to mention them in the agent's `spec.tools`. The same refresh activates `read_mcp_resource` if the server publishes a permitted resource.
 

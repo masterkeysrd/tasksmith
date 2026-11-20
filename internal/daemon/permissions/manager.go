@@ -124,8 +124,6 @@ func (m *manager) writeToFile(path string, perms api.Permissions) error {
 	}
 	perms.Allow = deduplicateRules(perms.Allow)
 	perms.Deny = deduplicateRules(perms.Deny)
-	perms.DisabledTools = deduplicateRules(perms.DisabledTools)
-	perms.DisabledMCPs = deduplicateRules(perms.DisabledMCPs)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("permissions: create directory: %w", err)
@@ -159,16 +157,11 @@ func (m *manager) Effective() (api.Permissions, error) {
 		mode = project.DefaultMode
 	}
 
-	disabledTools := deduplicateRules(append(slices.Clone(global.DisabledTools), project.DisabledTools...))
-	disabledMcps := deduplicateRules(append(slices.Clone(global.DisabledMCPs), project.DisabledMCPs...))
-
 	return api.Permissions{
-		Schema:        1,
-		DefaultMode:   mode,
-		DisabledTools: disabledTools,
-		DisabledMCPs:  disabledMcps,
-		Allow:         deduplicateRules(append(slices.Clone(global.Allow), project.Allow...)),
-		Deny:          deduplicateRules(append(slices.Clone(global.Deny), project.Deny...)),
+		Schema:      1,
+		DefaultMode: mode,
+		Allow:       deduplicateRules(append(slices.Clone(global.Allow), project.Allow...)),
+		Deny:        deduplicateRules(append(slices.Clone(global.Deny), project.Deny...)),
 	}, nil
 }
 
@@ -281,8 +274,8 @@ func (m *manager) Attach(mode api.PermissionMode, initial api.Permissions, onUpd
 	}
 }
 
-// UpdateGlobal updates user global permissions with default mode, disabled tools, and disabled mcps.
-func UpdateGlobal(defaultMode api.PermissionMode, disabledTools, disabledMcps []string) error {
+// UpdateGlobal updates the user global permissions default mode.
+func UpdateGlobal(defaultMode api.PermissionMode) error {
 	globalPath, err := xdg.SubConfigDir("permissions.json")
 	if err != nil {
 		return err
@@ -294,12 +287,6 @@ func UpdateGlobal(defaultMode api.PermissionMode, disabledTools, disabledMcps []
 	perms.Schema = 1
 	if defaultMode != "" {
 		perms.DefaultMode = defaultMode
-	}
-	if len(disabledTools) > 0 {
-		perms.DisabledTools = deduplicateRules(append(perms.DisabledTools, disabledTools...))
-	}
-	if len(disabledMcps) > 0 {
-		perms.DisabledMCPs = deduplicateRules(append(perms.DisabledMCPs, disabledMcps...))
 	}
 	if err := os.MkdirAll(filepath.Dir(globalPath), 0o755); err != nil {
 		return err

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/warp"
 )
 
 // seedWorkspaceProvider drops a manifest into the workspace tier before any
@@ -114,6 +115,48 @@ func TestUpdateProviderModelsAPI(t *testing.T) {
 	}
 	if prov.DefaultModel != "only-model" {
 		t.Errorf("default model = %q, want only-model", prov.DefaultModel)
+	}
+}
+
+func TestAddKnownProviderModelWritesCatalogMetadata(t *testing.T) {
+	_, cli, wsDir := setupDaemonTest(t, nil)
+	path := seedWorkspaceProvider(t, wsDir, "provapi", daemonTestProviderSpec)
+
+	_, err := cli.UpdateProviderModels(t.Context(), "provapi", api.UpdateProviderModelsRequest{
+		Models: []api.ProviderModelRequest{
+			{ID: "gpt-4o-mini", Name: "gpt-4o-mini", Output: 512},
+			{ID: "unlisted-local-model"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := warp.Parse(path, string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := parsed.Resource.(*warp.ModelProvider).Spec.Models
+	if len(models) != 2 {
+		t.Fatalf("expected two models, got %+v", models)
+	}
+	known, unknown := models[0], models[1]
+	if known.ID != "gpt-4o-mini" || known.Label == "" || known.Limits.Context <= 0 || known.Limits.Output != 512 {
+		t.Fatalf("expected catalog label, context, and explicit output limit, got %+v", known)
+	}
+	if caps := known.Capabilities; caps == nil || caps.Tools == nil || !*caps.Tools ||
+		caps.Modalities == nil || len(caps.Modalities.Input) == 0 {
+		t.Fatalf("expected catalog tools and input modalities, got %+v", caps)
+	}
+	if known.Cost == nil || known.Cost.Input <= 0 {
+		t.Fatalf("expected catalog pricing, got %+v", known.Cost)
+	}
+	if unknown.ID != "unlisted-local-model" || unknown.Capabilities != nil || unknown.Cost != nil || unknown.Limits.Context != 0 {
+		t.Fatalf("unexpected metadata on unknown model: %+v", unknown)
 	}
 }
 

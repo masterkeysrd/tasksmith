@@ -155,8 +155,6 @@ TaskSmith stores persistent permission settings in `permissions.json` across two
 {
   "schema": 1,
   "defaultMode": "default",
-  "disabledTools": ["download"],
-  "disabledMcps": ["linear"],
   "allow": [
     "bash(go test *)",
     "write(internal/**)"
@@ -175,13 +173,11 @@ When evaluating effective permissions for a session, TaskSmith merges global and
 | :--- | :--- | :--- | :--- |
 | `schema` | integer | — | Schema format version for format migrations. |
 | `defaultMode` | string | **Project overrides Global** | Default session permission mode (`default`, `accept_edits`, `plan`, `ask`, `auto`). Setting `/mode` or pressing `Shift+Tab` overrides both for the current session only. |
-| `disabledTools` | array of strings | **Monotonic Union** | Combined list of disabled tool names. Restrictions are monotonic: any tool disabled in either global or project scope is completely excluded from the agent's model context up front. |
-| `disabledMcps` | array of strings | **Monotonic Union** | Combined list of disabled MCP server names. Servers disabled in either global or project scope will not be exposed or queried. |
 | `allow` | array of strings | **Union** | Normalized `tool(pattern)` rules that auto-approve matching actions. |
 | `deny` | array of strings | **Union (Strict Priority)** | Normalized `tool(pattern)` rules that unconditionally reject matching actions. |
 
 > [!NOTE]
-> Disabled tools and MCP servers are not merely rejected at runtime; they are stripped from the model's active tool manifests when constructing conversation prompts. The agent never sees disabled tools, eliminating hallucinations and unnecessary permission prompts.
+> Tool and MCP **availability** is no longer configured here. Earlier versions kept `disabledTools` / `disabledMcps` lists in `permissions.json`; those keys are now ignored (legacy files still decode). Availability is deterministic from manifests: a resource's own `spec.enabled: false`, or a `WORKSPACE.md` `spec.policies.tools.exclude` / `spec.policies.mcps.exclude` entry for this repository. Manage both from the [`/tools`](../reference/cli.md#tools-browser-tools) and [`/mcp`](../reference/cli.md#mcp-browser-mcp) browsers, which show disabled resources with a `[Disabled]` badge and toggle them with `space` (`e` in `/mcp`). See [Enabling And Disabling Tools](tools-and-mcp.md#enabling-and-disabling-tools).
 
 ---
 

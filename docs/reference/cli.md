@@ -225,6 +225,7 @@ The browser opens as `Manage MCP servers` with a `<N> server` / `<N> servers` co
 | :--- | :--- | :--- |
 | `↑` / `↓` or `Ctrl+P` / `Ctrl+N` | MCP Browser | Moves the highlighted server. |
 | `Enter` / `i` | MCP Browser | Opens the overview for the highlighted server. |
+| `e` / `Space` | MCP Browser | Enables or disables the highlighted server (see [Enabling and Disabling](#mcp-browser-mcp) below). |
 | `a` | MCP Browser | Opens the [authorization screen](#mcp-authentication) for the highlighted server. |
 | `r` | MCP Browser | Restarts (reconnects) the highlighted server. |
 | `R` / `Ctrl+R` | MCP Browser | Reloads workspace resources from disk and refreshes the server list. |
@@ -239,6 +240,8 @@ Each row shows a status glyph in the cursor gutter, the server name, and a right
 | `error` | `✘` red | `failed to connect`, or `failed to connect (<reason>)` with transport plumbing trimmed so the reason reads cleanly. |
 | `connecting` | `⟳` cyan | `connecting…` |
 | `disconnected` | `○` muted | `disconnected` |
+
+Disabled servers stay in the list so `e` can enable them again. Disabling a server updates `spec.enabled` in a writable workspace manifest or adds it to `WORKSPACE.md` under `spec.policies.mcps.exclude`. Disabled servers cannot be restarted or authorized.
 
 With nothing configured, the view offers `R` / `Ctrl+R` to reload, which is what you need right after adding a manifest.
 
@@ -357,7 +360,7 @@ Allowed prompts and resources run immediately. A prohibited one opens `Prohibite
 
 ### Providers Browser (`/providers`)
 
-`/providers` (alias `/provider`) opens `Manage model providers` over the workspace's declarative `ModelProvider` manifests — `~/.config/tasksmith/agents/providers/*.provider.yaml` (User) and `<workspace-root>/.agents/providers/*.provider.yaml` (Workspace) — with a `<N> providers` count line, then one muted heading per scope that has providers (`Workspace providers`, `Local providers`, `User providers`, `Builtin providers`), each naming the directory its manifests live in. Providers are listed by scope tier, closest to the repository first, then by name. The list is deliberately not filterable, so the single-letter actions below always reach the highlighted provider instead of typing into a search box. Every mutation patches the owning manifest through the daemon and hot-reloads the workspace, so the model catalog and gateway agree with the YAML immediately; there is no sidecar state.
+`/providers` (alias `/provider`) opens `Manage model providers` over the workspace's declarative `ModelProvider` manifests — `~/.config/tasksmith/agents/providers/*.provider.yaml` (User) and `<workspace-root>/.agents/providers/*.provider.yaml` (Workspace) — grouped by scope and manifest directory. Each row shows a colored status icon, provider name, status, and configured model count when available. Providers are listed by scope tier, closest to the repository first, then by name. The list is deliberately not filterable, so the single-letter actions below always reach the highlighted provider instead of typing into a search box. Every mutation patches the owning manifest through the daemon and hot-reloads the workspace, so the model catalog and gateway agree with the YAML immediately; there is no sidecar state.
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
@@ -367,18 +370,20 @@ Allowed prompts and resources run immediately. A prohibited one opens `Prohibite
 | `a` / `n` | Providers Browser | Opens the [add-provider flow](#adding-a-provider). With no providers configured, the empty screen accepts `a` / `n` the same way. |
 | `Esc` | Providers Browser | Closes the browser and leaves `Exited /providers command` in the transcript. |
 
-Each row shows a status glyph in the cursor gutter, the provider name, and a right-hand summary (`Status · type · N models`):
+The detail line below the list shows the highlighted provider’s adapter type and configured endpoint.
 
-| Status | Glyph | Meaning |
+| Status | Icon | Meaning |
 | :--- | :--- | :--- |
-| `Active` | `✔` green | Enabled and its configured credential resolves (or it needs none). |
-| `Local` | `●` cyan | A local endpoint (`http://localhost`, `127.0.0.1`, `[::1]`) or `ollama` — no credential required. |
-| `Missing Auth` | `⚠` yellow | The `${env:…}` / `${file:…}` secret in `spec.auth` (or an OAuth token) is not available. |
-| `Disabled` | `○` muted | `spec.enabled: false` in the manifest; models stay declared and the provider is skipped by the gateway. A workspace shadow over an enabled inherited manifest shows `Disabled (shadow)`. |
+| `Ready` | `✔` green | The provider is enabled and its credential requirements are satisfied. |
+| `Local` | `●` cyan | The provider uses a local endpoint or the Ollama adapter. |
+| `Needs sign-in` | `⚠` yellow | The configured credential or OAuth token is unavailable. |
+| `Disabled` | `○` muted | The manifest sets `spec.enabled: false`. A workspace shadow over an enabled inherited manifest shows `Disabled (shadow)`. |
 
 #### Provider Model Manager
 
-`Enter` / `m` on a provider opens `Models · <name>` listing its declared `spec.models`, with `★` marking the manifest's default completion model.
+`Enter` / `m` on a provider opens `Models · <name>` with separate columns for the model label, ID, and `context · aliases`. The default completion model carries `(default)` beside its label. When you stage a new default, the marker moves immediately.
+
+New entries inherit available limits, capabilities, supported reasoning settings, and pricing from the provider catalog or runtime profile. This also applies when a custom ID matches a known model.
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
@@ -603,10 +608,13 @@ Columns are Name, Status (`[Always]`, `[Loaded]`, or `[Standby]`), Scope (`[Work
 | :--- | :--- | :--- |
 | `↑` / `↓` or `k` / `j` or `Ctrl+P` / `Ctrl+N` | Tools Browser | Moves the highlighted tool. |
 | `Enter` / `i` | Tools Browser | Opens the tool inspector for the highlighted tool. |
+| `Space` | Tools Browser | Enables or disables the highlighted tool (see below). |
 | `r` | Tools Browser | Reloads workspace resources from disk and refreshes the tool list. |
 | `Esc` | Tools Browser | Closes the tools browser and returns to composer. |
 
-Columns are Name, Status (`[Eager]`, `[Deferred]`, `[Denied]`, `[Inactive]`, or `[—]`), Scope (`[Workspace]`, `[Project]`, `[User]`, or `[Builtin]`), safety annotations (`[ReadOnly]`, `[Dangerous]`, `[OpenWorld]`), and description. Statuses are resolved for the active agent — falling back to the workspace default agent — so the same tool can be `[Eager]` for one agent and `[Deferred]` for another. `[—]` is shown when the daemon could not classify tools for an agent and the unclassified workspace listing is displayed instead. See [Tool Partitioning](tools.md#5-tool-partitioning-eager-vs-deferred) for what each status means.
+Columns are Name, Status (`[Eager]`, `[Deferred]`, `[Denied]`, `[Disabled]`, `[Inactive]`, or `[—]`), Scope (`[Workspace]`, `[Project]`, `[User]`, or `[Builtin]`), safety annotations (`[ReadOnly]`, `[Dangerous]`, `[OpenWorld]`), and description. Statuses are resolved for the active agent — falling back to the workspace default agent — so the same tool can be `[Eager]` for one agent and `[Deferred]` for another. `[—]` is shown when the daemon could not classify tools for an agent and the unclassified workspace listing is displayed instead. See [Tool Partitioning](tools.md#5-tool-partitioning-eager-vs-deferred) for what each status means.
+
+`[Disabled]` tools are unavailable through manifests — their own `spec.enabled: false` or a `WORKSPACE.md` `spec.policies.tools.exclude` entry — and never reach the model's context, but stay listed so `Space` can toggle them back. Disabling patches the manifest when the tool has a workspace-scope one and otherwise writes the `WORKSPACE.md` exclusion; enabling removes whichever opt-out exists. The title counts only available tools (`Tools (3 of 4 available)` when one is disabled). See [Enabling And Disabling Tools](../guides/tools-and-mcp.md#enabling-and-disabling-tools).
 
 `/tools` takes no arguments; passing any is rejected before the browser opens.
 
@@ -630,7 +638,7 @@ When TaskSmith is launched for the first time in an unconfigured directory, or w
 3. **Provider & Scope**: Select upstream AI provider preset and target configuration scope (`User`, `Workspace`, or `Project`).
 4. **Credentials**: Enter and verify provider API keys, authenticate via browser OAuth (e.g. Google Cloud Code for Antigravity), or configure custom endpoints with real-time verification.
 5. **Default Mode**: Choose the initial permission mode (`default`, `accept_edits`, `plan`, `ask`, `auto`).
-6. **Tools & MCPs**: Selectively enable or disable built-in tools and global MCP servers.
+6. **Tools & MCPs**: Selectively enable or disable built-in tools and global MCP servers. Skipped when the chosen provider scope is `User`, since these choices are recorded as repository `WORKSPACE.md` policy exclusions.
 7. **Review & Write**: Review configured settings, write out manifests, and optionally offer `/init`.
 
 | Keybinding | Scope | Action |
@@ -820,6 +828,15 @@ These endpoints drive the daemon-managed OAuth PKCE sign-in flow behind `tasksmi
 | `POST` | `/v1/providers/{name}/auth/callback` | Completes the sign-in in progress with a redirect URL the user copied from their browser. Body: `callbackUrl` — the full address-bar URL, a bare query string, or an authorization code alone. Returns the settled `ProviderAuthResponse`; `400` `bad_request` when the paste is malformed or no flow is open. |
 | `DELETE` | `/v1/providers/{name}/auth` | Removes stored OAuth credentials for one provider and cancels any in-flight flow. Returns `ProviderAuthResponse` with `status` `signed-out` when credentials were removed or `idle` when the provider was not signed in. |
 
+## Tools HTTP Endpoints
+
+Tool endpoints act on the workspace resolved from the `X-TaskSmith-CWD` header.
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/v1/workspace/tools` | Lists workspace tools (disabled ones included with `enabled: false` and `disabled_by` — `manifest` or `workspace_policy`) as `api.Tool`, optionally scoped to an agent via the `agent` query for per-agent `status`. |
+| `PATCH` | `/v1/workspace/tools/{name}/enabled` | Enables or disables one tool for the workspace. Body: `enabled` (bool). Disabling patches `spec.enabled: false` into a workspace-writable manifest or adds the name to `WORKSPACE.md` `spec.policies.tools.exclude`; enabling removes whichever opt-out exists. Reloads the workspace and returns the updated `Tool` list. `404` `not_found` for an unknown tool or an MCP-discovered `<server>__<tool>` name (toggle the parent server instead); `409` `manifest_read_only` when only a non-writable manifest declares the opt-out; `409` `policy_pattern_conflict` when a WORKSPACE.md pattern would keep a re-enabled tool excluded. |
+
 ## MCP HTTP Endpoints
 
 MCP endpoints act on the workspace resolved from the `X-TaskSmith-CWD` header. Servers are addressed by manifest name, or by qualified name (`<slug>/MCP/<name>`) when a global and a project server share a name. Every endpoint returns `404` `not_found` for an unknown server, and `503` `mcp_unavailable` for operations needing a live connection while the workspace has no MCP runtime attached.
@@ -833,6 +850,7 @@ MCP endpoints act on the workspace resolved from the `X-TaskSmith-CWD` header. S
 | `POST` | `/v1/workspace/mcps/{name}/prompts/{prompt}` | Renders one discovered prompt with optional `args` (string key to string value) and returns `MCPPromptResponse` (`description`, `messages` with `role` and `text`). |
 | `POST` | `/v1/workspace/mcps/{name}/resources` | Reads one resource by `uri` and returns `MCPResourceResponse` (`uri`, `mimeType`, `text`). |
 | `POST` | `/v1/workspace/mcps/{name}/policies/allow` | Permits one item in the server manifest. Body: `kind` (`tool`, `prompt`, or `resource`) and `value` (raw tool name, prompt name, or resource URI). Returns the updated `MCPServer`. |
+| `PATCH` | `/v1/workspace/mcps/{name}/enabled` | Enables or disables one server for the workspace. Body: `enabled` (bool). Disabling patches `spec.enabled: false` into a workspace-writable manifest or adds the name to `WORKSPACE.md` `spec.policies.mcps.exclude`; enabling removes whichever opt-out exists. Reloads the workspace and returns the updated `MCPServer` list. `404` `not_found` for an unknown server; `409` `manifest_read_only` for an opt-out in a non-writable manifest; `409` `policy_pattern_conflict` when a WORKSPACE.md pattern would keep a re-enabled server excluded. |
 
 Prompt rendering and resource reads reject anything the server manifest's `policies` prohibit with `403` `mcp_policy_prohibited`; the rejection message names the prohibited item, the policy section it is excluded from (`policies.tools`, `policies.prompts`, or `policies.resources`), and the manifest path. Pass `allowProhibited: true` in the prompt or resource body to permit a single prohibited use without editing the manifest. See [Tools & MCP Servers](../guides/tools-and-mcp.md) for manifest authoring and [Manifests](./manifests.md) for the `MCP` schema.
 
@@ -847,4 +865,4 @@ All onboarding and trust endpoints operate on the workspace directory resolved f
 | `POST` | `/v1/workspace/trust` | Records trust for a workspace directory. Body: `path` (absolute path) and `scope` (`folder` or `parent`). |
 | `DELETE` | `/v1/workspace/trust` | Revokes trust for the current workspace directory, returning it to restricted mode. |
 | `POST` | `/v1/providers/verify` | Validates API credentials or endpoint reachability against upstream model provider. Body: `name`, `apiKey`, optional `endpoint`, and `scope` (`user` or `workspace`). Returns success status, latency, or validation error. |
-| `POST` | `/v1/workspace/init` | Initializes workspace configuration and applies user choices. Body: `InitWorkspaceRequest` (`scope`, `provider`, `apiKey`, `endpoint`, `defaultMode`, `disabledTools`, `disabledMcps`). Writes configuration files and initial `workspace.json` metadata. |
+| `POST` | `/v1/workspace/init` | Initializes workspace configuration and applies user choices. Body: `InitWorkspaceRequest` (`scope`, `provider`, `apiKey`, `endpoint`, `defaultMode`, `disabled_tools`, `disabled_mcps`). `disabled_tools` / `disabled_mcps` are written as `WORKSPACE.md` policy exclusions and ignored for `user` scope. Writes configuration files and initial `workspace.json` metadata. |

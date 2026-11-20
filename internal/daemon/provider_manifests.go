@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/masterkeysrd/loom/profile"
@@ -197,16 +199,37 @@ func (d *Daemon) UpdateProviderModels(ctx context.Context, rawWS, name string, r
 	if strings.TrimSpace(name) == "" {
 		return nil, &api.APIError{StatusCode: http.StatusBadRequest, Code: "bad_request", Message: "provider name is required"}
 	}
+	rec, ok := rt.Workspace().ProviderRecord(name)
+	if !ok {
+		return nil, providerAPIError(fmt.Errorf("%w: %s", workspace.ErrProviderNotFound, name))
+	}
+	if !rec.Writable {
+		return nil, providerAPIError(fmt.Errorf("%w: provider %s manifest is not writable", workspace.ErrProviderReadOnly, name))
+	}
+	profiles := sync.OnceValue(func() []profile.Profile {
+		list, _ := gateway.TypeCatalog(rec.Def.Spec.Type)
+		return list
+	})
+	preset := sync.OnceValue(func() *warp.ModelProvider {
+		return findPreset(cmp.Or(rec.Def.Spec.Type, rec.Name))
+	})
 	edits := make([]workspace.ProviderModelEdit, 0, len(req.Models))
 	for _, m := range req.Models {
-		edits = append(edits, workspace.ProviderModelEdit{
+		edit := workspace.ProviderModelEdit{
 			ID:      m.ID,
 			Name:    m.Name,
 			Label:   m.Label,
 			Aliases: m.Aliases,
 			Context: m.Context,
 			Output:  m.Output,
-		})
+		}
+		id := strings.TrimSpace(m.ID)
+		if id != "" && !slices.ContainsFunc(rec.Def.Spec.Models, func(existing warp.ProviderModel) bool {
+			return strings.TrimSpace(existing.ID) == id
+		}) {
+			edit.Catalog = catalogModelForAdd(rt.Gateway(), rec.Name, id, profiles(), preset)
+		}
+		edits = append(edits, edit)
 	}
 	if err := providerAPIError(rt.Workspace().UpdateProviderModels(name, edits, req.DefaultModel, req.DefaultSet)); err != nil {
 		return nil, err
@@ -215,6 +238,84 @@ func (d *Daemon) UpdateProviderModels(ctx context.Context, rawWS, name string, r
 		return nil, fmt.Errorf("daemon: reload workspace after provider update: %w", err)
 	}
 	return d.ListWorkspaceProviders(ctx, rawWS)
+}
+
+// catalogModelForAdd resolves metadata for newly declared model IDs. Static
+// profiles work before sign-in. The gateway supplies live provider metadata.
+func catalogModelForAdd(gw gateway.Gateway, provider, id string, profiles []profile.Profile, preset func() *warp.ModelProvider) *warp.ProviderModel {
+	if i := slices.IndexFunc(profiles, func(p profile.Profile) bool { return p.ID == id }); i >= 0 {
+		return manifestModelFromProfile(profiles[i])
+	}
+	if gw != nil {
+		if prof, ok := gw.GetProfile(provider + "/" + id); ok {
+			return manifestModelFromProfile(prof)
+		}
+	}
+	if preset := preset(); preset != nil {
+		for i := range preset.Spec.Models {
+			if preset.Spec.Models[i].ID == id {
+				return &preset.Spec.Models[i]
+			}
+		}
+	}
+	return nil
+}
+
+func manifestModelFromProfile(p profile.Profile) *warp.ProviderModel {
+	c := p.Capabilities
+	caps := &warp.ProviderModelCapabilities{
+		Completion: new(c.Completion), Decision: new(c.Decision), Embedding: new(c.Embedding),
+		Attachment: new(c.Attachment), Tools: new(c.ToolCall), Temperature: new(c.Temperature),
+	}
+	if len(p.Modalities.Inputs)+len(p.Modalities.Outputs) > 0 {
+		caps.Modalities = &warp.ProviderModelModalities{}
+		for _, modality := range p.Modalities.Inputs {
+			caps.Modalities.Input = append(caps.Modalities.Input, string(modality))
+		}
+		for _, modality := range p.Modalities.Outputs {
+			caps.Modalities.Output = append(caps.Modalities.Output, string(modality))
+		}
+	}
+	for _, option := range c.ReasoningOptions {
+		thinking := warp.ProviderModelThinkingCapability{Type: warp.ThinkingStrategy(option.Type)}
+		switch option.Type {
+		case "effort":
+			thinking.AllowedEfforts = slices.Clone(option.Values)
+			if option.Default != "" {
+				thinking.Default = option.Default
+			}
+		case "budget", "budget_tokens":
+			thinking.Type = warp.ThinkingStrategyBudget
+			thinking.MaxBudgetTokens = option.Max
+			if value, err := strconv.Atoi(option.Default); err == nil {
+				thinking.Default = value
+			}
+		case "toggle":
+			if value, err := strconv.ParseBool(option.Default); err == nil {
+				thinking.Default = value
+			}
+		case "adaptive":
+		default:
+			continue
+		}
+		caps.Thinking = append(caps.Thinking, thinking)
+	}
+	model := &warp.ProviderModel{
+		ID: p.ID, Name: p.ID, Label: p.Name,
+		Limits:       warp.ProviderModelLimits{Context: p.Limits.Context, Output: p.Limits.Output, Dimensions: p.Limits.Dimensions},
+		Capabilities: caps,
+	}
+	if cost := p.Pricing; !cost.IsZero() {
+		model.Cost = &warp.ProviderModelCost{Input: cost.Input, Output: cost.Output, CacheRead: cost.CacheRead, CacheWrite: cost.CacheWrite}
+		for _, tier := range cost.TieredLimits {
+			model.Cost.Tiers = append(model.Cost.Tiers, warp.ProviderModelCostTier{
+				Label: tier.EffectiveLabel(),
+				Tier:  warp.ProviderModelCostTierCondition{Type: string(tier.Condition.Type), Size: tier.Condition.Size},
+				Input: tier.Input, Output: tier.Output, CacheRead: tier.CacheRead, CacheWrite: tier.CacheWrite,
+			})
+		}
+	}
+	return model
 }
 
 // AssignModelAliases saves the exact alias set one model should own, stripping

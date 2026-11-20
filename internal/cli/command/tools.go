@@ -66,9 +66,10 @@ func ToolScope(t api.Tool) string {
 // toolStatusBadge returns the availability badge for a tool in the active
 // agent's toolset: [Eager] when loaded on the first request, [Deferred] when
 // policy-allowed but discoverable only via tool_search, [Denied] when blocked
-// by the workspace or agent tool policy ceiling, and [Inactive] when the tool
-// is not applicable to the agent at all. An empty badge is returned when the
-// listing was not classified for an agent.
+// by the workspace or agent tool policy ceiling, [Disabled] when the workspace
+// switched the tool off (manifest spec.enabled or a WORKSPACE.md exclusion),
+// and [Inactive] when the tool is not applicable to the agent at all. An empty
+// badge is returned when the listing was not classified for an agent.
 func toolStatusBadge(t api.Tool) string {
 	switch t.Status {
 	case api.ToolStatusEager:
@@ -77,6 +78,8 @@ func toolStatusBadge(t api.Tool) string {
 		return "[Deferred]"
 	case api.ToolStatusDenied:
 		return "[Denied]"
+	case api.ToolStatusDisabled:
+		return "[Disabled]"
 	case api.ToolStatusInactive:
 		return "[Inactive]"
 	default:
@@ -132,6 +135,8 @@ func toolStatusColor(scheme *theme.Scheme, status api.ToolStatus) style.Style {
 		return base.Foreground(scheme.Color.Text.Warning)
 	case api.ToolStatusDenied:
 		return base.Foreground(scheme.Color.Text.Error)
+	case api.ToolStatusDisabled:
+		return base.Foreground(scheme.Color.Text.Muted)
 	default:
 		return style.S().Foreground(scheme.Color.Text.Muted)
 	}
@@ -343,6 +348,7 @@ var ToolsBrowser = trail.FC("ToolsBrowser", func(slotID string) trail.Node {
 	selectedTool, setSelectedTool := kitex.UseState[*api.Tool](nil)
 	notice, setNotice := kitex.UseState("")
 	isReloading, setIsReloading := kitex.UseState(false)
+	toggling, setToggling := kitex.UseState("")
 
 	var tools []api.Tool
 	if toolsPtr != nil {
@@ -390,10 +396,52 @@ var ToolsBrowser = trail.FC("ToolsBrowser", func(slotID string) trail.Node {
 			}
 			count := 0
 			if s := store.GetApp().Tools; s != nil {
-				count = len(*s)
+				for _, t := range *s {
+					if t.Enabled {
+						count++
+					}
+				}
 			}
 			setNotice(fmt.Sprintf("Workspace reloaded via registry.Reload (%d tools available).", count))
 		}()
+	}
+
+	// toggleEnabled flips one tool's availability through the daemon, which
+	// decides where the change lands: spec.enabled on a writable workspace
+	// manifest, or a WORKSPACE.md tools policy exclusion for inherited and
+	// built-in tools. The PATCH response already reflects the new state, but
+	// statuses are agent-classified, so the store cache is refetched.
+	toggleEnabled := func(opt uicomponents.Option) {
+		c := store.Client()
+		if c == nil || toggling() != "" {
+			return
+		}
+		target := false
+		for i := range tools {
+			if tools[i].Name == opt.Value {
+				target = tools[i].Enabled
+				break
+			}
+		}
+		setToggling(opt.Value)
+		goMCPBackground(func() {
+			defer setToggling("")
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if _, err := c.SetToolEnabled(ctx, opt.Value, !target); err != nil {
+				setNotice("Failed to update " + opt.Value + ": " + err.Error())
+				return
+			}
+			if _, err := store.ForceRefreshWorkspaceTools(ctx); err != nil {
+				setNotice("Updated " + opt.Value + ", but refreshing the tool listing failed: " + err.Error())
+				return
+			}
+			if target {
+				setNotice("Disabled " + opt.Value + ".")
+			} else {
+				setNotice("Enabled " + opt.Value + ".")
+			}
+		})
 	}
 
 	if sel := selectedTool(); sel != nil {
@@ -412,9 +460,18 @@ var ToolsBrowser = trail.FC("ToolsBrowser", func(slotID string) trail.Node {
 		})
 	}
 
-	title := fmt.Sprintf("Tools (%d available)", len(tools))
+	enabledCount := 0
+	for i := range tools {
+		if tools[i].Enabled {
+			enabledCount++
+		}
+	}
+	title := fmt.Sprintf("Tools (%d available)", enabledCount)
+	if enabledCount < len(tools) {
+		title = fmt.Sprintf("Tools (%d of %d available)", enabledCount, len(tools))
+	}
 	if n := notice(); n != "" {
-		title = fmt.Sprintf("Tools (%d available) — %s", len(tools), n)
+		title = fmt.Sprintf("%s — %s", title, n)
 	}
 
 	scheme := theme.UseTheme()
@@ -487,10 +544,12 @@ var ToolsBrowser = trail.FC("ToolsBrowser", func(slotID string) trail.Node {
 	pickerProps.Bindings = []uicomponents.KeyBinding{
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "Inspect tool"},
+		{Key: "space", Label: "Enable/disable"},
 		{Key: "r", Label: "Reload workspace"},
 		{Key: "esc", Label: "Close"},
 	}
 	pickerProps.Keys = map[string]func(uicomponents.Option){
+		"space": toggleEnabled,
 		"r": func(_ uicomponents.Option) {
 			doReload()
 		},

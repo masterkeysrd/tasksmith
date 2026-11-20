@@ -151,6 +151,10 @@ func (r *workspaceRuntime) RootWorkspace() *workspace.Workspace {
 func (r *workspaceRuntime) Reload(ctx context.Context) error {
 	r.reloadMu.Lock()
 	defer r.reloadMu.Unlock()
+	return r.reloadLocked(ctx)
+}
+
+func (r *workspaceRuntime) reloadLocked(ctx context.Context) error {
 	nextWorkspace, commitWorkspace, err := r.ws.PrepareReload(ctx)
 	if err != nil {
 		return err

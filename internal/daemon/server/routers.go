@@ -213,6 +213,7 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/skills/{name...}", w.getSkill),
 		GetRoute("/v1/workspace/rules", w.listRules),
 		GetRoute("/v1/workspace/tools", w.listTools),
+		PatchRoute("/v1/workspace/tools/{name}/enabled", w.patchToolEnabled),
 		GetRoute("/v1/workspace/files", w.getWorkspaceFiles),
 		GetRoute("/v1/models", w.getModelsList),
 		GetRoute("/v1/models/{id...}", w.getModel),
@@ -550,6 +551,21 @@ func (w *workspaceRouter) listTools(rw http.ResponseWriter, r *http.Request) {
 	WriteJSON(rw, http.StatusOK, tools)
 }
 
+func (w *workspaceRouter) patchToolEnabled(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	req, err := DecodeJSON[api.SetToolEnabledRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	tools, err := w.b.SetToolEnabled(r.Context(), RequestWorkspace(r), name, req.Enabled)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, tools)
+}
+
 func (w *workspaceRouter) getWorkspaceFiles(rw http.ResponseWriter, r *http.Request) {
 	wsDir := RequestWorkspace(r)
 	q := r.URL.Query().Get("q")
@@ -715,6 +731,7 @@ func (m *mcpRouter) Routes() []Route {
 func (m *mcpRouter) initRoutes() {
 	m.routes = []Route{
 		GetRoute("/v1/workspace/mcps", m.listMCPs),
+		PatchRoute("/v1/workspace/mcps/{name}/enabled", m.patchMCPEnabled),
 		PostRoute("/v1/workspace/mcps/{name}/restart", m.postRestart),
 		PostRoute("/v1/workspace/mcps/{name}/auth", m.postAuth),
 		PostRoute("/v1/workspace/mcps/{name}/auth/callback", m.postAuthCallback),
@@ -726,6 +743,24 @@ func (m *mcpRouter) initRoutes() {
 
 func (m *mcpRouter) listMCPs(rw http.ResponseWriter, r *http.Request) {
 	mcps, err := m.b.ListMCPs(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	if mcps == nil {
+		mcps = []api.MCPServer{}
+	}
+	WriteJSON(rw, http.StatusOK, mcps)
+}
+
+func (m *mcpRouter) patchMCPEnabled(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	req, err := DecodeJSON[api.SetMCPEnabledRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	mcps, err := m.b.SetMCPEnabled(r.Context(), RequestWorkspace(r), name, req.Enabled)
 	if err != nil {
 		WriteError(rw, err)
 		return

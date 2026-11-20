@@ -91,13 +91,22 @@ func (d *Daemon) resolveMCP(ctx context.Context, rawWS, name string) (*workspace
 	if !ok || snap.Def == nil {
 		return nil, nil, mcpServerNotFound(name)
 	}
+	if !snap.Enabled {
+		return nil, nil, &api.APIError{
+			StatusCode: http.StatusForbidden,
+			Code:       "mcp_disabled",
+			Message:    fmt.Sprintf("MCP server %q is disabled in this workspace", name),
+		}
+	}
 	return rt, snap.Def, nil
 }
 
-// ListMCPs returns every MCP server configured in the workspace sorted by name.
-// When an MCP runtime is attached, its live connection state and discovered
-// tools, prompts, and resources are reported; otherwise the servers are reported
-// from their manifests with a disconnected status.
+// ListMCPs returns every MCP server configured in the workspace sorted by name,
+// including servers disabled via spec.enabled or WORKSPACE.md policies. When an
+// MCP runtime is attached, its live connection state and discovered tools,
+// prompts, and resources are reported for running servers; servers the runtime
+// does not track (disabled ones never spawn) are reported from their manifests
+// with a disconnected status and Enabled false.
 func (d *Daemon) ListMCPs(ctx context.Context, rawWS string) ([]api.MCPServer, error) {
 	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
@@ -105,26 +114,32 @@ func (d *Daemon) ListMCPs(ctx context.Context, rawWS string) ([]api.MCPServer, e
 	}
 	ws := rt.RootWorkspace()
 
+	cat := ws.Catalog()
+	snapshots := cat.MCPSnapshots()
+	out := make([]api.MCPServer, 0, len(snapshots))
+	live := make(map[string]bool)
 	if srv := rt.MCPRuntime(); srv != nil {
-		listed := srv.ListMCPs(ctx)
-		out := make([]api.MCPServer, 0, len(listed))
-		for _, server := range listed {
+		for _, server := range srv.ListMCPs(ctx) {
+			if !cat.IsMCPServerAvailable(server.Name) {
+				continue
+			}
 			server.Path = ws.PortablePath(server.Path)
+			server.Enabled = true
+			live[server.Name] = true
 			out = append(out, server)
 		}
-		slices.SortFunc(out, func(a, b api.MCPServer) int {
-			return strings.Compare(a.Name, b.Name)
-		})
-		return out, nil
 	}
-
-	snaps := ws.Catalog().MCPSnapshots()
-	out := make([]api.MCPServer, 0, len(snaps))
-	for _, snap := range snaps {
+	for _, snap := range snapshots {
+		if live[snap.Name] {
+			continue
+		}
 		server := snap.MCPServer
 		server.Path = ws.PortablePath(server.Path)
 		out = append(out, server)
 	}
+	slices.SortFunc(out, func(a, b api.MCPServer) int {
+		return strings.Compare(a.Name, b.Name)
+	})
 	return out, nil
 }
 

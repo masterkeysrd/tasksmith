@@ -334,6 +334,36 @@ func (c *Client) SetProviderEnabled(ctx context.Context, name string, enabled bo
 	return out, nil
 }
 
+// SetToolEnabled patches availability for the named tool (its manifest's
+// spec.enabled or a WORKSPACE.md tools policy exclusion), reloads the
+// workspace, and returns the updated tool listing.
+func (c *Client) SetToolEnabled(ctx context.Context, name string, enabled bool) ([]api.Tool, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	path := "/v1/workspace/tools/" + url.PathEscape(name) + "/enabled"
+	var out []api.Tool
+	if err := c.doJSON(ctx, http.MethodPatch, path, nil, api.SetToolEnabledRequest{Enabled: enabled}, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SetMCPEnabled patches availability for the named MCP server (its manifest's
+// spec.enabled or a WORKSPACE.md MCPs policy exclusion), reloads the
+// workspace, and returns the updated MCP listing.
+func (c *Client) SetMCPEnabled(ctx context.Context, name string, enabled bool) ([]api.MCPServer, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	path := "/v1/workspace/mcps/" + url.PathEscape(name) + "/enabled"
+	var out []api.MCPServer
+	if err := c.doJSON(ctx, http.MethodPatch, path, nil, api.SetMCPEnabledRequest{Enabled: enabled}, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UpdateProviderModels rewrites the named provider manifest's declared models
 // and optional default completion model, reloads the workspace, and returns
 // the updated provider listing.

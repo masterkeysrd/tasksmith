@@ -61,10 +61,14 @@ func TestStartOnboardingSteps(t *testing.T) {
 
 func TestOnboardingNavigationAndToggles(t *testing.T) {
 	status := api.WorkspaceStatus{
-		Path:      "/workspace/test",
-		IsTrusted: true,
+		Path:            "/workspace/test",
+		IsTrusted:       true,
+		GlobalProviders: []api.ProviderSummary{{Name: "anthropic", HasKey: true}},
 	}
 	StartOnboarding("/workspace/test", status, false)
+	if s := GetOnboarding(); s.Scope != "workspace" {
+		t.Fatalf("expected Scope=workspace with global providers, got %+v", s)
+	}
 
 	// Step navigation
 	GoToStep(StepMode)
@@ -101,6 +105,23 @@ func TestOnboardingNavigationAndToggles(t *testing.T) {
 	ToggleOnboardingMCP("github")
 	if !GetOnboarding().DisabledMCPs["github"] {
 		t.Fatal("expected github MCP to be disabled")
+	}
+}
+
+// TestOnboardingUserScopeSkipsToolsStep pins the deterministic-availability
+// behavior: the user scope has no repository to write WORKSPACE.md policies
+// into, so the tool-selection step is skipped entirely.
+func TestOnboardingUserScopeSkipsToolsStep(t *testing.T) {
+	StartOnboarding("/workspace/test", api.WorkspaceStatus{Path: "/workspace/test", IsTrusted: true}, false)
+	if s := GetOnboarding(); s.Scope != "user" {
+		t.Fatalf("expected Scope=user with no global providers, got %+v", s)
+	}
+
+	GoToStep(StepMode)
+	GoToStep(StepTools)
+	s := GetOnboarding()
+	if s.Step != StepReview {
+		t.Fatalf("expected user scope to skip StepTools and land on review, got %v", s.Step)
 	}
 }
 

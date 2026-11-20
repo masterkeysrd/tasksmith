@@ -1,8 +1,10 @@
 package command
 
 import (
+	"cmp"
 	"maps"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -40,6 +42,7 @@ type modelsPaneStaged struct {
 // id prompt (n), catalog browsing (c), and saving (s).
 var providersModelsPane = trail.FC("ProvidersModelsPane", func(props providersModelsPaneProps) trail.Node {
 	scheme := theme.UseTheme()
+	width := trail.UseWindowSize().Width
 	staged, setStaged := kitex.UseState(modelsPaneStaged{remove: map[string]bool{}})
 
 	provider := props.provider
@@ -88,6 +91,7 @@ var providersModelsPane = trail.FC("ProvidersModelsPane", func(props providersMo
 	}
 
 	options := make([]uicomponents.Option, 0, len(rows))
+	var idWidth, detailWidth int
 	for _, m := range rows {
 		aliasText := strings.Join(modelAliasRefs(m.Aliases), " ")
 		capacity := ""
@@ -105,32 +109,19 @@ var providersModelsPane = trail.FC("ProvidersModelsPane", func(props providersMo
 		case capacity != "":
 			right = capacity + " · " + right
 		}
-		if marked {
-			right = "will remove · " + right
-		}
-
-		icon := "  "
-		iconStyle := style.S().Foreground(scheme.Color.Text.Muted)
+		label := cmp.Or(strings.TrimSpace(m.Label), strings.TrimSpace(m.Name), m.ID)
 		if isDefault {
-			icon = "★"
-			iconStyle = style.S().Foreground(scheme.Color.Text.Warning)
+			label += " (default)"
 		}
-		labelText := m.ID
 		if marked {
-			labelText = m.ID + " (will remove)"
+			label += " (will remove)"
 		}
+		idWidth = max(idWidth, utf8.RuneCountInString(m.ID)+2)
+		detailWidth = max(detailWidth, utf8.RuneCountInString(right)+2)
 		options = append(options, uicomponents.Option{
-			Value:       m.ID,
-			Label:       labelText,
-			Description: right,
-			Search:      aliasText,
-			Cells:       []string{labelText, right},
-			Icon:        mcpIconNode(icon, iconStyle),
-			CellNodes: []trail.Node{
-				nil,
-				mcpBadgeNode(right, style.S().Foreground(scheme.Color.Text.Muted)),
-			},
-			Current: pendingDefault,
+			Value: m.ID,
+			Label: label,
+			Cells: []string{label, m.ID, right},
 		})
 	}
 
@@ -157,9 +148,26 @@ var providersModelsPane = trail.FC("ProvidersModelsPane", func(props providersMo
 
 	pickerProps := components.NewPicker(title, options, func(uicomponents.Option) {})
 	pickerProps.Subtitle = subtitle
-	pickerProps.Columns = []uicomponents.Column{
-		{Width: 0, Align: style.TextAlignLeft},
-		{Width: 0, Align: style.TextAlignLeft},
+	if !empty {
+		if width > 0 {
+			idWidth = min(idWidth, max(3, width/3))
+			detailWidth = min(detailWidth, max(3, width/3))
+		}
+		for i := range options {
+			cells := options[i].Cells
+			cells[1] = format.CompactSingleLine(cells[1], idWidth-2)
+			cells[2] = format.CompactSingleLine(cells[2], max(1, detailWidth-2))
+			options[i].CellNodes = []trail.Node{
+				nil,
+				nil,
+				mcpBadgeNode(cells[2], style.S().Foreground(scheme.Color.Text.Muted)),
+			}
+		}
+		pickerProps.Columns = []uicomponents.Column{
+			{Width: 0, Align: style.TextAlignLeft},
+			{Width: idWidth, Align: style.TextAlignLeft},
+			{Width: detailWidth, Align: style.TextAlignLeft},
+		}
 	}
 	pickerProps.Bindings = []uicomponents.KeyBinding{
 		{Key: "↑/↓", Label: "Select"},

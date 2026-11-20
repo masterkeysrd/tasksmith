@@ -81,3 +81,20 @@ Project: `$XDG_DATA_HOME/tasksmith/workspaces/<hash>/`). Deny beats allow; a pla
 deny also blocks unsandboxed variants, while `bash_unsandboxed(...)` covers only bypass retries.
 Approving a prompt with a persistent scope mints the same rule shapes, so review after bulk
 approvals is normal.
+
+## `/tools` & `/mcp` — tool and MCP availability
+
+`permissions.json` holds only approval rules; tool and MCP **availability** is deterministic from
+manifests, and the two browsers are where users toggle it:
+
+- `/tools` lists every tool with its agent status; a `[Disabled]` tool (its manifest's
+  `spec.enabled: false` or a `WORKSPACE.md` `spec.policies.tools.exclude` entry) stays listed and
+  `Space` toggles it.
+- `/mcp` marks disabled servers `disabled (spec.enabled)` or `disabled (WORKSPACE.md policy)`;
+  `e` (or `Space`) toggles, and restart/auth on a disabled server are refused until enabled.
+
+A toggle is a manifest write: `spec.enabled` is patched into the resource's own workspace-scope
+manifest when it has one, otherwise the name is added to (or removed from) `WORKSPACE.md`
+`spec.policies.tools.exclude` / `spec.policies.mcps.exclude`. Never hand-edit `permissions.json`
+to disable a tool or server — those keys are ignored — and never propose deleting the legacy
+`disabledTools`/`disabledMcps` keys as urgent; they decode harmlessly.

@@ -79,6 +79,7 @@ func (s *serverState) snapshot(def *warp.MCP) api.MCPServer {
 		AuthURL:     s.authURL,
 		Error:       s.lastErr,
 		Transport:   transportName(def),
+		Enabled:     def.Spec.IsEnabled(),
 		Tools:       slices.Clone(s.tools),
 		Prompts:     slices.Clone(s.prompts),
 		Resources:   slices.Clone(s.resources),

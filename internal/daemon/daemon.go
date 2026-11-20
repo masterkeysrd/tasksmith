@@ -1164,13 +1164,9 @@ func (d *Daemon) InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest
 		return err
 	}
 
-	if req.DefaultMode != "" || len(req.DisabledTools) > 0 || len(req.DisabledMCPs) > 0 {
-		if req.Scope == "user" {
-			_ = permissions.UpdateGlobal(req.DefaultMode, req.DisabledTools, req.DisabledMCPs)
-		} else {
-			if req.DefaultMode != "" || len(req.DisabledMCPs) > 0 {
-				_ = permissions.UpdateGlobal(req.DefaultMode, nil, req.DisabledMCPs)
-			}
+	if req.DefaultMode != "" {
+		if err := permissions.UpdateGlobal(req.DefaultMode); err != nil {
+			return fmt.Errorf("daemon: update default permission mode: %w", err)
 		}
 	}
 

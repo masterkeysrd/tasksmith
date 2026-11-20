@@ -222,11 +222,23 @@ func mcpStatusLabel(status api.MCPStatus) string {
 	}
 }
 
+// mcpDisabledReason names why a disabled server is unavailable, phrased for a
+// status column or card row.
+func mcpDisabledReason(server api.MCPServer) string {
+	if server.DisabledBy == api.DisabledByWorkspacePolicy {
+		return "disabled (WORKSPACE.md policy)"
+	}
+	return "disabled (spec.enabled)"
+}
+
 // mcpRowStatus renders the right-hand status column of a list row. An unhealthy
 // server explains itself there, because a manifest description would otherwise
 // hide that it never connected or is waiting for a login. A connected server
 // reports what it offers instead, and a failure names its reason.
 func mcpRowStatus(server api.MCPServer, maxWidth int) string {
+	if !server.Enabled {
+		return mcpDisabledReason(server)
+	}
 	switch server.Status {
 	case api.MCPStatusConnected:
 		return mcpCapabilitySummary(server)
@@ -268,6 +280,18 @@ func mcpTransport(server api.MCPServer) string {
 // subcommands and references use.
 func mcpServerName(server api.MCPServer) string {
 	return server.Name
+}
+
+// findMCPServer looks one server up by name in a listing so actions always read
+// the freshest availability and status rather than the snapshot a pane opened
+// with.
+func findMCPServer(servers []api.MCPServer, name string) (api.MCPServer, bool) {
+	for _, server := range servers {
+		if server.Name == name {
+			return server, true
+		}
+	}
+	return api.MCPServer{}, false
 }
 
 // cleanMCPError reduces a daemon-reported connection failure to its reason, so a
@@ -522,6 +546,11 @@ func mcpOverviewFields(scheme *theme.Scheme, server api.MCPServer) []mcpCardFiel
 		ValueStyle: mcpStatusIconColor(scheme, server.Status),
 	}}
 
+	if !server.Enabled {
+		fields = append(fields, mcpCardTextField("Availability", "[Disabled] "+mcpDisabledReason(server),
+			style.S().Bold(true).Foreground(scheme.Color.Text.Muted)))
+	}
+
 	if authType := strings.TrimSpace(server.AuthType); authType != "" || server.Status == api.MCPStatusAuthRequired {
 		fields = append(fields, mcpOverviewAuthField(scheme, server, authType))
 	}
@@ -688,6 +717,7 @@ const (
 	mcpMenuResources
 	mcpMenuAuth
 	mcpMenuReconnect
+	mcpMenuToggle
 )
 
 // mcpMenuItem is one numbered entry of the overview's action menu.
@@ -707,17 +737,29 @@ type mcpMenuActions struct {
 	onResources func()
 	onAuth      func()
 	onRestart   func()
+	onToggle    func()
 }
 
 // mcpMenuFor builds the action menu for a server. A server that cannot be used
 // yet leads with the thing that would fix it, so the first entry is the answer to
-// "why can't I use this server?".
+// "why can't I use this server?". A disabled server offers only re-enabling:
+// there is nothing connected to inspect, restart, or authorize.
 func mcpMenuFor(server api.MCPServer) []mcpMenuItem {
 	items := []mcpMenuItem{}
+	if !server.Enabled {
+		if server.DisabledBy == api.DisabledByWorkspacePolicy {
+			items = append(items, mcpMenuItem{Label: "Enable (remove WORKSPACE.md exclusion)", Action: mcpMenuToggle, Key: "e"})
+		} else {
+			items = append(items, mcpMenuItem{Label: "Enable (patch spec.enabled)", Action: mcpMenuToggle, Key: "e"})
+		}
+		items = append(items, mcpMenuItem{Label: "Back to servers", Action: mcpMenuBack})
+		return items
+	}
 	switch server.Status {
 	case api.MCPStatusAuthRequired:
 		items = append(items, mcpMenuItem{Label: "Authenticate", Action: mcpMenuAuth, Key: "a"})
 		items = append(items, mcpMenuItem{Label: "Reconnect", Action: mcpMenuReconnect, Key: "r"})
+		items = append(items, mcpMenuItem{Label: "Disable server", Action: mcpMenuToggle, Key: "e"})
 		items = append(items, mcpMenuItem{Label: "Back to servers", Action: mcpMenuBack})
 		return items
 	}
@@ -746,6 +788,7 @@ func mcpMenuFor(server api.MCPServer) []mcpMenuItem {
 		items = append(items, mcpMenuItem{Label: "Authenticate", Action: mcpMenuAuth, Key: "a"})
 	}
 	items = append(items, mcpMenuItem{Label: "Reconnect", Action: mcpMenuReconnect, Key: "r"})
+	items = append(items, mcpMenuItem{Label: "Disable server", Action: mcpMenuToggle, Key: "e"})
 	return items
 }
 
@@ -777,6 +820,10 @@ func (a mcpMenuActions) run(action mcpMenuAction) {
 		if a.onRestart != nil {
 			a.onRestart()
 		}
+	case mcpMenuToggle:
+		if a.onToggle != nil {
+			a.onToggle()
+		}
 	}
 }
 
@@ -801,6 +848,7 @@ type mcpInspectorProps struct {
 	onResources func()
 	onAuth      func()
 	onRestart   func()
+	onToggle    func()
 }
 
 // mcpInspector renders one server's metadata and everything discovered on it.
@@ -816,6 +864,7 @@ var mcpInspector = trail.FC("MCPServerInspector", func(props mcpInspectorProps) 
 		onResources: props.onResources,
 		onAuth:      props.onAuth,
 		onRestart:   props.onRestart,
+		onToggle:    props.onToggle,
 	}
 	items := mcpMenuFor(props.server)
 	menuItems := make([]uicomponents.ActionMenuItem, len(items))
@@ -888,6 +937,8 @@ func mcpMenuHint(action mcpMenuAction) string {
 		return "Auth"
 	case mcpMenuReconnect:
 		return "Reconnect"
+	case mcpMenuToggle:
+		return "Enable/Disable"
 	default:
 		return ""
 	}
@@ -902,10 +953,12 @@ func mcpHintRank(action mcpMenuAction) int {
 		return 0
 	case mcpMenuAuth:
 		return 1
-	case mcpMenuPrompts:
+	case mcpMenuToggle:
 		return 2
-	case mcpMenuResources:
+	case mcpMenuPrompts:
 		return 3
+	case mcpMenuResources:
+		return 4
 	default:
 		return 4
 	}
@@ -1431,6 +1484,10 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 	// subtitle while it runs and then closing the browser and reporting the single
 	// outcome in the conversation timeline.
 	doRestart := func(name string) {
+		if server, ok := findMCPServer(servers, name); ok && !server.Enabled {
+			setNotice(name + " is disabled — enable it first (space or the e key in its card).")
+			return
+		}
 		runBusy(name, func(ctx context.Context, report func(string)) {
 			report("Restarting " + name + "…")
 			message, ok := restartMCPServer(ctx, name, nil)
@@ -1444,11 +1501,45 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 		})
 	}
 
+	// doToggle flips one server's availability through the daemon, which decides
+	// where the change lands: spec.enabled on a writable manifest, or a
+	// WORKSPACE.md MCPs policy exclusion. The PATCH response carries the fresh
+	// listing, so the store cache is replaced with it.
+	doToggle := func(name string) {
+		server, ok := findMCPServer(servers, name)
+		if !ok {
+			return
+		}
+		target := server.Enabled
+		runBusy("toggle:"+name, func(ctx context.Context, report func(string)) {
+			c := store.Client()
+			if c == nil {
+				report("No daemon connection; cannot update " + name)
+				return
+			}
+			list, err := c.SetMCPEnabled(ctx, name, !target)
+			if err != nil {
+				report("Failed to update " + name + ": " + err.Error())
+				return
+			}
+			store.SetWorkspaceMCPServersSilent(list)
+			if target {
+				report("Disabled " + name + ".")
+			} else {
+				report("Enabled " + name + ".")
+			}
+		})
+	}
+
 	// doAuth opens the authorization screen and starts the browser flow behind it.
 	// Unlike a restart, authorization is interactive and can take minutes, so it runs
 	// on its own tracked goroutine instead of occupying the browser's single busy
 	// slot, which would freeze every other action while the user is at the login page.
 	doAuth := func(name string) {
+		if server, ok := findMCPServer(servers, name); ok && !server.Enabled {
+			setNotice(name + " is disabled — enable it first (space or the e key in its card).")
+			return
+		}
 		setNotice("")
 		setAuthCopyNotice("")
 		setAuthReported(false)
@@ -1663,6 +1754,7 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 			},
 			onAuth:    func() { doAuth(server.Name) },
 			onRestart: func() { doRestart(server.Name) },
+			onToggle:  func() { doToggle(server.Name) },
 		})
 	}
 
@@ -1718,6 +1810,9 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 
 	title := "Manage MCP servers"
 	subtitle := mcpServerCountSubtitle(len(listed))
+	if disabled := countDisabledMCPServers(listed); disabled > 0 {
+		subtitle += fmt.Sprintf(" · %d disabled", disabled)
+	}
 	if note := strings.TrimSpace(notice()); note != "" {
 		subtitle = subtitle + " · " + note
 	}
@@ -1742,18 +1837,20 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 	pickerProps.Bindings = []uicomponents.KeyBinding{
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "Open"},
+		{Key: "e", Label: "Toggle"},
 		{Key: "a", Label: "Auth"},
 		{Key: "r", Label: "Restart"},
-		{Key: "R", Label: "Reload"},
 		{Key: "esc", Label: "Close"},
 	}
 	pickerProps.Keys = map[string]func(uicomponents.Option){
-		"i": inspect,
-		"a": func(opt uicomponents.Option) { doAuth(opt.Value) },
-		"r": func(opt uicomponents.Option) { doRestart(opt.Value) },
-		"R": func(_ uicomponents.Option) { doReload() },
-		// A capital R is awkward to reach, so the reload is also available as a
-		// chord.
+		"i":     inspect,
+		"space": func(opt uicomponents.Option) { doToggle(opt.Value) },
+		"e":     func(opt uicomponents.Option) { doToggle(opt.Value) },
+		"a":     func(opt uicomponents.Option) { doAuth(opt.Value) },
+		"r":     func(opt uicomponents.Option) { doRestart(opt.Value) },
+		// Reload keeps R and its chord: the hint row is exactly full at the
+		// narrowest supported width, so the toggle takes the advertised slot.
+		"R":      func(_ uicomponents.Option) { doReload() },
 		"ctrl+r": func(_ uicomponents.Option) { doReload() },
 	}
 	pickerProps.OnCancel = func() {
@@ -1771,4 +1868,16 @@ func mcpServerCountSubtitle(count int) string {
 		return "1 server"
 	}
 	return fmt.Sprintf("%d servers", count)
+}
+
+// countDisabledMCPServers reports how many listed servers the workspace switched
+// off, so the browser subtitle shows availability at a glance.
+func countDisabledMCPServers(servers []api.MCPServer) int {
+	n := 0
+	for _, server := range servers {
+		if !server.Enabled {
+			n++
+		}
+	}
+	return n
 }

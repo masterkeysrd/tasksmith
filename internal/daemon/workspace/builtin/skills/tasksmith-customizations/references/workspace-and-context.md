@@ -94,10 +94,12 @@ Shared analysis skills and commands.
 | `openWorld` | string | `deny` denies network plans and tools annotated open-world; `ask` requires approval. |
 | `readOnly` | boolean | When `true`, only `isReadOnly` tools are allowed; non-read-only plans are denied. |
 | `include` | string[] | When nonempty, a tool name must match an included pattern. |
-| `exclude` | string[] | Matching tool names are denied, even if included. |
+| `exclude` | string[] | Matching tool names are unavailable (never registered), even if included. |
 | `ask` | string[] | Matching tool names require approval even when otherwise allowed. |
 
 TaskSmith evaluates these workspace patterns against the called tool before permission modes and allow rules using WARP's resource-level policy matcher, which supports short names, `namespace/name`, and fully qualified tool patterns as well as `readOnly`, `ask`, `dangerous`, and `openWorld` actions; passing the policy does not automatically grant execution. A workspace `ask` action forces approval unless a matching user allow rule grants the plan. Agent tool policies are resolved separately and combined with the workspace ceiling; see `agents.md`.
+
+`spec.policies.mcps.exclude` takes glob patterns of MCP server names. A matching server never connects and exposes zero tools, prompts, and resources. For both lists, an excluded resource is unavailable rather than merely call-denied: it never enters the model's context and lists as `[Disabled]` (via a WORKSPACE.md policy) in `/tools` and `/mcp`, where toggling it back removes the exclusion. This is the per-repository counterpart of a resource's own `spec.enabled: false`, which opts the resource out everywhere its manifest loads.
 
 Policies are a monotonic ceiling only: `WORKSPACE.md` and `.agents/` manifests can narrow what a session may do, but they can never widen the user's `sandbox.json` isolation posture or `permissions.json` rules. For those layers' schemas, merge semantics, and the escape-hatch namespaces, see `sandbox-and-permissions.md`.
 

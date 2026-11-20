@@ -190,7 +190,7 @@ func (m *Manager) Sync(ctx context.Context) {
 	keep := make(map[string]struct{}, len(defs))
 	runtimeChanged := m.rememberRuntimeLocked()
 	for _, def := range defs {
-		if def == nil || strings.TrimSpace(def.Metadata.Name) == "" {
+		if def == nil || !def.Spec.IsEnabled() || strings.TrimSpace(def.Metadata.Name) == "" {
 			continue
 		}
 		name := def.Metadata.Name
@@ -467,7 +467,7 @@ func (m *Manager) ListMCPs(_ context.Context) []api.MCPServer {
 	m.mu.Unlock()
 
 	for _, def := range defs {
-		if def == nil {
+		if def == nil || !def.Spec.IsEnabled() {
 			continue
 		}
 		state, ok := states[def.Metadata.Name]
@@ -804,7 +804,7 @@ func (m *Manager) definition(name string) (*warp.MCP, error) {
 		return nil, closed
 	}
 	def, ok := m.opts.Definer.MCPDef(name)
-	if !ok || def == nil {
+	if !ok || def == nil || !def.Spec.IsEnabled() {
 		return nil, fmt.Errorf("%w: %s", ErrServerNotFound, strings.TrimSpace(name))
 	}
 	return def, nil

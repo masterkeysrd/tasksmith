@@ -272,6 +272,7 @@ func TestToolsBrowserEmptyAndPopulatedRendering(t *testing.T) {
 			InputSchema: map[string]any{"type": "object", "required": []any{"path"}},
 			Tokens:      180,
 			Status:      api.ToolStatusEager,
+			Enabled:     true,
 		},
 		{
 			Name:        "linter",
@@ -282,6 +283,7 @@ func TestToolsBrowserEmptyAndPopulatedRendering(t *testing.T) {
 			Annotations: api.ToolAnnotation{IsDangerous: true, UserHint: "Lint %s"},
 			Tokens:      120,
 			Status:      api.ToolStatusDeferred,
+			Enabled:     true,
 		},
 		{
 			Name:        "web_fetch",
@@ -290,24 +292,37 @@ func TestToolsBrowserEmptyAndPopulatedRendering(t *testing.T) {
 			Scope:       "Builtin",
 			Annotations: api.ToolAnnotation{IsOpenWorld: true},
 			Status:      api.ToolStatusDenied,
+			Enabled:     true,
+		},
+		{
+			Name:        "download",
+			Description: "Download a file",
+			Namespace:   "system",
+			Scope:       "Builtin",
+			Annotations: api.ToolAnnotation{IsOpenWorld: true},
+			Status:      api.ToolStatusDisabled,
+			DisabledBy:  api.DisabledByWorkspacePolicy,
 		},
 	}
 	store.SetWorkspaceTools(tools, "main")
 
 	out = renderTestNode(t, ToolsBrowser("slot-2"))
 
-	if !strings.Contains(out, "Tools (3 available)") {
-		t.Fatalf("expected title to show 3 available, got:\n%s", out)
+	if !strings.Contains(out, "Tools (3 of 4 available)") {
+		t.Fatalf("expected title to show 3 of 4 available, got:\n%s", out)
 	}
 	for _, want := range []string{"view", "linter", "web_fetch"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected tool name %q in output, got:\n%s", want, out)
 		}
 	}
-	for _, want := range []string{"[Eager]", "[Deferred]", "[Denied]"} {
+	for _, want := range []string{"[Eager]", "[Deferred]", "[Denied]", "[Disabled]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected status badge %s in output, got:\n%s", want, out)
 		}
+	}
+	if !strings.Contains(out, "space Enable/disable") {
+		t.Errorf("expected the space toggle hint in output, got:\n%s", out)
 	}
 	for _, want := range []string{"[Builtin]", "[Workspace]"} {
 		if !strings.Contains(out, want) {
