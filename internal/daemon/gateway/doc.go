@@ -6,6 +6,8 @@
 // Warp). It operates purely on strongly-typed in-memory domain configurations
 // ([Config]), leaving manifest parsing, inheritance, and disk watching to the
 // workspace layer.
+// Provider adapters live in the providers subpackage. The auth subpackage
+// manages credentials, authentication transports, and OAuth sessions.
 //
 // # Content-Addressable Gateway Pool
 //

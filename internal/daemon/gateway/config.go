@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 )
 
@@ -47,8 +48,12 @@ func (c *Config) Fingerprint() string {
 		}
 		collectSourceFingerprint(p.Name, p.Auth.Token, c.Env, relevantEnv, relevantFiles)
 		collectSourceFingerprint(p.Name+":password", p.Auth.Password, c.Env, relevantEnv, relevantFiles)
-		if p.Auth.scheme() == AuthTypeOAuth2 {
-			relevantOAuth[p.Name] = oauthCredentialDigest(p.Name)
+		if p.Auth.Scheme() == auth.TypeOAuth2 {
+			if driver, ok := auth.GetBrowserOAuthDriver(p.Type); ok {
+				relevantOAuth[p.Name] = driver.CredentialRevision()
+			} else {
+				relevantOAuth[p.Name] = auth.OAuthCredentialDigest(p.Name)
+			}
 		}
 	}
 
@@ -108,8 +113,8 @@ func (c *Config) Validate() error {
 		}
 
 		if p.Auth != nil {
-			switch p.Auth.scheme() {
-			case AuthTypeBearer, AuthTypeAPIKey, AuthTypeBasic, AuthTypeNone, AuthTypeOAuth2:
+			switch p.Auth.Scheme() {
+			case auth.TypeBearer, auth.TypeAPIKey, auth.TypeBasic, auth.TypeNone, auth.TypeOAuth2:
 			default:
 				return fmt.Errorf("%w: provider %q has unknown auth type %q (expected bearer, api-key, basic, none, or oauth2)",
 					ErrInvalidConfig, name, p.Auth.Type)
@@ -120,7 +125,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func collectSourceFingerprint(fileKey string, src *CredentialSource, cfgEnv, relevantEnv, relevantFiles map[string]string) {
+func collectSourceFingerprint(fileKey string, src *auth.CredentialSource, cfgEnv, relevantEnv, relevantFiles map[string]string) {
 	if src == nil {
 		return
 	}
@@ -132,6 +137,6 @@ func collectSourceFingerprint(fileKey string, src *CredentialSource, cfgEnv, rel
 		}
 	}
 	if file := strings.TrimSpace(src.File); file != "" {
-		relevantFiles[fileKey] = credentialDigest(file)
+		relevantFiles[fileKey] = auth.CredentialDigest(file)
 	}
 }

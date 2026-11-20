@@ -243,8 +243,9 @@ func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingS
 		desc string
 	}{
 		{"anthropic", "claude-sonnet-5-5, opus-5-5, haiku-5-5"},
-		{"openai", "gpt-6.1-sol, gpt-6-luna"},
-		{"google-genai", "hydrogen, carbon, argon"},
+		{"openai", "gpt-6.2-sol, gpt-6.2-astra"},
+		{"codex", "sign in with ChatGPT"},
+		{"google-genai", "neon, hydrogen, carbon, argon"},
 		{"antigravity", "gemini via Cloud Code"},
 		{"ollama", "local models (http://localhost:11434)"},
 		{"typesafe", "jev-latest"},
@@ -305,7 +306,7 @@ func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingS
 		OnSelect: func(opt uicomponents.Option) {
 			store.SetOnboardingProvider(opt.Value)
 			summary := state.ProviderSummary(opt.Value)
-			isOAuth := (summary != nil && summary.AuthType == "oauth2") || (state.AuthType == "oauth2")
+			isOAuth := (summary != nil && summary.AuthType == "oauth2") || state.AuthType == "oauth2"
 			if opt.Value == "ollama" || (state.IsProviderConfigured(opt.Value) && !isOAuth) {
 				store.GoToStep(store.StepMode)
 			} else {
@@ -411,9 +412,9 @@ var oauthWaiter = trail.FC("OAuthWaiter", func(props oauthWaiterProps) trail.Nod
 		titleName = strings.ToUpper(titleName[:1]) + titleName[1:]
 	}
 
-	subtitle := fmt.Sprintf("Waiting for %s authorization on http://localhost:51121...", titleName)
+	subtitle := fmt.Sprintf("Waiting for %s authorization in the browser…", titleName)
 	if props.OAuthAuthURL != "" {
-		subtitle = fmt.Sprintf("Waiting on localhost:51121. If browser did not open, visit:\n%s", props.OAuthAuthURL)
+		subtitle = fmt.Sprintf("If the browser did not open, visit:\n%s", props.OAuthAuthURL)
 	}
 
 	return Picker(PickerProps{
@@ -454,6 +455,22 @@ func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.Onboard
 	}
 
 	summary := state.ProviderSummary(prov)
+	browserOnly := summary != nil && summary.BrowserAuthLabel != ""
+	startLogin := func() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			resp, err := props.Client.StartProviderAuth(ctx, prov)
+			if err != nil {
+				store.SetOnboardingOAuth("error", "", "", err.Error())
+				return
+			}
+			store.SetOnboardingOAuth("authorizing", resp.AuthURL, "", "")
+			if resp.AuthURL != "" {
+				_ = auth.OpenBrowser(resp.AuthURL)
+			}
+		}()
+	}
 	isAuthenticated := (summary != nil && summary.HasKey) || state.OAuthStatus == "authenticated"
 	currentAccount := ""
 	if summary != nil && summary.Account != "" {
@@ -485,6 +502,11 @@ func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.Onboard
 				Description: "Provide an explicit static token",
 			},
 		}
+		if browserOnly {
+			options[1].Label = "Re-authenticate"
+			options[1].Description = "Opens the browser to renew sign-in"
+			options = options[:2]
+		}
 
 		return Picker(PickerProps{
 			Title:    fmt.Sprintf("%s Credentials", titleName),
@@ -504,18 +526,7 @@ func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.Onboard
 				case "continue":
 					store.GoToStep(store.StepMode)
 				case "reauth":
-					store.SetOnboardingOAuth("authorizing", "", "", "")
-					go func() {
-						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-						defer cancel()
-						resp, err := props.Client.StartProviderAuth(ctx, prov)
-						if err == nil && resp != nil {
-							store.SetOnboardingOAuth("authorizing", resp.AuthURL, "", "")
-							_ = auth.OpenBrowser(resp.AuthURL)
-						} else if err != nil {
-							store.SetOnboardingOAuth("error", "", "", err.Error())
-						}
-					}()
+					startLogin()
 				}
 			},
 			OnCancel: func() {
@@ -525,24 +536,28 @@ func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.Onboard
 			},
 		})
 	}
-
 	options := []uicomponents.Option{
 		{
 			Value:       "login",
 			Label:       fmt.Sprintf("Log in with %s (Browser)", titleName),
 			Description: fmt.Sprintf("Opens your browser to sign in with %s OAuth (PKCE)", titleName),
 		},
-		{
+	}
+	if browserOnly {
+		options[0].Label = summary.BrowserAuthLabel
+		options[0].Description = "Opens the browser on the daemon host"
+	} else {
+		options = append(options, uicomponents.Option{
 			Value:       "env",
 			Label:       fmt.Sprintf("Use %s", envVar),
 			Description: "Provide an explicit static environment token",
-		},
-		{
-			Value:       "skip",
-			Label:       "Skip for now",
-			Description: fmt.Sprintf("Configure %s credentials later", titleName),
-		},
+		})
 	}
+	options = append(options, uicomponents.Option{
+		Value:       "skip",
+		Label:       "Skip for now",
+		Description: fmt.Sprintf("Configure %s credentials later", titleName),
+	})
 
 	subtitle := fmt.Sprintf("Authenticate with %s to access its models.", titleName)
 	if state.OAuthError != "" {
@@ -565,18 +580,7 @@ func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.Onboard
 		OnSelect: func(opt uicomponents.Option) {
 			switch opt.Value {
 			case "login":
-				store.SetOnboardingOAuth("authorizing", "", "", "")
-				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					resp, err := props.Client.StartProviderAuth(ctx, prov)
-					if err == nil && resp != nil {
-						store.SetOnboardingOAuth("authorizing", resp.AuthURL, "", "")
-						_ = auth.OpenBrowser(resp.AuthURL)
-					} else if err != nil {
-						store.SetOnboardingOAuth("error", "", "", err.Error())
-					}
-				}()
+				startLogin()
 			case "skip":
 				store.GoToStep(store.StepMode)
 			}

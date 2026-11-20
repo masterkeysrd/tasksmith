@@ -62,6 +62,13 @@ Rather than creating a gateway per session or keying gateways by a mutable works
 - **Scoped Hash Inputs**: Only credentials explicitly referenced by a provider's authentication config are included in the fingerprint — the values of referenced environment variables and a content digest of each referenced `${file:...}` credential path. Unrelated environment variables never cause cache misses, and file digests keep secrets out of the hash itself.
 
 ### 3. Credential Resolver & Lazy Validation
+
+Provider model browsing uses the configured gateway client. Loom's `llm.ModelLister` supplies a live catalog when implemented. Clients with `ListProfiles` supply their known models as a fallback. The manifest browser uses the bundled preset when the gateway has no catalog.
+
+The gateway stores browser registrations atomically and shares one refresh source per active registration. Sign-in changes the gateway fingerprint, token refresh keeps the fingerprint stable, and sign-out invalidates the source. Providers supply their registration type and Loom token source constructor.
+
+Codex uses Loom for ChatGPT sign-in and keeps the host ID across sign-outs. On a profile cache miss, the gateway asks Loom to look up the model in the account catalog. Loom resolves and caches the resulting profiles. Workspace setup copies the bundled preset.
+
 The gateway resolves authentication credentials without mutating process state or probing global files:
 - **Layered Resolution**: Credentials resolve from the workspace's injected environment map, falling back to process environment variables (`os.Getenv`), or reading from an explicit file path (`${file:...}`), which accepts `~` and paths relative to the declaring provider manifest.
 - **Scheme Handling**: The configured scheme (`bearer`, `api-key`, `basic`, `oauth2`, or `none`) decides the header and prefix. The gateway transport is the last layer before the wire, so the configured header always wins over whatever a provider SDK attached, and the SDK's own credential header is removed when it is not the configured one.

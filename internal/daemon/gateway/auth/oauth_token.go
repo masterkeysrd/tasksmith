@@ -1,4 +1,4 @@
-package gateway
+package auth
 
 import (
 	"crypto/sha256"
@@ -39,10 +39,6 @@ type OAuthAccount struct {
 	LastUsedAt   time.Time `json:"last_used_at"`
 }
 
-// Type aliases for backwards compatibility.
-type AntigravityToken = OAuthToken
-type AntigravityAccount = OAuthAccount
-
 // ProviderTokenPath returns the absolute path to ~/.local/share/tasksmith/credentials/<provider>.json.
 func ProviderTokenPath(provider string) (string, error) {
 	dir, err := xdg.SubDataDir("credentials")
@@ -50,8 +46,8 @@ func ProviderTokenPath(provider string) (string, error) {
 		return "", fmt.Errorf("resolve credentials dir: %w", err)
 	}
 	clean := strings.ToLower(strings.TrimSpace(provider))
-	if clean == "" {
-		return "", errors.New("gateway: provider name cannot be empty")
+	if clean == "" || clean == "." || clean == ".." || filepath.Base(clean) != clean {
+		return "", errors.New("gateway: invalid provider name")
 	}
 	return filepath.Join(dir, clean+".json"), nil
 }
@@ -314,10 +310,10 @@ func DeleteProviderToken(provider string, account string) (bool, error) {
 	return true, nil
 }
 
-// oauthCredentialDigest returns a stable hex digest of the stored OAuth identity
+// OAuthCredentialDigest returns a stable hex digest of the stored OAuth identity
 // for provider so Config.Fingerprint changes on sign-in, sign-out, or account
 // switch without rebuilding pooled gateways on routine access-token refreshes.
-func oauthCredentialDigest(provider string) string {
+func OAuthCredentialDigest(provider string) string {
 	tokenPath, err := ProviderTokenPath(provider)
 	if err != nil {
 		return "invalid-provider"
@@ -352,33 +348,6 @@ func oauthCredentialDigest(provider string) string {
 		stored.Email, identity, stored.AccessToken != "")
 	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:])
-}
-
-// Antigravity backwards compatibility helpers:
-
-// AntigravityTokenPath returns the absolute path to antigravity.json.
-func AntigravityTokenPath() (string, error) {
-	return ProviderTokenPath("antigravity")
-}
-
-// SaveAntigravityToken persists an Antigravity token.
-func SaveAntigravityToken(tok *oauth2.Token, email string) error {
-	return SaveProviderToken("antigravity", tok, email)
-}
-
-// LoadAntigravityToken reads the Antigravity token.
-func LoadAntigravityToken() (*oauth2.Token, string, error) {
-	return LoadProviderToken("antigravity")
-}
-
-// ListAntigravityAccounts lists Antigravity accounts.
-func ListAntigravityAccounts() ([]AntigravityAccount, string, error) {
-	return ListProviderAccounts("antigravity")
-}
-
-// SwitchAntigravityAccount switches the active Antigravity account.
-func SwitchAntigravityAccount(email string) error {
-	return SwitchProviderAccount("antigravity", email)
 }
 
 // ExtractEmailFromToken extracts the email address from a Google OAuth2 token if an id_token was included.

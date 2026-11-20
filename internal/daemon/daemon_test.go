@@ -28,6 +28,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/sys"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
@@ -95,6 +96,7 @@ func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream
 type fakeGateway struct {
 	provider  *fakeProvider
 	providers []gateway.ProviderInfo
+	models    map[string][]profile.Profile
 }
 
 func (g *fakeGateway) LLM(ctx context.Context, model models.Model, cfg llm.ModelConfig) (*llm.Model, error) {
@@ -114,6 +116,11 @@ func (g *fakeGateway) Embedding(context.Context, models.Model) (*embedding.Model
 
 func (g *fakeGateway) ListProviders() []gateway.ProviderInfo {
 	return g.providers
+}
+
+func (g *fakeGateway) ListModels(_ context.Context, provider string) ([]profile.Profile, bool, error) {
+	models, ok := g.models[provider]
+	return models, ok, nil
 }
 
 func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
@@ -2934,7 +2941,7 @@ func TestAntigravityOAuthEndpointsAndStatus(t *testing.T) {
 		TokenType:    "Bearer",
 		Expiry:       time.Now().Add(1 * time.Hour),
 	}
-	if err := gateway.SaveAntigravityToken(tok, "developer@google.com"); err != nil {
+	if err := auth.SaveProviderToken("antigravity", tok, "developer@google.com"); err != nil {
 		t.Fatalf("SaveAntigravityToken error: %v", err)
 	}
 

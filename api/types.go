@@ -104,16 +104,17 @@ type WorkspaceStatus struct {
 
 // ProviderSummary summarizes an available or configured model provider.
 type ProviderSummary struct {
-	Name         string   `json:"name"`
-	DisplayName  string   `json:"display_name,omitempty"`
-	Status       string   `json:"status,omitempty"` // e.g. "✓ key", "✓ local", "needs key", "sign-in"
-	HasKey       bool     `json:"has_key"`
-	AuthType     string   `json:"auth_type,omitempty"` // "env", "bearer", "oauth2", etc.
-	AuthEnv      string   `json:"auth_env,omitempty"`
-	Account      string   `json:"account,omitempty"` // Authenticated account email if OAuth
-	DefaultModel string   `json:"default_model,omitempty"`
-	Models       []string `json:"models,omitempty"`
-	Scope        string   `json:"scope,omitempty"` // "system", "user", "workspace", "project"
+	Name             string   `json:"name"`
+	DisplayName      string   `json:"display_name,omitempty"`
+	Status           string   `json:"status,omitempty"` // e.g. "✓ key", "✓ local", "needs key", "sign-in"
+	HasKey           bool     `json:"has_key"`
+	AuthType         string   `json:"auth_type,omitempty"` // "env", "bearer", "oauth2", etc.
+	AuthEnv          string   `json:"auth_env,omitempty"`
+	BrowserAuthLabel string   `json:"browser_auth_label,omitempty"` // Sign-in label when the daemon opens the browser and owns the callback.
+	Account          string   `json:"account,omitempty"`            // Authenticated account email if OAuth
+	DefaultModel     string   `json:"default_model,omitempty"`
+	Models           []string `json:"models,omitempty"`
+	Scope            string   `json:"scope,omitempty"` // "system", "user", "workspace", "project"
 }
 
 // ProviderAuthRequest initiates interactive OAuth for a provider.

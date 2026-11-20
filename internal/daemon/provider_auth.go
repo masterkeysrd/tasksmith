@@ -15,7 +15,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	providerauth "github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -99,9 +99,9 @@ func resolvePresetAuth(p *warp.ModelProvider, envLayers ...map[string]string) (h
 		return false, "", ""
 	}
 	if p.Spec.Auth != nil && p.Spec.Auth.Type == warp.AuthTypeOAuth2 {
-		if tok, accountEmail, err := gateway.LoadProviderToken(p.Metadata.Name); err == nil && tok != nil {
-			if accountEmail != "" {
-				return true, accountEmail, fmt.Sprintf("✓ %s (OAuth)", accountEmail)
+		if email, ok := providerOAuthAccount(p.Metadata.Name); ok {
+			if email != "" {
+				return true, email, fmt.Sprintf("✓ %s (OAuth)", email)
 			}
 			return true, "", "✓ OAuth authenticated"
 		}
@@ -121,6 +121,14 @@ func resolvePresetAuth(p *warp.ModelProvider, envLayers ...map[string]string) (h
 		}
 	}
 	return false, "", ""
+}
+
+func providerOAuthAccount(provider string) (string, bool) {
+	if driver, ok := providerauth.GetBrowserOAuthDriver(provider); ok {
+		return driver.Account()
+	}
+	token, email, err := providerauth.LoadProviderToken(provider)
+	return email, err == nil && token != nil
 }
 
 func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderRequest) (*api.VerifyProviderResponse, error) {
@@ -189,7 +197,10 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 
 func (d *Daemon) StartProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
 	prov := strings.TrimSpace(strings.ToLower(provider))
-	driver, ok := gateway.GetOAuthDriver(prov)
+	if driver, ok := providerauth.GetBrowserOAuthDriver(prov); ok {
+		return d.beginBrowserAuthFlow(prov, driver.Authorize), nil
+	}
+	driver, ok := providerauth.GetOAuthDriver(prov)
 	if !ok {
 		return nil, providerAuthUnsupported(provider)
 	}
@@ -218,8 +229,9 @@ func providerAuthBadRequest(format string, args ...any) error {
 
 // beginProviderAuthFlow opens a PKCE flow for driver and holds it open on a
 // background goroutine until the loopback callback lands or the flow times out.
-func (d *Daemon) beginProviderAuthFlow(prov string, driver gateway.OAuthDriver) (*api.ProviderAuthResponse, error) {
+func (d *Daemon) registerProviderAuthFlow(prov string) (context.Context, *providerAuthFlow) {
 	d.providerAuthMu.Lock()
+	defer d.providerAuthMu.Unlock()
 	if existing, ok := d.providerAuths[prov]; ok && existing != nil {
 		existing.mu.Lock()
 		if existing.cancel != nil {
@@ -236,11 +248,15 @@ func (d *Daemon) beginProviderAuthFlow(prov string, driver gateway.OAuthDriver) 
 		settled:  make(chan struct{}),
 	}
 	d.providerAuths[prov] = flow
-	d.providerAuthMu.Unlock()
+	return flowCtx, flow
+}
 
+func (d *Daemon) beginProviderAuthFlow(prov string, driver providerauth.OAuthDriver) (*api.ProviderAuthResponse, error) {
+	flowCtx, flow := d.registerProviderAuthFlow(prov)
 	oauthCfg := driver.OAuthConfig()
 	session, err := auth.BeginAuth(oauthCfg)
 	if err != nil {
+		flow.cancel()
 		flow.settle("error", "", err.Error())
 		close(flow.settled)
 		return nil, fmt.Errorf("begin oauth: %w", err)
@@ -252,7 +268,7 @@ func (d *Daemon) beginProviderAuthFlow(prov string, driver gateway.OAuthDriver) 
 	flow.mu.Unlock()
 
 	go func() {
-		defer cancel()
+		defer flow.cancel()
 		defer close(flow.settled)
 
 		res, err := auth.ReceiveCallback(flowCtx, oauthCfg.RedirectURL, session.AuthURL, auth.LoopbackOptions{
@@ -292,7 +308,7 @@ func (d *Daemon) failProviderAuthFlow(flow *providerAuthFlow, err error) {
 // shared completion path for both the loopback listener and a manually pasted
 // callback URL, and only runs for the goroutine that claimed the flow, so it
 // owns the recorded outcome outright.
-func (d *Daemon) finishProviderAuth(ctx context.Context, flow *providerAuthFlow, driver gateway.OAuthDriver, code, state string) {
+func (d *Daemon) finishProviderAuth(ctx context.Context, flow *providerAuthFlow, driver providerauth.OAuthDriver, code, state string) {
 	tok, err := auth.CompleteAuth(ctx, driver.OAuthConfig(), flow.session, code, state)
 	if err != nil {
 		flow.settle("error", "", err.Error())
@@ -300,7 +316,7 @@ func (d *Daemon) finishProviderAuth(ctx context.Context, flow *providerAuthFlow,
 	}
 
 	account := driver.ExtractAccount(tok)
-	if err := gateway.SaveProviderToken(flow.provider, tok, account); err != nil {
+	if err := providerauth.SaveProviderToken(flow.provider, tok, account); err != nil {
 		flow.settle("error", "", err.Error())
 		return
 	}
@@ -316,7 +332,10 @@ func (d *Daemon) finishProviderAuth(ctx context.Context, flow *providerAuthFlow,
 // reach the daemon's loopback listener.
 func (d *Daemon) CompleteProviderAuth(ctx context.Context, provider string, req api.ProviderAuthCallbackRequest) (*api.ProviderAuthResponse, error) {
 	prov := strings.TrimSpace(strings.ToLower(provider))
-	driver, ok := gateway.GetOAuthDriver(prov)
+	if _, ok := providerauth.GetBrowserOAuthDriver(prov); ok {
+		return nil, providerAuthBadRequest("finish sign-in for %q in the browser on the daemon host", prov)
+	}
+	driver, ok := providerauth.GetOAuthDriver(prov)
 	if !ok {
 		return nil, providerAuthUnsupported(provider)
 	}
@@ -396,7 +415,7 @@ func parseProviderCallback(raw string) (code, state string, err error) {
 
 func (d *Daemon) GetProviderAuthStatus(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
 	prov := strings.TrimSpace(strings.ToLower(provider))
-	if !gateway.HasOAuthDriver(prov) {
+	if !providerauth.HasOAuthDriver(prov) {
 		return nil, providerAuthUnsupported(provider)
 	}
 
@@ -411,7 +430,7 @@ func (d *Daemon) GetProviderAuthStatus(ctx context.Context, provider string) (*a
 		}
 	}
 
-	if tok, email, err := gateway.LoadProviderToken(prov); err == nil && tok != nil {
+	if email, ok := providerOAuthAccount(prov); ok {
 		return &api.ProviderAuthResponse{
 			Provider: prov,
 			Status:   "authenticated",
@@ -433,7 +452,22 @@ func (d *Daemon) LogoutProviderAuth(ctx context.Context, provider string) (*api.
 	if prov == "" {
 		return nil, providerAuthBadRequest("provider name is required")
 	}
+	deleted, err := d.deleteProviderCredentials(prov)
+	if err != nil {
+		return nil, err
+	}
+	d.reloadAllWorkspaces(ctx)
+	status := "idle"
+	if deleted {
+		status = "signed-out"
+	}
+	return &api.ProviderAuthResponse{Provider: prov, Status: status}, nil
+}
 
+func (d *Daemon) deleteProviderCredentials(prov string) (bool, error) {
+	if driver, ok := providerauth.GetBrowserOAuthDriver(prov); ok {
+		return d.logoutBrowserAuth(prov, driver)
+	}
 	d.providerAuthMu.Lock()
 	flow := d.providerAuths[prov]
 	if flow != nil {
@@ -458,18 +492,7 @@ func (d *Daemon) LogoutProviderAuth(ctx context.Context, provider string) (*api.
 		}
 	}
 
-	deleted, err := gateway.DeleteProviderToken(prov, "")
-	if err != nil {
-		return nil, err
-	}
-
-	d.reloadAllWorkspaces(ctx)
-
-	status := "idle"
-	if deleted {
-		status = "signed-out"
-	}
-	return &api.ProviderAuthResponse{Provider: prov, Status: status}, nil
+	return providerauth.DeleteProviderToken(prov, "")
 }
 
 // ListProviders returns the built-in provider presets with their current
@@ -490,6 +513,10 @@ func (d *Daemon) scanGlobalProviders() []api.ProviderSummary {
 		if p.Spec.Auth != nil && p.Spec.Auth.Type != "" {
 			authType = string(p.Spec.Auth.Type)
 		}
+		loginLabel := ""
+		if driver, ok := providerauth.GetBrowserOAuthDriver(p.Metadata.Name); ok {
+			loginLabel = driver.LoginLabel()
+		}
 
 		hasKey, account, status := resolvePresetAuth(p, userEnv)
 		if p.Metadata.Name == "ollama" {
@@ -507,16 +534,17 @@ func (d *Daemon) scanGlobalProviders() []api.ProviderSummary {
 		}
 
 		summaries = append(summaries, api.ProviderSummary{
-			Name:         p.Metadata.Name,
-			DisplayName:  p.Metadata.Name,
-			Status:       status,
-			HasKey:       hasKey,
-			AuthType:     authType,
-			AuthEnv:      authEnv,
-			Account:      account,
-			DefaultModel: defaultModel,
-			Models:       modelNames,
-			Scope:        "system",
+			Name:             p.Metadata.Name,
+			DisplayName:      p.Metadata.Name,
+			Status:           status,
+			HasKey:           hasKey,
+			AuthType:         authType,
+			AuthEnv:          authEnv,
+			BrowserAuthLabel: loginLabel,
+			Account:          account,
+			DefaultModel:     defaultModel,
+			Models:           modelNames,
+			Scope:            "system",
 		})
 	}
 

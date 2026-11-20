@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/providers"
 	"golang.org/x/oauth2"
 )
 
@@ -36,6 +37,34 @@ func (d fakeOAuthDriver) OAuthConfig() *oauth2.Config {
 
 func (d fakeOAuthDriver) ExtractAccount(*oauth2.Token) string { return d.account }
 
+func TestBrowserProviderAuthDiscardsResultAfterLogout(t *testing.T) {
+	d, cli, _ := setupDaemonTest(t, nil)
+	release := make(chan struct{})
+	committed := false
+	resp := d.beginBrowserAuthFlow(providers.CodexName, func(context.Context) (func() (string, error), error) {
+		<-release
+		return func() (string, error) {
+			committed = true
+			return "signed-in@example.test", nil
+		}, nil
+	})
+	d.providerAuthMu.Lock()
+	flow := d.providerAuths[providers.CodexName]
+	d.providerAuthMu.Unlock()
+	done, err := cli.LogoutProviderAuth(t.Context(), providers.CodexName)
+	close(release)
+	<-flow.settled
+	if resp.Status != "authorizing" || resp.AuthURL != "" {
+		t.Fatalf("start = %+v", resp)
+	}
+	if err != nil || done.Status != "idle" {
+		t.Fatalf("logout = %+v, %v", done, err)
+	}
+	if committed {
+		t.Fatal("a canceled browser flow restored the registration")
+	}
+}
+
 // TestProviderAuthCallbackCompletesFlowEndToEnd drives the daemon's provider
 // OAuth flow the way the SSH/headless path does: begin a flow, paste the
 // redirect URL back, and see the token land on disk through the client API.
@@ -59,7 +88,7 @@ func TestProviderAuthCallbackCompletesFlowEndToEnd(t *testing.T) {
 	defer tokenSrv.Close()
 
 	const prov = "authtest"
-	gateway.RegisterOAuthDriver(prov, fakeOAuthDriver{tokenURL: tokenSrv.URL, account: "dev@example.com"})
+	auth.RegisterOAuthDriver(prov, fakeOAuthDriver{tokenURL: tokenSrv.URL, account: "dev@example.com"})
 
 	_, cli, _ := setupDaemonTest(t, nil)
 	ctx := context.Background()
@@ -105,7 +134,7 @@ func TestProviderAuthCallbackCompletesFlowEndToEnd(t *testing.T) {
 	}
 
 	// The token landed on disk and the status endpoint now reports it.
-	tok, email, err := gateway.LoadProviderToken(prov)
+	tok, email, err := auth.LoadProviderToken(prov)
 	if err != nil {
 		t.Fatalf("LoadProviderToken after completion: %v", err)
 	}
@@ -121,7 +150,7 @@ func TestProviderAuthCallbackCompletesFlowEndToEnd(t *testing.T) {
 	if out.Status != "signed-out" {
 		t.Fatalf("logout status = %q, want signed-out", out.Status)
 	}
-	if gateway.HasProviderToken(prov) {
+	if auth.HasProviderToken(prov) {
 		t.Error("credentials survived logout")
 	}
 
@@ -188,24 +217,33 @@ func TestProviderAuthCallbackRejections(t *testing.T) {
 func TestListProvidersSummarizesPresets(t *testing.T) {
 	_, cli, _ := setupDaemonTest(t, nil)
 
-	providers, err := cli.ListProviders(context.Background())
+	summaries, err := cli.ListProviders(context.Background())
 	if err != nil {
 		t.Fatalf("ListProviders: %v", err)
 	}
-	if len(providers) == 0 {
+	if len(summaries) == 0 {
 		t.Fatal("ListProviders returned no presets")
 	}
-	var sawOAuth bool
-	for _, p := range providers {
+	var sawOAuth, sawBrowserOAuth bool
+	for _, p := range summaries {
 		if p.Name == "antigravity" {
 			sawOAuth = true
 			if p.AuthType != "oauth2" {
 				t.Errorf("antigravity auth type = %q, want oauth2", p.AuthType)
 			}
 		}
+		if p.Name == providers.CodexName {
+			sawBrowserOAuth = true
+			if p.AuthType != "oauth2" || p.BrowserAuthLabel != "Continue with ChatGPT" {
+				t.Errorf("unexpected browser sign-in metadata: %+v", p)
+			}
+		}
 	}
 	if !sawOAuth {
 		t.Error("antigravity missing from the provider listing")
+	}
+	if !sawBrowserOAuth {
+		t.Error("codex missing from the provider listing")
 	}
 }
 
@@ -240,7 +278,7 @@ func TestProviderAuthFlowCancellationKeepsOutcome(t *testing.T) {
 	defer tokenSrv.Close()
 
 	const prov = "keepoutcome"
-	gateway.RegisterOAuthDriver(prov, fakeOAuthDriver{tokenURL: tokenSrv.URL, account: "keep@example.com"})
+	auth.RegisterOAuthDriver(prov, fakeOAuthDriver{tokenURL: tokenSrv.URL, account: "keep@example.com"})
 
 	d, _, _ := setupDaemonTest(t, nil)
 	ctx := context.Background()

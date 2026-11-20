@@ -37,6 +37,7 @@ func TestPresets(t *testing.T) {
 	expected := map[string]bool{
 		"anthropic":    false,
 		"antigravity":  false,
+		"codex":        false,
 		"google-genai": false,
 		"ollama":       false,
 		"openai":       false,
@@ -2437,7 +2438,7 @@ spec:
 func TestPresetTierAliases(t *testing.T) {
 	setupTestXDG(t)
 
-	tierProviders := map[string]bool{"anthropic": true, "antigravity": true, "google-genai": true, "ollama": true, "openai": true}
+	tierProviders := map[string]bool{"anthropic": true, "antigravity": true, "codex": true, "google-genai": true, "ollama": true, "openai": true}
 	tiers := []string{"fast", "balanced", "smart", "flagship"}
 
 	for _, p := range Presets() {
@@ -2455,6 +2456,51 @@ func TestPresetTierAliases(t *testing.T) {
 				t.Errorf("provider %s: tier alias %q declared on %d models, want exactly 1", p.Metadata.Name, tier, seen[tier])
 			}
 		}
+	}
+}
+
+func TestUpdatedProviderPresetModels(t *testing.T) {
+	for _, tc := range []struct {
+		provider  string
+		defaultID string
+		aliases   map[string]string
+		fastID    string
+	}{
+		{"openai", "gpt-6.2-sol", map[string]string{"balanced": "gpt-6.2-sol", "smart": "gpt-6.2-sol", "flagship": "gpt-6.2-astra"}, "gpt-6-luna"},
+		{"codex", "gpt-6.2-sol", map[string]string{"balanced": "gpt-6.2-sol", "smart": "gpt-6.2-astra", "flagship": "gpt-6.2-astra"}, "gpt-6-luna"},
+		{"google-genai", "gemini-4-neon", map[string]string{"balanced": "gemini-4-neon", "fast": "gemini-4-hydrogen"}, "gemini-4-hydrogen"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			p := findWarpPreset(tc.provider)
+			if p == nil {
+				t.Fatal("missing provider preset")
+			}
+			if got := p.Spec.DefaultModels.ForRole(warp.ModelRoleCompletion); got != tc.defaultID {
+				t.Errorf("completion default = %q, want %q", got, tc.defaultID)
+			}
+			aliases := make(map[string]warp.ProviderModel)
+			for _, m := range p.Spec.Models {
+				if m.Capabilities != nil || m.Cost != nil {
+					t.Errorf("%s declares capability or pricing overrides", m.ID)
+				}
+				for _, alias := range m.Aliases {
+					aliases[alias] = m
+				}
+			}
+			if got := aliases["fast"].ID; got != tc.fastID {
+				t.Errorf("@fast = %q, want %q", got, tc.fastID)
+			}
+			for alias, id := range tc.aliases {
+				m := aliases[alias]
+				if m.ID != id {
+					t.Errorf("@%s = %q, want %q", alias, m.ID, id)
+					continue
+				}
+				if m.Name != id || m.Limits.Context == 0 || m.Limits.Output == 0 {
+					t.Errorf("incomplete preset metadata for %s: %+v", id, m)
+				}
+			}
+		})
 	}
 }
 

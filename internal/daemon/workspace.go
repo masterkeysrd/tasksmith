@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	providerauth "github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/mcp"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
@@ -628,7 +629,7 @@ func buildGatewayConfig(ws *workspace.Workspace, rec metrics.Recorder) gateway.C
 }
 
 func toGatewayProvider(p *warp.ModelProvider) gateway.ProviderConfig {
-	var auth *gateway.AuthConfig
+	var auth *providerauth.Config
 	if p.Spec.Auth != nil {
 		auth = toGatewayAuth(p.Spec.Auth, p.GetDir())
 	}
@@ -643,9 +644,9 @@ func toGatewayProvider(p *warp.ModelProvider) gateway.ProviderConfig {
 	}
 }
 
-func toGatewayAuth(pa *warp.ProviderAuth, providerDir string) *gateway.AuthConfig {
-	auth := &gateway.AuthConfig{
-		Type:   gateway.AuthType(pa.Type),
+func toGatewayAuth(pa *warp.ProviderAuth, providerDir string) *providerauth.Config {
+	auth := &providerauth.Config{
+		Type:   providerauth.Type(pa.Type),
 		Header: pa.Header,
 		Token:  parseCredentialSource(pa.Token, providerDir),
 	}
@@ -656,7 +657,7 @@ func toGatewayAuth(pa *warp.ProviderAuth, providerDir string) *gateway.AuthConfi
 	return auth
 }
 
-func parseCredentialSource(rawExpr, providerDir string) *gateway.CredentialSource {
+func parseCredentialSource(rawExpr, providerDir string) *providerauth.CredentialSource {
 	expr, ok := warp.ParseExpression(strings.TrimSpace(rawExpr))
 	if !ok {
 		return nil
@@ -664,11 +665,11 @@ func parseCredentialSource(rawExpr, providerDir string) *gateway.CredentialSourc
 	switch expr.Scheme {
 	case "env":
 		if envName := strings.TrimSpace(expr.Target); envName != "" {
-			return &gateway.CredentialSource{Env: envName}
+			return &providerauth.CredentialSource{Env: envName}
 		}
 	case "file":
 		if filePath := resolveCredentialFilePath(expr.Target, providerDir); filePath != "" {
-			return &gateway.CredentialSource{File: filePath}
+			return &providerauth.CredentialSource{File: filePath}
 		}
 	}
 	return nil

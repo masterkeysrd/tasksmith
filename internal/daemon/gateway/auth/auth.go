@@ -1,9 +1,10 @@
-package gateway
+package auth
 
 import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +12,9 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 )
+
+// ErrMissingCredential indicates that the provider needs authentication.
+var ErrMissingCredential = errors.New("gateway: missing required authentication credential")
 
 // resolve reads the credential from env (falling back to os.Getenv) or from File.
 func (c *CredentialSource) resolve(env map[string]string) (string, error) {
@@ -41,20 +45,20 @@ func (c *CredentialSource) resolve(env map[string]string) (string, error) {
 	return "", nil
 }
 
-// resolveCredential extracts credentials from the injected in-memory env map,
+// ResolveCredential extracts credentials from the injected in-memory env map,
 // falling back to os.Getenv, or reading from an explicit file path. Providers
 // declaring the "none" scheme never carry a credential.
-func resolveCredential(auth *AuthConfig, env map[string]string) (string, error) {
+func ResolveCredential(auth *Config, env map[string]string) (string, error) {
 	if auth == nil {
 		return "", nil
 	}
 
 	scheme := auth.Type.normalized()
-	if scheme == AuthTypeNone {
+	if scheme == TypeNone {
 		return "", nil
 	}
 
-	if scheme == AuthTypeOAuth2 {
+	if scheme == TypeOAuth2 {
 		if auth.Token != nil && !auth.Token.IsZero() {
 			token, err := auth.Token.resolve(env)
 			if err == nil {
@@ -64,7 +68,7 @@ func resolveCredential(auth *AuthConfig, env map[string]string) (string, error) 
 		return "", nil
 	}
 
-	if scheme == AuthTypeBasic && auth.Token.IsZero() && (auth.Username != "" || !auth.Password.IsZero()) {
+	if scheme == TypeBasic && auth.Token.IsZero() && (auth.Username != "" || !auth.Password.IsZero()) {
 		if auth.Password.IsZero() {
 			return "", fmt.Errorf("%w: auth type %q requires a password or token source", ErrMissingCredential, scheme)
 		}
@@ -81,12 +85,12 @@ func resolveCredential(auth *AuthConfig, env map[string]string) (string, error) 
 	return auth.Token.resolve(env)
 }
 
-// credentialDigest returns a short hex digest of a credential file's contents so
+// CredentialDigest returns a short hex digest of a credential file's contents so
 // configuration fingerprints change when a token is rotated, without ever
 // placing the secret itself into the hashed payload. A missing or unreadable
 // file digests its error text instead, so creating the file also invalidates
 // any cached configuration.
-func credentialDigest(path string) string {
+func CredentialDigest(path string) string {
 	path = fsutils.ResolveConfigPath(path, "")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -98,26 +102,26 @@ func credentialDigest(path string) string {
 
 // authHeaderName returns the header a credential is sent in, defaulting to
 // Authorization.
-func authHeaderName(auth *AuthConfig) string {
+func authHeaderName(auth *Config) string {
 	if auth != nil && strings.TrimSpace(auth.Header) != "" {
 		return strings.TrimSpace(auth.Header)
 	}
 	return "Authorization"
 }
 
-// scheme returns the configured auth scheme, defaulting to "bearer" when
+// Scheme returns the configured auth scheme, defaulting to "bearer" when
 // auth is nil or auth.type is omitted.
-func (a *AuthConfig) scheme() AuthType {
+func (a *Config) Scheme() Type {
 	if a == nil {
-		return AuthTypeBearer
+		return TypeBearer
 	}
 	return a.Type.normalized()
 }
 
-// placeholderSDKCredential is what a provider SDK receives when auth.type is
+// PlaceholderSDKCredential is what a provider SDK receives when auth.type is
 // "none" but the SDK refuses to build a client without any key at all. The
 // transport deletes the header it produces, so it never leaves the process.
-const placeholderSDKCredential = "auth-none"
+const PlaceholderSDKCredential = "auth-none"
 
 // sdkAuthHeaders lists the authentication headers a provider SDK attaches on its
 // own, before the gateway transport runs.
@@ -139,14 +143,14 @@ func sdkAuthHeaders(providerType string) []string {
 // transport header map, any SDK header not present in configured is dropped so
 // conflicting headers do not both reach upstream. Managed OAuth2 providers with
 // no custom header rely on the SDK's own token source and keep all SDK headers.
-func redundantSDKAuthHeaders(auth *AuthConfig, providerType string, configured map[string]string) []string {
+func redundantSDKAuthHeaders(auth *Config, providerType string, configured map[string]string) []string {
 	if auth == nil {
 		return nil
 	}
 
 	norm := auth.Type.normalized()
 	customHeader := strings.TrimSpace(auth.Header) != ""
-	if norm == AuthTypeOAuth2 && !customHeader {
+	if norm == TypeOAuth2 && !customHeader {
 		return nil
 	}
 
@@ -160,10 +164,10 @@ func redundantSDKAuthHeaders(auth *AuthConfig, providerType string, configured m
 	return drop
 }
 
-// buildHTTPTransport creates an http.RoundTripper that attaches configured headers
+// BuildHTTPTransport creates an http.RoundTripper that attaches configured headers
 // and authentication tokens to all outgoing requests. Configured headers win over
 // any the provider SDK sets, since the transport is the last layer before the wire.
-func buildHTTPTransport(base http.RoundTripper, auth *AuthConfig, token string, customHeaders map[string]string, providerType string) http.RoundTripper {
+func BuildHTTPTransport(base http.RoundTripper, auth *Config, token string, customHeaders map[string]string, providerType string) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
@@ -178,11 +182,11 @@ func buildHTTPTransport(base http.RoundTripper, auth *AuthConfig, token string, 
 	if token != "" && auth != nil {
 		headerName := http.CanonicalHeaderKey(authHeaderName(auth))
 		switch auth.Type.normalized() {
-		case AuthTypeBearer, AuthTypeOAuth2:
+		case TypeBearer, TypeOAuth2:
 			headers[headerName] = "Bearer " + token
-		case AuthTypeAPIKey:
+		case TypeAPIKey:
 			headers[headerName] = token
-		case AuthTypeBasic:
+		case TypeBasic:
 			headers[headerName] = "Basic " + base64.StdEncoding.EncodeToString([]byte(token))
 		}
 	}

@@ -158,6 +158,7 @@ export default defineConfig({
           text: 'Model Providers',
           items: [
             { text: 'OpenAI', link: '/reference/providers/openai' },
+            { text: 'Codex', link: '/reference/providers/codex' },
             { text: 'Anthropic', link: '/reference/providers/anthropic' },
             { text: 'Google GenAI', link: '/reference/providers/google-genai' },
             { text: 'Ollama', link: '/reference/providers/ollama' },

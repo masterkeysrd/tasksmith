@@ -35,7 +35,7 @@ Select **Antigravity** as your provider and choose **Log in with Google (Browser
 4. Token expiration is handled automatically via background refresh.
 5. Your authenticated Google account email is detected and surfaced in the setup wizard and daemon status. You can switch accounts or re-authenticate at any time.
 
-You can also sign in, check status, or sign out without the setup wizard: `/login antigravity` in the REPL, or `tasksmith auth login`, `tasksmith auth status`, and `tasksmith auth logout antigravity` from a shell (add `--paste` on SSH or headless hosts where the browser cannot reach the daemon's callback).
+Use `/login antigravity` in the REPL or `tasksmith auth login antigravity` from a shell. Add `--paste` when the browser cannot reach the daemon's callback. Use `tasksmith auth status antigravity` to check sign-in and `tasksmith auth logout antigravity` to sign out.
 
 ### Option B: Static Bearer Token (Headless / CI)
 

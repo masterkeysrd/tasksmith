@@ -136,12 +136,28 @@ func runAuthLogin(cmd *cobra.Command, rootOpts *rootOptions, provider string, no
 	out := cmd.OutOrStdout()
 
 	startCtx, cancelStart := context.WithTimeout(ctx, authCallTimeout)
+	defer cancelStart()
+	if noBrowser || paste {
+		providers, err := c.ListProviders(startCtx)
+		if err != nil {
+			return err
+		}
+		for _, p := range providers {
+			if p.Name == provider && p.BrowserAuthLabel != "" {
+				return fmt.Errorf("signing in to %s requires a browser on the daemon host", provider)
+			}
+		}
+	}
 	resp, err := c.StartProviderAuth(startCtx, provider)
 	cancelStart()
 	if err != nil {
 		return err
 	}
 
+	if resp.AuthURL == "" && resp.Status == "authorizing" {
+		_, _ = fmt.Fprintf(out, "Continue %s sign-in in the browser on the daemon host.\n", provider)
+		return waitForAuthLogin(cmd, c, provider)
+	}
 	_, _ = fmt.Fprintf(out, "Open this URL in your browser to sign in to %s:\n\n  %s\n\n", provider, resp.AuthURL)
 	if !noBrowser && !paste {
 		if berr := auth.OpenBrowser(resp.AuthURL); berr != nil {

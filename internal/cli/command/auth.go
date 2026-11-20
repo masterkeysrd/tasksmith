@@ -101,9 +101,10 @@ type providerAuthState struct {
 	authURL  string
 	// report is what the screen shows prominently: a copy confirmation, a
 	// rejected paste, or the final result.
-	report  string
-	settled bool
-	failed  bool
+	report      string
+	settled     bool
+	failed      bool
+	browserOnly bool
 }
 
 type providerAuthFlow struct {
@@ -156,6 +157,7 @@ func startProviderAuthFlow(provider string, state *kites.Store[providerAuthState
 			}
 			next.authURL = outcome.authURL
 			next.report = outcome.message
+			next.browserOnly = outcome.browserOnly
 		})
 		flow.watch(ctx)
 	})
@@ -165,11 +167,12 @@ func startProviderAuthFlow(provider string, state *kites.Store[providerAuthState
 type providerAuthOutcome struct {
 	// provider is the daemon's canonical flow name; it can differ from the
 	// requested one when an empty name resolved to the sole OAuth preset.
-	provider string
-	authURL  string
-	message  string
-	settled  bool
-	failed   bool
+	provider    string
+	authURL     string
+	message     string
+	settled     bool
+	failed      bool
+	browserOnly bool
 }
 
 // soleOAuthProvider resolves an unnamed /login to the only OAuth-capable preset
@@ -220,6 +223,9 @@ func providerAuthStart(ctx context.Context, provider string) providerAuthOutcome
 		return providerAuthOutcome{message: "Failed to start sign-in: " + err.Error(), settled: true, failed: true}
 	}
 	if resp.AuthURL == "" {
+		if resp.Status == "authorizing" {
+			return providerAuthOutcome{provider: resp.Provider, browserOnly: true, message: "Continue sign-in in the browser on the daemon host."}
+		}
 		return providerAuthOutcome{provider: resp.Provider, message: "The daemon returned no authorization URL for " + resp.Provider, settled: true, failed: true}
 	}
 	if !authLaunchURL(resp.AuthURL) {
@@ -452,7 +458,7 @@ var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewP
 		if flowRef.Current != nil {
 			flowRef.Current.cancel()
 		}
-		if !state.settled && state.authURL != "" {
+		if !state.settled && (state.authURL != "" || state.browserOnly) {
 			store.AppendCommandOutput("/login", "Left the sign-in screen. The daemon keeps the flow open for five more minutes, so finishing in the browser still signs you in.")
 		}
 		store.RemoveSlot(props.slotID)
@@ -464,12 +470,13 @@ var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewP
 	}
 
 	return mcpAuthPane(mcpAuthPaneProps{
-		server:   provider,
-		title:    title + "…",
-		escLabel: "Close",
-		state:    paneStore,
-		notice:   notice(),
-		onCopy:   func() { setNotice(mcpAuthCopiedNotice) },
+		server:      provider,
+		title:       title + "…",
+		browserOnly: state.browserOnly,
+		escLabel:    "Close",
+		state:       paneStore,
+		notice:      notice(),
+		onCopy:      func() { setNotice(mcpAuthCopiedNotice) },
 		onSubmit: func(callbackURL string) {
 			setNotice("")
 			if flowRef.Current != nil {

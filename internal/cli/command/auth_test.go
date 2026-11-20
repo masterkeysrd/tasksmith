@@ -382,6 +382,29 @@ func TestProviderAuthScreenWaitsForTheURL(t *testing.T) {
 	}
 }
 
+func TestProviderAuthScreenWaitsForChatGPTBrowser(t *testing.T) {
+	newAuthFixture(t, &authFixture{
+		startBody: api.ProviderAuthResponse{Provider: "codex", Status: "authorizing"},
+		statuses:  []api.ProviderAuthResponse{{Provider: "codex", Status: "authorizing"}},
+	})
+	opened := stubAuthBrowser(t)
+	store.ClearSlot()
+
+	env := testutils.NewEnv(t, 100, 30)
+	env.Render(providerAuthView(providerAuthViewProps{
+		slotID:   "slot-chatgpt",
+		provider: "codex",
+		state:    newProviderAuthStore(),
+	}))
+	out, ok := waitForRender(t, env.Environment, "Continue sign-in in the browser on the daemon host.")
+	if !ok || strings.Contains(out, "Submit pasted URL") || strings.Contains(out, "Copy URL") {
+		t.Fatalf("expected local browser instructions:\n%s", out)
+	}
+	if len(*opened) != 0 {
+		t.Fatalf("the terminal started a second browser: %v", *opened)
+	}
+}
+
 func TestProviderAuthScreenSubmitsPastedURL(t *testing.T) {
 	f := &authFixture{
 		startBody:    api.ProviderAuthResponse{Provider: "antigravity", AuthURL: "https://authorize.example/x", Status: "authorizing"},

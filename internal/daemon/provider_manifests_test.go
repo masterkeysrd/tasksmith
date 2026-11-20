@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/masterkeysrd/loom/profile"
+	loomopenai "github.com/masterkeysrd/loom/providers/openai"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/warp"
 )
@@ -119,7 +121,13 @@ func TestUpdateProviderModelsAPI(t *testing.T) {
 }
 
 func TestAddKnownProviderModelWritesCatalogMetadata(t *testing.T) {
-	_, cli, wsDir := setupDaemonTest(t, nil)
+	knownProfile, ok := (&loomopenai.Provider{}).GetProfile("gpt-4o-mini")
+	if !ok {
+		t.Fatal("Loom profile for gpt-4o-mini is missing")
+	}
+	_, cli, wsDir := setupDaemonTest(t, &fakeProvider{
+		profiles: map[string]profile.Profile{knownProfile.ID: knownProfile},
+	})
 	path := seedWorkspaceProvider(t, wsDir, "provapi", daemonTestProviderSpec)
 
 	_, err := cli.UpdateProviderModels(t.Context(), "provapi", api.UpdateProviderModelsRequest{
@@ -292,8 +300,8 @@ func TestProviderCatalogAPI(t *testing.T) {
 	ctx := context.Background()
 	seedWorkspaceProvider(t, wsDir, "catprov", `  type: anthropic
   models:
-    - id: claude-sonnet-4-5
-      name: claude-sonnet-4-5
+    - id: claude-sonnet-5-5
+      name: claude-sonnet-5-5
 `)
 
 	entries, err := cli.ListProviderCatalog(ctx, "catprov")
@@ -315,5 +323,25 @@ func TestProviderCatalogAPI(t *testing.T) {
 
 	if _, err := cli.ListProviderCatalog(ctx, "ghostprovider"); err == nil {
 		t.Fatal("expected 404 for unknown provider catalog")
+	}
+}
+
+func TestProviderCatalogAPIPrefersGatewayCatalog(t *testing.T) {
+	d, cli, wsDir := setupDaemonTest(t, nil)
+	d.cfg.GatewayPool.(*fakeGatewayPool).gw.models = map[string][]profile.Profile{
+		"live-provider":  {{ID: "endpoint-model", Name: "Endpoint Model", Limits: profile.Limits{Context: 256000}}},
+		"empty-provider": {},
+	}
+	for _, name := range []string{"live-provider", "empty-provider"} {
+		seedWorkspaceProvider(t, wsDir, name, daemonTestProviderSpec)
+	}
+
+	entries, err := cli.ListProviderCatalog(t.Context(), "live-provider")
+	if err != nil || len(entries) != 1 || entries[0].ID != "endpoint-model" || entries[0].ContextLimit != 256000 {
+		t.Fatalf("catalog = %+v, %v, want only the configured provider's model", entries, err)
+	}
+	entries, err = cli.ListProviderCatalog(t.Context(), "empty-provider")
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("empty catalog = %+v, %v", entries, err)
 	}
 }

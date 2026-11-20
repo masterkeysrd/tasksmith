@@ -17,6 +17,7 @@ import (
 	loomopenai "github.com/masterkeysrd/loom/providers/openai"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -34,7 +35,7 @@ func TestConfigFingerprint(t *testing.T) {
 			{
 				Name: "anthropic",
 				Type: "anthropic",
-				Auth: &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Api-Key", Token: &CredentialSource{Env: "ANTHROPIC_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeAPIKey, Header: "X-Api-Key", Token: &auth.CredentialSource{Env: "ANTHROPIC_API_KEY"}},
 			},
 		},
 		Env: map[string]string{
@@ -48,7 +49,7 @@ func TestConfigFingerprint(t *testing.T) {
 			{
 				Name: "anthropic",
 				Type: "anthropic",
-				Auth: &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Api-Key", Token: &CredentialSource{Env: "ANTHROPIC_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeAPIKey, Header: "X-Api-Key", Token: &auth.CredentialSource{Env: "ANTHROPIC_API_KEY"}},
 			},
 			{
 				Name: "ollama",
@@ -89,7 +90,7 @@ func TestStrictAuthValidation(t *testing.T) {
 			{
 				Name: "anthropic",
 				Type: "anthropic",
-				Auth: &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Api-Key", Token: &CredentialSource{Env: "ANTHROPIC_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeAPIKey, Header: "X-Api-Key", Token: &auth.CredentialSource{Env: "ANTHROPIC_API_KEY"}},
 			},
 			{
 				Name:     "ollama",
@@ -160,7 +161,7 @@ func TestStrictAuthValidation(t *testing.T) {
 			{
 				Name: "anthropic",
 				Type: "anthropic",
-				Auth: &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Api-Key", Token: &CredentialSource{Env: "ANTHROPIC_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeAPIKey, Header: "X-Api-Key", Token: &auth.CredentialSource{Env: "ANTHROPIC_API_KEY"}},
 			},
 		},
 	})
@@ -180,7 +181,7 @@ func TestStrictAuthValidation(t *testing.T) {
 			{
 				Name: "anthropic",
 				Type: "anthropic",
-				Auth: &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Api-Key", Token: &CredentialSource{Env: "ANTHROPIC_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeAPIKey, Header: "X-Api-Key", Token: &auth.CredentialSource{Env: "ANTHROPIC_API_KEY"}},
 			},
 		},
 	}).Fingerprint()
@@ -597,7 +598,7 @@ func TestOpenAIConfig_ParsingAndOptions(t *testing.T) {
 			{
 				Name: "openai",
 				Type: "openai",
-				Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "OPENAI_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{Env: "OPENAI_API_KEY"}},
 				Config: map[string]any{
 					"store":                 true,
 					"apiMode":               "responses",
@@ -654,7 +655,7 @@ func TestOpenAIConfig_ParsingAndOptions(t *testing.T) {
 			{
 				Name: "openai-snake",
 				Type: "openai",
-				Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "OPENAI_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{Env: "OPENAI_API_KEY"}},
 				Config: map[string]any{
 					"store":                    false,
 					"api_mode":                 "chat_completions",
@@ -727,12 +728,12 @@ func TestGoogleGenAIAndGeminiProviderTypes(t *testing.T) {
 			{
 				Name: "my-google-genai",
 				Type: "google-genai",
-				Auth: &AuthConfig{Type: AuthTypeAPIKey, Header: "x-goog-api-key", Token: &CredentialSource{Env: "GOOGLE_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeAPIKey, Header: "x-goog-api-key", Token: &auth.CredentialSource{Env: "GOOGLE_API_KEY"}},
 			},
 			{
 				Name: "my-gemini",
 				Type: "gemini",
-				Auth: &AuthConfig{Type: AuthTypeAPIKey, Header: "x-goog-api-key", Token: &CredentialSource{Env: "GEMINI_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeAPIKey, Header: "x-goog-api-key", Token: &auth.CredentialSource{Env: "GEMINI_API_KEY"}},
 			},
 		},
 		Env: map[string]string{
@@ -755,7 +756,7 @@ func TestGatewayModelProfile(t *testing.T) {
 			{
 				Name: "test-openai",
 				Type: "openai",
-				Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "OPENAI_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{Env: "OPENAI_API_KEY"}},
 			},
 		},
 		Env: map[string]string{
@@ -782,7 +783,7 @@ func TestGatewayModelProfile(t *testing.T) {
 
 func TestCatalogLLMUsesIsolatedProfiles(t *testing.T) {
 	ctx := context.Background()
-	gw, err := New(ctx, Config{Providers: []ProviderConfig{{Name: "openai", Type: "openai", Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "OPENAI_API_KEY"}}}}, Env: map[string]string{"OPENAI_API_KEY": "fake"}})
+	gw, err := New(ctx, Config{Providers: []ProviderConfig{{Name: "openai", Type: "openai", Auth: &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{Env: "OPENAI_API_KEY"}}}}, Env: map[string]string{"OPENAI_API_KEY": "fake"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -811,7 +812,7 @@ func TestGatewayBaseProfiles(t *testing.T) {
 	ctx := context.Background()
 	cfg := Config{
 		Providers: []ProviderConfig{
-			{Name: "test-openai", Type: "openai", Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "OPENAI_API_KEY"}}},
+			{Name: "test-openai", Type: "openai", Auth: &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{Env: "OPENAI_API_KEY"}}},
 		},
 		Env: map[string]string{"OPENAI_API_KEY": "fake-openai-key"},
 	}
@@ -849,7 +850,7 @@ func TestGatewayModelProfile_MergedOverrides(t *testing.T) {
 			{
 				Name: "test-openai",
 				Type: "openai",
-				Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "OPENAI_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{Env: "OPENAI_API_KEY"}},
 			},
 		},
 		Env: map[string]string{
@@ -1142,12 +1143,12 @@ func TestProviderGracefulDegradation(t *testing.T) {
 			{
 				Name: "genai-missing-key",
 				Type: "genai",
-				Auth: &AuthConfig{Type: AuthTypeAPIKey, Header: "x-goog-api-key", Token: &CredentialSource{Env: "NONEXISTENT_GOOGLE_API_KEY"}},
+				Auth: &auth.Config{Type: auth.TypeAPIKey, Header: "x-goog-api-key", Token: &auth.CredentialSource{Env: "NONEXISTENT_GOOGLE_API_KEY"}},
 			},
 			{
 				Name: "genai-no-env-field",
 				Type: "genai",
-				Auth: &AuthConfig{Type: AuthTypeBearer},
+				Auth: &auth.Config{Type: auth.TypeBearer},
 			},
 		},
 		Env: map[string]string{},
@@ -1218,7 +1219,7 @@ func TestProviderGracefulDegradation(t *testing.T) {
 				{
 					Name: "genai",
 					Type: "genai",
-					Auth: &AuthConfig{Type: AuthTypeAPIKey, Header: "x-goog-api-key", Token: &CredentialSource{Env: "GOOGLE_API_KEY"}},
+					Auth: &auth.Config{Type: auth.TypeAPIKey, Header: "x-goog-api-key", Token: &auth.CredentialSource{Env: "GOOGLE_API_KEY"}},
 				},
 			},
 		}

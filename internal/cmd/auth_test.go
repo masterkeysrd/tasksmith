@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"golang.org/x/oauth2"
 )
 
@@ -57,7 +57,7 @@ func TestAuthStatusAndLogoutCommands(t *testing.T) {
 		RefreshToken: "cli-refresh",
 		Expiry:       time.Now().Add(time.Hour).UTC(),
 	}
-	if err := gateway.SaveProviderToken("antigravity", tok, "dev@example.com"); err != nil {
+	if err := auth.SaveProviderToken("antigravity", tok, "dev@example.com"); err != nil {
 		t.Fatalf("SaveProviderToken: %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestAuthStatusAndLogoutCommands(t *testing.T) {
 	if !strings.Contains(out, "Signed out of antigravity") {
 		t.Fatalf("logout output = %q", out)
 	}
-	if gateway.HasProviderToken("antigravity") {
+	if auth.HasProviderToken("antigravity") {
 		t.Error("credentials survived `auth logout`")
 	}
 
@@ -89,29 +89,27 @@ func TestAuthStatusAndLogoutCommands(t *testing.T) {
 	}
 }
 
-// TestAuthLogoutResolvesSoleOAuthProvider covers the unnamed form: with exactly
-// one OAuth preset, the CLI fills the provider in.
-func TestAuthLogoutResolvesSoleOAuthProvider(t *testing.T) {
+func TestAuthLogoutRequiresNameWithMultiplePresets(t *testing.T) {
 	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
 
 	tok := &oauth2.Token{AccessToken: "a", RefreshToken: "r", Expiry: time.Now().Add(time.Hour).UTC()}
-	if err := gateway.SaveProviderToken("antigravity", tok, "solo@example.com"); err != nil {
+	if err := auth.SaveProviderToken("antigravity", tok, "solo@example.com"); err != nil {
 		t.Fatalf("SaveProviderToken: %v", err)
 	}
 
-	out, _, err := execCLI(t, "", "--socket", sockPath, "-w", wsDir, "auth", "logout")
-	if err != nil {
-		t.Fatalf("auth logout (unnamed): %v (out=%q)", err, out)
+	_, _, err := execCLI(t, "", "--socket", sockPath, "-w", wsDir, "auth", "logout")
+	if err == nil || !strings.Contains(err.Error(), "multiple OAuth providers") ||
+		!strings.Contains(err.Error(), "codex") || !strings.Contains(err.Error(), "antigravity") {
+		t.Fatalf("unnamed auth logout should list both candidates, got %v", err)
 	}
-	if !strings.Contains(out, "Signed out of antigravity") {
-		t.Fatalf("output = %q, want the resolved antigravity logout", out)
+	if !auth.HasProviderToken("antigravity") {
+		t.Fatal("ambiguous logout deleted a provider credential")
 	}
 }
 
 // TestAuthLoginPasteSurfacesDaemonRejections drives `auth login --paste`
-// through the daemon: the CLI prints the authorization URL, resolves an
-// unnamed provider to the sole OAuth preset, and reports the daemon's refusal
-// of a callback whose state does not match the flow. A pasted state never
+// through the daemon: the CLI prints the authorization URL and reports the
+// daemon's refusal of a callback whose state does not match. The pasted state never
 // matches here, so the exchange is rejected before any network call.
 func TestAuthLoginPasteSurfacesDaemonRejections(t *testing.T) {
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +118,7 @@ func TestAuthLoginPasteSurfacesDaemonRejections(t *testing.T) {
 	defer tokenSrv.Close()
 
 	const prov = "cliauth"
-	gateway.RegisterOAuthDriver(prov, cliFakeOAuthDriver{tokenURL: tokenSrv.URL, account: "pasted@example.com"})
+	auth.RegisterOAuthDriver(prov, cliFakeOAuthDriver{tokenURL: tokenSrv.URL, account: "pasted@example.com"})
 
 	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
 
@@ -133,14 +131,13 @@ func TestAuthLoginPasteSurfacesDaemonRejections(t *testing.T) {
 		t.Fatalf("login output = %q, want the printed authorization URL", out)
 	}
 
-	// An unnamed login resolves to the sole OAuth preset, antigravity.
 	out, _, err = execCLI(t, "code=x&state=y\n",
-		"--socket", sockPath, "-w", wsDir, "auth", "login", "--paste", "--no-browser")
+		"--socket", sockPath, "-w", wsDir, "auth", "login", "antigravity", "--paste", "--no-browser")
 	if err == nil || !strings.Contains(err.Error(), "state mismatch") {
-		t.Fatalf("unnamed login = (err=%v), want the resolved flow to reject the paste", err)
+		t.Fatalf("antigravity login = (err=%v), want the flow to reject the paste", err)
 	}
 	if !strings.Contains(out, "sign in to antigravity") {
-		t.Fatalf("output = %q, want the resolved antigravity sign-in", out)
+		t.Fatalf("output = %q, want the antigravity sign-in", out)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
@@ -137,7 +138,7 @@ func (g *gatewayImpl) Quota(ctx context.Context, m models.Model) (*api.ModelQuot
 		Provider: inst.cfg.Name,
 		Buckets:  outBuckets,
 	}
-	if _, account, terr := LoadProviderToken(inst.cfg.Name); terr == nil && account != "" {
+	if _, account, terr := auth.LoadProviderToken(inst.cfg.Name); terr == nil && account != "" {
 		q.Account = account
 	}
 	return q, nil
@@ -190,7 +191,7 @@ func (g *gatewayImpl) QuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotRes
 			Buckets:     make(map[string]api.QuotaBucket, len(snap.Buckets)),
 			Models:      make(map[string][]string, len(snap.Models)),
 		}
-		if _, account, terr := LoadProviderToken(entry.name); terr == nil && account != "" {
+		if _, account, terr := auth.LoadProviderToken(entry.name); terr == nil && account != "" {
 			apiSnap.Account = account
 		}
 		for id, b := range snap.Buckets {
@@ -370,23 +371,18 @@ func (g *gatewayImpl) Embedding(ctx context.Context, m models.Model) (*embedding
 	return model.WithProfile(&p).WithMiddleware(errorEnrichingEmbeddingMiddleware()), nil
 }
 
-func (inst *providerInstance) profileForModel(modelID string) (*profile.Profile, bool) {
-	if pp, ok := inst.llmProv.(profile.Provider); ok && pp != nil {
-		if prof, found := pp.GetProfile(modelID); found {
-			return &prof, true
+func (inst *providerInstance) profileForModel(modelID string) (profile.Profile, bool) {
+	for _, client := range inst.clients() {
+		if pp, ok := client.(profile.Provider); ok {
+			if prof, found := pp.GetProfile(modelID); found {
+				return prof, true
+			}
 		}
 	}
-	if pp, ok := inst.decisionProv.(profile.Provider); ok && pp != nil {
-		if prof, found := pp.GetProfile(modelID); found {
-			return &prof, true
-		}
+	if inst.profileDiscovery != nil {
+		return inst.profileDiscovery.find(modelID)
 	}
-	if pp, ok := inst.embeddingProv.(profile.Provider); ok && pp != nil {
-		if prof, found := pp.GetProfile(modelID); found {
-			return &prof, true
-		}
-	}
-	return nil, false
+	return profile.Profile{}, false
 }
 
 func (g *gatewayImpl) GetProfile(qualifiedID string) (profile.Profile, bool) {
@@ -395,15 +391,10 @@ func (g *gatewayImpl) GetProfile(qualifiedID string) (profile.Profile, bool) {
 		return profile.Profile{}, false
 	}
 	g.mu.RLock()
-	defer g.mu.RUnlock()
-
 	inst, ok := g.providers[id.Provider()]
+	g.mu.RUnlock()
 	if !ok {
 		return profile.Profile{}, false
 	}
-	prof, ok := inst.profileForModel(id.Name())
-	if !ok {
-		return profile.Profile{}, false
-	}
-	return *prof, true
+	return inst.profileForModel(id.Name())
 }

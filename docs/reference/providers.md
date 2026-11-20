@@ -12,12 +12,15 @@ TaskSmith includes built-in drivers and presets for the following providers:
 
 | Provider | Type Identifier(s) | Supported Roles | Best Used For | Guide |
 | :--- | :--- | :--- | :--- | :--- |
-| **OpenAI** | `openai` | `completion`, `decision`, `embedding` | Frontier reasoning (`gpt-6.1-sol`, `gpt-6-astra`), Responses API tools, embeddings | [OpenAI Guide](./providers/openai.md) |
+| **OpenAI** | `openai` | `completion`, `decision`, `embedding` | Frontier reasoning (`gpt-6.2-sol`, `gpt-6.2-astra`), Responses API tools, embeddings | [OpenAI Guide](./providers/openai.md) |
+| **Codex** | `codex` | `completion`, `decision` (fallback) | Direct inference using an eligible ChatGPT plan, with a live catalog in **Manage models** | [Codex Guide](./providers/codex.md) |
 | **Anthropic** | `anthropic` | `completion`, `decision` (fallback) | Extended thinking, deep reasoning (`claude-sonnet-5-5`, `claude-opus-5-5`), prompt caching | [Anthropic Guide](./providers/anthropic.md) |
 | **Ollama** | `ollama` | `completion`, `decision`, `embedding` | 100% offline local inference (`qwen3.8`, `nimble-v3`, `nomic-embed-text`), zero data egress | [Ollama Guide](./providers/ollama.md) |
-| **Google GenAI** | `google-genai`, `genai`, `gemini` | `completion`, `embedding` | Massive 1M+ context window (`gemini-4-hydrogen`, `gemini-4-carbon`), multimodal inputs | [Google GenAI Guide](./providers/google-genai.md) |
+| **Google GenAI** | `google-genai`, `genai`, `gemini` | `completion`, `embedding` | Multimodal inputs and 1M+ token context, with `gemini-4-neon` as the preset default | [Google GenAI Guide](./providers/google-genai.md) |
 | **TypeSafe** | `typesafe` | `decision` | Ultra-fast native System 1 decisions (`jev-latest`), sub-50ms deterministic classifications | [TypeSafe Guide](./providers/typesafe.md) |
 | **Antigravity** | `antigravity` | `completion` | Enterprise model gateway with managed thinking effort tiers (`gemini-4-hydrogen`, `gemini-3.8-flash`) | [Antigravity Guide](./providers/antigravity.md) |
+
+**Manage models** browses the configured provider's live models when its driver supports discovery. It can also show the provider's known profiles or the bundled preset. See [Provider Model Catalog](./cli.md#provider-model-catalog).
 
 ---
 
@@ -32,7 +35,7 @@ metadata:
   # Provider identifier used in model references (e.g. "openai/gpt-5.5")
   name: openai
 spec:
-  # Driver type: openai | anthropic | ollama | google-genai (genai, gemini) | typesafe | antigravity
+  # Driver type: openai | codex | anthropic | ollama | google-genai (genai, gemini) | typesafe | antigravity
   type: openai
 
   # Enable or disable this provider (default: true when omitted). A disabled
@@ -127,7 +130,7 @@ Requests requiring tools, tool history, media, or a response schema fail when th
 
 Secret fields (`auth.token`, `auth.password`) use declarative WARP expressions (`${env:<VAR>}` or `${file:<PATH>}`). `${file:...}` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value, new file contents, or signing in or switching accounts on an `oauth2` provider — changes the gateway fingerprint and rebuilds provider connections.
 
-`oauth2` providers sign in through the daemon: `/login [provider]` in the REPL or `tasksmith auth login [provider]` from a shell (with `--paste` when the browser cannot reach the daemon's loopback callback), checked with `tasksmith auth status` and cleared with `tasksmith auth logout [provider]`. Tokens persist at `~/.local/share/tasksmith/credentials/<provider>.json`. See [CLI Reference — Provider Sign-In](./cli.md#provider-sign-in-login).
+Use `/login <provider>` in the REPL or `tasksmith auth login <provider>` from a shell. Check sign-in with `tasksmith auth status` and clear credentials with `tasksmith auth logout <provider>`. Antigravity supports `--paste` for remote callbacks. Codex completes sign-in in a browser on the daemon host. See [CLI Reference — Provider Sign-In](./cli.md#provider-sign-in-login).
 
 ### Thinking Capability Fields
 

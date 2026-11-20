@@ -32,7 +32,7 @@ git diff | tasksmith -p "review this diff"
 | **`daemon stop`** | `tasksmith daemon stop` | Gracefully terminates a running Brain daemon via SIGTERM / shutdown API. |
 | **`daemon status`** | `tasksmith daemon status` | Checks daemon process health, build version, IPC socket connectivity, and active workspace runtimes. |
 | **`version`** | `tasksmith version` | Prints the client build version and, when reachable without spawning, the running daemon's version. |
-| **`auth login`** | `tasksmith auth login [provider] [--no-browser] [--paste]` | Signs in to an OAuth provider through the daemon's PKCE flow. Prints the authorization URL (and opens a browser unless `--no-browser` or `--paste`), then waits for the sign-in to settle. With no `[provider]`, resolves automatically when exactly one OAuth provider exists. `--paste` finishes by pasting the redirect URL on hosts where the browser cannot reach the daemon (SSH, headless). |
+| **`auth login`** | `tasksmith auth login [provider] [--no-browser] [--paste]` | Starts the provider's browser sign-in and waits for it to settle. Antigravity prints the URL and supports `--no-browser` and `--paste`. Codex opens a browser on the daemon host. Name the provider when multiple OAuth presets are available. |
 | **`auth status`** | `tasksmith auth status [provider]` | With a provider name, prints `<provider>: <status> (<account>)`; with none, prints a `PROVIDER / AUTH / STATUS` table over all configured providers. |
 | **`auth logout`** | `tasksmith auth logout [provider]` | Removes the daemon-stored OAuth credentials for one provider and reports `Signed out of <provider>` or `<provider> was not signed in`. |
 
@@ -398,7 +398,7 @@ New entries inherit available limits, capabilities, supported reasoning settings
 
 #### Provider Model Catalog
 
-`c` opens `Catalog · <name>` over the provider type's model catalog — loom's built-in profile metadata (`models.dev` context windows, pricing, capabilities) for Anthropic/OpenAI/Google GenAI types, ollama's live endpoint when reachable, otherwise the built-in preset's model list. The pane is filter-first: every plain printable keystroke types into the filter (so queries like `sonnet` work even though letters like `s` are actions in other panes), entries already declared in the manifest show `✔ … declared`, and `Ctrl+S` adds the checked entries to `spec.models` in one write.
+`c` opens `Catalog · <name>`. The gateway queries the configured provider's live catalog when its Loom driver supports discovery. A driver with a profile catalog alone supplies its known profiles. When the gateway has no catalog, the picker uses the bundled preset. The pane is filter-first: every plain printable keystroke types into the filter (so queries like `sonnet` work even though letters like `s` are actions in other panes), entries already declared in the manifest show `✔ … declared`, and `Ctrl+S` adds the checked entries to `spec.models` in one write.
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
@@ -440,7 +440,7 @@ Saving sends the exact set the model should own: each reassigned alias is stripp
 
 ### Provider Sign-In (`/login`)
 
-`/login [provider]` (aliases `/auth`, `/signin`) signs the session's daemon in to an OAuth model provider such as Antigravity. It starts the daemon's PKCE flow, opens the browser, and shows a `Signing in to <provider>` screen with the authorization URL, a paste field, and the same keybindings as [MCP Authorization](#mcp-authentication):
+`/login [provider]` (aliases `/auth`, `/signin`) starts the daemon's browser sign-in. For Codex, finish in the browser on the daemon host. The Codex sign-in screen offers `Esc` to dismiss it while the flow continues. For Antigravity the screen also shows the authorization URL and a paste field.
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
@@ -448,7 +448,7 @@ Saving sends the exact set the model should own: each reassigned alias is stripp
 | `Enter` | Provider Sign-In | Submits whatever the paste field holds (full address-bar URL, bare query string, or authorization code alone) to the waiting flow. |
 | `Esc` | Provider Sign-In | Leaves the sign-in screen; the daemon keeps the flow open for five more minutes, so finishing in the browser still signs in. |
 
-With no `[provider]` argument, the command resolves automatically when exactly one OAuth-capable provider is configured, and otherwise lists the candidates and asks for a name. Completion lists OAuth-capable providers. When the flow settles, the screen closes and the outcome lands in the conversation timeline (`Signed in to <provider> as <account>`, or an error naming the reason). Credentials persist at `~/.local/share/tasksmith/credentials/<provider>.json`; see the `auth` subcommands under [Subcommands](#subcommands) for signing in, checking status, or signing out from a shell.
+With no `[provider]` argument, the command resolves automatically when exactly one OAuth preset is available. Use `/login antigravity` or `/login codex` with the built-in presets. When the flow settles, the screen closes and posts the outcome to the conversation timeline. See [Subcommands](#subcommands) for signing in, checking status, or signing out from a shell.
 
 ---
 
@@ -685,7 +685,7 @@ TaskSmith adheres to the XDG Base Directory Specification for state persistence,
 | **Global Providers** | `~/.config/tasksmith/providers/*.yaml` | User-tier model provider manifests available across all workspaces. | Permanent |
 | **Global Agents** | `~/.config/tasksmith/agents/*.agent.md` | User-tier custom agent personas and instructions. | Permanent |
 | **Global Rules** | `~/.config/tasksmith/permissions.json` | Persistent machine-wide permission allow and deny rules. | Permanent |
-| **Provider Credentials** | `~/.local/share/tasksmith/credentials/*.json` | OAuth 2.0 PKCE tokens (e.g. `antigravity.json`) with restricted permissions (`0600`). | Permanent |
+| **Provider Credentials** | `$XDG_DATA_HOME/tasksmith/credentials/` | OAuth 2.0 PKCE credentials with restricted permissions (`0600`). | Permanent |
 | **Trust Store** | `~/.local/share/tasksmith/trust.json` | Machine-wide trusted directories registry, trust scopes (`folder` / `parent`), and executable fingerprints (`$XDG_DATA_HOME`). | Permanent |
 | **Workspace Metadata** | `~/.local/share/tasksmith/workspaces/<hash>/workspace.json` | Workspace schema version and binary version for automated upgrade migrations. | Permanent |
 | **Workspace DB** | `~/.local/share/tasksmith/workspaces/<hash>/tasksmith.db` | SQLite database storing turn journals, messages, and session state (`$XDG_DATA_HOME`). | Permanent |
@@ -822,10 +822,10 @@ These endpoints drive the daemon-managed OAuth PKCE sign-in flow behind `tasksmi
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/v1/providers` | Lists available and configured providers as `ProviderSummary` (`name`, `display_name`, `status`, `has_key`, `auth_type`, `auth_env`, `account`, `default_model`, `models`, `scope`). |
-| `POST` | `/v1/providers/{name}/auth` | Starts or resumes an OAuth flow for one provider and returns `ProviderAuthResponse` (`provider`, `auth_url`, `status`, `account`, `error`). |
+| `GET` | `/v1/providers` | Lists provider presets as `ProviderSummary` with `name`, `display_name`, `status`, `has_key`, `auth_type`, `auth_env`, `account`, `default_model`, `models`, and `scope`. The optional `browser_auth_label` is the sign-in label for providers that open the browser on the daemon host. |
+| `POST` | `/v1/providers/{name}/auth` | Starts an OAuth flow and returns `ProviderAuthResponse`. The optional `auth_url` is omitted when the daemon opens the browser, as it does for Codex. |
 | `GET` | `/v1/providers/{name}/auth` | Returns the current `ProviderAuthResponse` for one provider; `status` is `idle`, `authorizing`, `authenticated`, `error`, or `signed-out`. |
-| `POST` | `/v1/providers/{name}/auth/callback` | Completes the sign-in in progress with a redirect URL the user copied from their browser. Body: `callbackUrl` — the full address-bar URL, a bare query string, or an authorization code alone. Returns the settled `ProviderAuthResponse`; `400` `bad_request` when the paste is malformed or no flow is open. |
+| `POST` | `/v1/providers/{name}/auth/callback` | Completes a flow that accepts pasted redirects. The body field `callbackUrl` accepts the full URL, a bare query string, or an authorization code. Returns the settled `ProviderAuthResponse`. Returns `400` `bad_request` when the paste is malformed, the flow is absent, or the provider requires a browser callback. |
 | `DELETE` | `/v1/providers/{name}/auth` | Removes stored OAuth credentials for one provider and cancels any in-flight flow. Returns `ProviderAuthResponse` with `status` `signed-out` when credentials were removed or `idle` when the provider was not signed in. |
 
 ## Tools HTTP Endpoints

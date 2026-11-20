@@ -1,0 +1,39 @@
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: codex
+spec:
+  type: codex
+  defaultModels:
+    completion: gpt-6.2-sol
+  auth:
+    type: oauth2
+  models:
+    - id: gpt-6.2-sol
+      name: gpt-6.2-sol
+      label: GPT-6.2 Sol
+      aliases: [balanced, codex-sol]
+      limits:
+        context: 1050000
+        output: 128000
+    - id: gpt-6.2-astra
+      name: gpt-6.2-astra
+      label: GPT-6.2 Astra
+      aliases: [smart, flagship, codex-astra]
+      limits:
+        context: 1050000
+        output: 128000
+    - id: gpt-6.1-terra
+      name: gpt-6.1-terra
+      label: GPT-6.1 Terra
+      aliases: [codex-terra]
+      limits:
+        context: 1050000
+        output: 128000
+    - id: gpt-6-luna
+      name: gpt-6-luna
+      label: GPT-6 Luna
+      aliases: [fast, codex-luna]
+      limits:
+        context: 1050000
+        output: 128000

@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/warp"
 )
@@ -336,7 +337,7 @@ func TestToGatewayProviderOAuth2DoesNotInjectAntigravityToken(t *testing.T) {
 		},
 	}
 	gotOAuth := toGatewayProvider(oauthProv)
-	if gotOAuth.Auth == nil || gotOAuth.Auth.Type != gateway.AuthTypeOAuth2 || gotOAuth.Auth.Token != nil {
+	if gotOAuth.Auth == nil || gotOAuth.Auth.Type != auth.TypeOAuth2 || gotOAuth.Auth.Token != nil {
 		t.Fatalf("expected oauth2 auth with nil Token, got %+v", gotOAuth.Auth)
 	}
 
@@ -347,7 +348,7 @@ func TestToGatewayProviderOAuth2DoesNotInjectAntigravityToken(t *testing.T) {
 		},
 	}
 	gotBearer := toGatewayProvider(bearerProv)
-	if gotBearer.Auth == nil || gotBearer.Auth.Type != gateway.AuthTypeBearer || gotBearer.Auth.Token == nil || gotBearer.Auth.Token.Env != "ANTIGRAVITY_TOKEN" {
+	if gotBearer.Auth == nil || gotBearer.Auth.Type != auth.TypeBearer || gotBearer.Auth.Token == nil || gotBearer.Auth.Token.Env != "ANTIGRAVITY_TOKEN" {
 		t.Fatalf("expected bearer auth with Token.Env=ANTIGRAVITY_TOKEN, got %+v", gotBearer.Auth)
 	}
 }

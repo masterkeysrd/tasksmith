@@ -11,7 +11,6 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/masterkeysrd/loom/auth"
 	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
@@ -24,9 +23,10 @@ import (
 	"github.com/ollama/ollama/api"
 	"github.com/openai/openai-go/v3"
 	openaiopt "github.com/openai/openai-go/v3/option"
-	"golang.org/x/oauth2"
 	"google.golang.org/genai"
 
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/providers"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 )
@@ -36,15 +36,34 @@ type providerInstance struct {
 	llmProv             llm.Provider
 	decisionProv        decision.Provider
 	embeddingProv       embedding.Provider
+	profileDiscovery    *profileDiscovery
 	authErr             error
 	warning             string
 	openaiResponsesOpts *loomopenai.ResponsesOptions
+}
+
+func (inst *providerInstance) clients() [3]any {
+	return [3]any{inst.llmProv, inst.decisionProv, inst.embeddingProv}
 }
 
 func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string) (*providerInstance, error) {
 	inst := &providerInstance{cfg: cfg}
 
 	switch cfg.Type {
+	case providers.CodexName:
+		overrides := cfg.Endpoint != "" || len(cfg.Headers) != 0 || len(cfg.Config) != 0
+		client, err := providers.NewCodex(cfg.Name, cfg.Auth, overrides)
+		if errors.Is(err, ErrInvalidConfig) {
+			return nil, err
+		}
+		if err != nil {
+			inst.authErr = err
+			inst.warning = err.Error()
+			return inst, nil
+		}
+		inst.llmProv = client
+		inst.profileDiscovery = &profileDiscovery{lister: client}
+		return inst, nil
 	case "ollama":
 		endpoint := cfg.Endpoint
 		if endpoint == "" {
@@ -69,7 +88,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		return nil, fmt.Errorf("%w: unknown provider type %q", ErrInvalidConfig, cfg.Type)
 	}
 
-	token, err := resolveCredential(cfg.Auth, env)
+	token, err := auth.ResolveCredential(cfg.Auth, env)
 	if err != nil {
 		if errors.Is(err, ErrMissingCredential) {
 			if cfg.Auth != nil && cfg.Auth.Token != nil && cfg.Auth.Token.Env != "" {
@@ -84,7 +103,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		return nil, fmt.Errorf("provider %q auth error: %w", cfg.Name, err)
 	}
 
-	transport := buildHTTPTransport(nil, cfg.Auth, token, cfg.Headers, cfg.Type)
+	transport := auth.BuildHTTPTransport(nil, cfg.Auth, token, cfg.Headers, cfg.Type)
 	httpClient := &http.Client{Transport: transport}
 
 	switch cfg.Type {
@@ -125,8 +144,8 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		// Anthropic's SDK blocks any request that carries no credential of its own,
 		// so a placeholder stands in when the upstream needs none (auth.type "none").
 		anthropicKey := token
-		if anthropicKey == "" && cfg.Auth.scheme() == AuthTypeNone {
-			anthropicKey = placeholderSDKCredential
+		if anthropicKey == "" && cfg.Auth.Scheme() == auth.TypeNone {
+			anthropicKey = auth.PlaceholderSDKCredential
 		}
 		if anthropicKey != "" {
 			opts = append(opts, anthropicopt.WithAPIKey(anthropicKey))
@@ -164,8 +183,8 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		// The SDK requires a non-empty key for the Gemini backend even when an
 		// authenticating proxy fronts the endpoint. Declaring auth.type "none"
 		// substitutes a placeholder that the transport strips before the wire.
-		if clientCfg.APIKey == "" && cfg.Auth.scheme() == AuthTypeNone {
-			clientCfg.APIKey = placeholderSDKCredential
+		if clientCfg.APIKey == "" && cfg.Auth.Scheme() == auth.TypeNone {
+			clientCfg.APIKey = auth.PlaceholderSDKCredential
 		}
 		if clientCfg.APIKey == "" {
 			inst.authErr = fmt.Errorf("%w: provider %q requires an API key", ErrMissingCredential, cfg.Name)
@@ -186,28 +205,17 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		inst.embeddingProv = genaiProv
 
 	case "antigravity":
-		var ts oauth2.TokenSource
-		if strings.TrimSpace(token) != "" {
-			ts = auth.StaticTokenSource(token)
-		} else {
-			driver, ok := GetOAuthDriver(cfg.Type)
-			if !ok {
-				return nil, fmt.Errorf("gateway: no oauth driver registered for %q", cfg.Type)
+		ts, hasCredentials, err := auth.ProviderTokenSource(ctx, cfg.Name, cfg.Type, token)
+		if err != nil {
+			return nil, err
+		}
+		if !hasCredentials {
+			if cfg.Auth != nil && cfg.Auth.Token != nil && cfg.Auth.Token.Env != "" {
+				inst.authErr = fmt.Errorf("%w: provider %q requires OAuth login (or %s)", ErrMissingCredential, cfg.Name, cfg.Auth.Token.Env)
+			} else {
+				inst.authErr = fmt.Errorf("%w: provider %q requires OAuth login", ErrMissingCredential, cfg.Name)
 			}
-			var err error
-			ts, err = NewProviderTokenSource(ctx, cfg.Name, driver)
-			if err != nil {
-				return nil, fmt.Errorf("gateway: token source error: %w", err)
-			}
-
-			if !HasProviderToken(cfg.Name) {
-				if cfg.Auth != nil && cfg.Auth.Token != nil && cfg.Auth.Token.Env != "" {
-					inst.authErr = fmt.Errorf("%w: provider %q requires OAuth login (or %s)", ErrMissingCredential, cfg.Name, cfg.Auth.Token.Env)
-				} else {
-					inst.authErr = fmt.Errorf("%w: provider %q requires OAuth login", ErrMissingCredential, cfg.Name)
-				}
-				inst.warning = fmt.Sprintf("provider %q: authentication required (run /setup to log in)", cfg.Name)
-			}
+			inst.warning = fmt.Sprintf("provider %q: authentication required (run /setup to log in)", cfg.Name)
 		}
 
 		agCfg, err := parseAntigravityConfig(cfg.Name, cfg.Config, cfg.Headers)

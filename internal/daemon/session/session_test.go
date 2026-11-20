@@ -432,6 +432,10 @@ func (g *fakeGateway) ListProviders() []gateway.ProviderInfo {
 	return nil
 }
 
+func (g *fakeGateway) ListModels(context.Context, string) ([]profile.Profile, bool, error) {
+	return nil, false, nil
+}
+
 func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
 	id := models.ID(qualifiedID)
 	if g.provider != nil {

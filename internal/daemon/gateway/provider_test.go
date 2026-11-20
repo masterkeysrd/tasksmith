@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	loomantigravity "github.com/masterkeysrd/loom/providers/antigravity"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -59,7 +60,7 @@ func TestProviderAuthHeadersEndToEnd(t *testing.T) {
 	tests := []struct {
 		name         string
 		providerType string
-		auth         *AuthConfig
+		auth         *auth.Config
 		envKey       string
 		want         string
 		deny         []string
@@ -67,49 +68,49 @@ func TestProviderAuthHeadersEndToEnd(t *testing.T) {
 		{
 			name:         "openai bearer sends bearer",
 			providerType: "openai",
-			auth:         &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "E2E_KEY"}},
+			auth:         &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "Authorization=Bearer sk-e2e;",
 		},
 		{
 			name:         "openai basic replaces the bearer default",
 			providerType: "openai",
-			auth:         &AuthConfig{Type: AuthTypeBasic, Token: &CredentialSource{Env: "E2E_KEY"}},
+			auth:         &auth.Config{Type: auth.TypeBasic, Token: &auth.CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "Authorization=Basic " + base64.StdEncoding.EncodeToString([]byte("sk-e2e")) + ";",
 		},
 		{
 			name:         "openai api-key sends the raw token",
 			providerType: "openai",
-			auth:         &AuthConfig{Type: AuthTypeAPIKey, Token: &CredentialSource{Env: "E2E_KEY"}},
+			auth:         &auth.Config{Type: auth.TypeAPIKey, Token: &auth.CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "Authorization=sk-e2e;",
 		},
 		{
 			name:         "openai custom header drops the SDK bearer",
 			providerType: "openai",
-			auth:         &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Auth", Token: &CredentialSource{Env: "E2E_KEY"}},
+			auth:         &auth.Config{Type: auth.TypeAPIKey, Header: "X-Auth", Token: &auth.CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "X-Auth=sk-e2e;",
 		},
 		{
 			name:         "anthropic api-key X-Api-Key sends only vendor key header",
 			providerType: "anthropic",
-			auth:         &AuthConfig{Type: AuthTypeAPIKey, Header: "X-Api-Key", Token: &CredentialSource{Env: "E2E_KEY"}},
+			auth:         &auth.Config{Type: auth.TypeAPIKey, Header: "X-Api-Key", Token: &auth.CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "X-Api-Key=sk-e2e;",
 		},
 		{
 			name:         "anthropic bearer drops the vendor key header",
 			providerType: "anthropic",
-			auth:         &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{Env: "E2E_KEY"}},
+			auth:         &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "Authorization=Bearer sk-e2e;",
 		},
 		{
 			name:         "anthropic custom header drops the vendor key",
 			providerType: "anthropic",
-			auth:         &AuthConfig{Type: AuthTypeBasic, Header: "X-Auth", Token: &CredentialSource{Env: "E2E_KEY"}},
+			auth:         &auth.Config{Type: auth.TypeBasic, Header: "X-Auth", Token: &auth.CredentialSource{Env: "E2E_KEY"}},
 			envKey:       "E2E_KEY",
 			want:         "X-Auth=Basic " + base64.StdEncoding.EncodeToString([]byte("sk-e2e")) + ";",
 		},
@@ -170,7 +171,7 @@ func TestProviderAuthNoneSendsNoCredential(t *testing.T) {
 				Name:     "local",
 				Type:     "openai",
 				Endpoint: srv.URL,
-				Auth:     &AuthConfig{Type: AuthTypeNone},
+				Auth:     &auth.Config{Type: auth.TypeNone},
 			}},
 		})
 		if err != nil {
@@ -213,7 +214,7 @@ func TestProviderAuthNoneSendsNoCredential(t *testing.T) {
 				Name:     "proxy",
 				Type:     "gemini",
 				Endpoint: srv.URL + "/v1beta",
-				Auth:     &AuthConfig{Type: AuthTypeNone},
+				Auth:     &auth.Config{Type: auth.TypeNone},
 			}},
 		})
 		if err != nil {
@@ -247,7 +248,7 @@ func TestProviderMissingCredentialWarningNamesFile(t *testing.T) {
 		Providers: []ProviderConfig{{
 			Name: "internal",
 			Type: "openai",
-			Auth: &AuthConfig{Type: AuthTypeBearer, Token: &CredentialSource{File: "~/absent/token"}},
+			Auth: &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{File: "~/absent/token"}},
 		}},
 	}
 
@@ -322,7 +323,7 @@ func TestAntigravityProviderConfigEndToEnd(t *testing.T) {
 			Name:     "antigravity",
 			Type:     "antigravity",
 			Endpoint: srv.URL,
-			Auth:     &AuthConfig{Type: AuthTypeOAuth2, Token: &CredentialSource{Env: "AG_TEST_TOKEN"}},
+			Auth:     &auth.Config{Type: auth.TypeOAuth2, Token: &auth.CredentialSource{Env: "AG_TEST_TOKEN"}},
 			Headers:  map[string]string{"User-Agent": "antigravity/cli/9.9.9 (test)"},
 			Config: map[string]any{
 				"companionProject": "companion-proj-123",
@@ -435,7 +436,7 @@ func TestAntigravitySessionAffinityMiddleware(t *testing.T) {
 			Name:     "antigravity",
 			Type:     "antigravity",
 			Endpoint: srv.URL,
-			Auth:     &AuthConfig{Type: AuthTypeOAuth2, Token: &CredentialSource{Env: "AG_TEST_TOKEN"}},
+			Auth:     &auth.Config{Type: auth.TypeOAuth2, Token: &auth.CredentialSource{Env: "AG_TEST_TOKEN"}},
 			Config:   map[string]any{"companionProject": "companion-proj-123"},
 		}},
 	})
@@ -562,15 +563,15 @@ func TestAntigravityOAuthRefreshOutlivesInitContext(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origDriver, _ := GetOAuthDriver("antigravity")
-	RegisterOAuthDriver("antigravity", testOAuthDriver{tokenURL: srv.URL + "/token"})
+	origDriver, _ := auth.GetOAuthDriver("antigravity")
+	auth.RegisterOAuthDriver("antigravity", testOAuthDriver{tokenURL: srv.URL + "/token"})
 	t.Cleanup(func() {
-		RegisterOAuthDriver("antigravity", origDriver)
+		auth.RegisterOAuthDriver("antigravity", origDriver)
 	})
 
 	// Persist an already-expired access token on disk so the first turn after
 	// gateway initialization must refresh against /token.
-	if err := SaveProviderToken("antigravity", &oauth2.Token{
+	if err := auth.SaveProviderToken("antigravity", &oauth2.Token{
 		AccessToken:  "expired-access-token",
 		RefreshToken: "refresh-token-123",
 		TokenType:    "Bearer",
@@ -587,7 +588,7 @@ func TestAntigravityOAuthRefreshOutlivesInitContext(t *testing.T) {
 			Name:     "antigravity",
 			Type:     "antigravity",
 			Endpoint: srv.URL,
-			Auth:     &AuthConfig{Type: AuthTypeOAuth2},
+			Auth:     &auth.Config{Type: auth.TypeOAuth2},
 			Config:   map[string]any{"companionProject": "companion-proj-123"},
 		}},
 	})
@@ -615,5 +616,96 @@ func TestAntigravityOAuthRefreshOutlivesInitContext(t *testing.T) {
 	}
 	if gotAuthHdr != "Bearer refreshed-access-token" {
 		t.Errorf("Authorization = %q, want %q", gotAuthHdr, "Bearer refreshed-access-token")
+	}
+}
+
+func TestSplitGenAIEndpoint(t *testing.T) {
+	tests := []struct {
+		endpoint   string
+		wantBase   string
+		wantAPIVer string
+	}{
+		{endpoint: "", wantBase: "", wantAPIVer: ""},
+		{endpoint: "   ", wantBase: "", wantAPIVer: ""},
+		{endpoint: "https://generativelanguage.googleapis.com/v1beta", wantBase: "https://generativelanguage.googleapis.com", wantAPIVer: "v1beta"},
+		{endpoint: "https://generativelanguage.googleapis.com/v1beta/", wantBase: "https://generativelanguage.googleapis.com", wantAPIVer: "v1beta"},
+		{endpoint: "https://proxy.example.com/v1", wantBase: "https://proxy.example.com", wantAPIVer: "v1"},
+		{endpoint: "https://proxy.example.com/v1alpha", wantBase: "https://proxy.example.com", wantAPIVer: "v1alpha"},
+		{endpoint: "https://proxy.example.com", wantBase: "https://proxy.example.com", wantAPIVer: ""},
+		{endpoint: "https://proxy.example.com/relay", wantBase: "https://proxy.example.com/relay", wantAPIVer: ""},
+		// "rev1" ends in "v1" but is not a version segment.
+		{endpoint: "https://proxy.example.com/rev1", wantBase: "https://proxy.example.com/rev1", wantAPIVer: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.endpoint, func(t *testing.T) {
+			base, apiVersion := splitGenAIEndpoint(tc.endpoint)
+			if base != tc.wantBase || apiVersion != tc.wantAPIVer {
+				t.Fatalf("splitGenAIEndpoint(%q) = (%q, %q), want (%q, %q)",
+					tc.endpoint, base, apiVersion, tc.wantBase, tc.wantAPIVer)
+			}
+		})
+	}
+}
+
+func TestInitProviderGenAIUsesCustomEndpoint(t *testing.T) {
+	ctx := context.Background()
+
+	var observedPath, authHeader, apiKeyHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observedPath = r.URL.Path
+		authHeader = r.Header.Get("X-Auth")
+		apiKeyHeader = r.Header.Get("x-goog-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"embeddings":[]}`))
+	}))
+	defer srv.Close()
+
+	gw, err := New(ctx, Config{
+		Providers: []ProviderConfig{
+			{
+				Name:     "proxy",
+				Type:     "google-genai",
+				Endpoint: srv.URL + "/v1beta",
+				Auth:     &auth.Config{Type: auth.TypeAPIKey, Header: "X-Auth", Token: &auth.CredentialSource{Env: "GW_PROXY_KEY"}},
+			},
+		},
+		Env: map[string]string{"GW_PROXY_KEY": "proxy-key"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = gw.Close() }()
+
+	inst := gw.(*gatewayImpl).providers["proxy"]
+	if inst == nil {
+		t.Fatal("proxy provider was not initialized")
+	}
+	if inst.authErr != nil {
+		t.Fatalf("unexpected auth error: %v", inst.authErr)
+	}
+	if inst.embeddingProv == nil {
+		t.Fatal("expected genai embedding provider to be constructed against the custom endpoint")
+	}
+
+	if _, err := inst.embeddingProv.Embed(ctx, &embedding.Request{
+		Model:  "text-embedding-004",
+		Inputs: []embedding.Input{{Text: "hello"}},
+	}); err != nil {
+		t.Fatalf("Embed against test endpoint: %v", err)
+	}
+
+	// The endpoint's version segment must be used once, not doubled.
+	if !strings.HasPrefix(observedPath, "/v1beta/models/") {
+		t.Fatalf("request path = %q, want it under /v1beta/models/", observedPath)
+	}
+	if strings.Contains(observedPath, "/v1beta/v1beta") {
+		t.Fatalf("request path = %q, API version was appended twice", observedPath)
+	}
+	if authHeader != "proxy-key" {
+		t.Fatalf("X-Auth = %q, want %q", authHeader, "proxy-key")
+	}
+	if apiKeyHeader != "" {
+		t.Fatalf("x-goog-api-key = %q, want it stripped when a custom auth header is configured", apiKeyHeader)
 	}
 }

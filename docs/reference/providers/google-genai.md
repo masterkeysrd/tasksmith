@@ -7,10 +7,17 @@ The **Google GenAI** provider connects TaskSmith to Google's Gemini family of mo
 ## 1. Overview & Capabilities
 
 Google GenAI models offer 1M+ token context windows, native multimodal inputs, and high-speed vector embeddings:
-- **Completion (`completion` — System 2)**: Massive context ingestion, conversational reasoning, and tool execution using `gemini-4-hydrogen`, `gemini-4-carbon`, `gemini-4-argon`, and `gemini-3.8-flash`.
+- **Completion (`completion` — System 2)**: Conversational reasoning and tool execution with Gemini models. The preset includes `gemini-4-neon` with its Loom model profile.
 - **Decision (`decision` — System 1)**: Evaluates structured decision prompts via TaskSmith's completion fallback adapter.
 - **Embedding (`embedding` — System 3)**: Fast semantic vector generation using `text-embedding-004` (768 dimensions).
 - **Type Aliases**: TaskSmith accepts `type: google-genai`, `type: genai`, and `type: gemini` as equivalent aliases in manifests.
+
+| Preset alias | Model | Output limit |
+| :--- | :--- | ---: |
+| `@default`, `@balanced` | `gemini-4-neon` | 65,536 |
+| `@fast` | `gemini-4-hydrogen` | 65,536 |
+| `@smart` | `gemini-4-argon` | 32,768 |
+| `@flagship` | `gemini-4-carbon` | 32,768 |
 
 ---
 
@@ -37,17 +44,36 @@ spec:
   type: google-genai
   endpoint: https://generativelanguage.googleapis.com/v1beta
   defaultModels:
-    completion: gemini-4-hydrogen
+    completion: gemini-4-neon
     embedding: text-embedding-004
   auth:
     type: api-key
     header: x-goog-api-key
     token: "${env:GOOGLE_API_KEY}"
   models:
+    - id: gemini-4-neon
+      name: gemini-4-neon
+      label: Gemini 4 Neon
+      aliases: [balanced, neon]
+      limits:
+        context: 1048576
+        output: 65536
+      capabilities:
+        completion: true
+        tools: true
+        attachment: true
+        thinking:
+          - type: effort
+            default: high
+            isDefault: true
+            allowedEfforts: [low, medium, high, xhigh]
+        modalities:
+          input: [text, image, audio, video, pdf]
+          output: [text]
     - id: gemini-4-hydrogen
       name: gemini-4-hydrogen
       label: Gemini 4 Hydrogen
-      aliases: [balanced, fast]
+      aliases: [fast]
       limits:
         context: 1048576
         output: 65536
@@ -69,7 +95,7 @@ spec:
       aliases: [flagship]
       limits:
         context: 1048576
-        output: 65536
+        output: 32768
       capabilities:
         completion: true
         tools: true
@@ -88,7 +114,7 @@ spec:
       aliases: [smart]
       limits:
         context: 1048576
-        output: 65536
+        output: 32768
       capabilities:
         completion: true
         tools: true

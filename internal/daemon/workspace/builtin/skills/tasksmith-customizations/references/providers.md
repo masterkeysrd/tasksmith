@@ -2,7 +2,13 @@
 
 A ModelProvider describes a gateway driver, its connection settings, available models, and defaults. Definitions are discovered through the system, user, workspace, and current-project hierarchy, commonly in `.agents/providers/<name>.provider.yaml`. The resource name identifies the configured provider; `spec.type` selects the driver.
 
-TaskSmith ships provider presets as templates. A preset being present does not itself make it an active provider. Gateway types include `openai`, `anthropic`, `ollama`, `typesafe`, `antigravity`, and `google-genai` (also `genai` or `gemini`). Provider support for completion, decision, and embedding roles differs; a capability declaration cannot add a role the driver does not implement. Decision model support in the gateway does not imply TaskSmith can evaluate Decision resources.
+TaskSmith ships provider presets as templates. A preset being present does not itself make it an active provider. Gateway types include `openai`, `codex`, `anthropic`, `ollama`, `typesafe`, `antigravity`, and `google-genai` (also `genai` or `gemini`). Provider support for completion, decision, and embedding roles differs; a capability declaration cannot add a role the driver does not implement. Decision model support in the gateway does not imply TaskSmith can evaluate Decision resources.
+
+For ChatGPT plan inference, use `metadata.name: codex`, `spec.type: codex`, and `spec.auth.type: oauth2`. The driver manages the endpoint and credentials. Setup copies the preset models and aliases into the manifest. To browse models available to the signed-in account, use **Manage models** in `/providers`.
+
+OpenAI and Codex map `@fast` to `gpt-6-luna`, `@balanced` to `gpt-6.2-sol`, and `@flagship` to `gpt-6.2-astra`. OpenAI maps `@smart` to Sol, and Codex maps it to Astra. Google GenAI maps `@balanced` to `gemini-4-neon` and `@fast` to `gemini-4-hydrogen`.
+
+The three presets declare model names, limits, and aliases. Loom supplies model capabilities and API pricing at runtime. Codex uses ChatGPT plan billing.
 
 ## Provider definition
 

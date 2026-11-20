@@ -6,17 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/masterkeysrd/loom/profile"
-	loomollama "github.com/masterkeysrd/loom/providers/ollama"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
@@ -24,7 +21,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
-	ollamaapi "github.com/ollama/ollama/api"
 )
 
 // providerStatusFor resolves the browser-facing status of one configured
@@ -40,7 +36,7 @@ func providerStatusFor(rec workspace.ProviderRecord, wsEnv map[string]string) (s
 	}
 	auth := rec.Def.Spec.Auth
 	if auth != nil && auth.Type == warp.AuthTypeOAuth2 {
-		if tok, email, err := gateway.LoadProviderToken(rec.Name); err == nil && tok != nil {
+		if email, ok := providerOAuthAccount(rec.Name); ok {
 			return "active", true, email
 		}
 		return "missing_auth", false, ""
@@ -206,10 +202,6 @@ func (d *Daemon) UpdateProviderModels(ctx context.Context, rawWS, name string, r
 	if !rec.Writable {
 		return nil, providerAPIError(fmt.Errorf("%w: provider %s manifest is not writable", workspace.ErrProviderReadOnly, name))
 	}
-	profiles := sync.OnceValue(func() []profile.Profile {
-		list, _ := gateway.TypeCatalog(rec.Def.Spec.Type)
-		return list
-	})
 	preset := sync.OnceValue(func() *warp.ModelProvider {
 		return findPreset(cmp.Or(rec.Def.Spec.Type, rec.Name))
 	})
@@ -227,7 +219,7 @@ func (d *Daemon) UpdateProviderModels(ctx context.Context, rawWS, name string, r
 		if id != "" && !slices.ContainsFunc(rec.Def.Spec.Models, func(existing warp.ProviderModel) bool {
 			return strings.TrimSpace(existing.ID) == id
 		}) {
-			edit.Catalog = catalogModelForAdd(rt.Gateway(), rec.Name, id, profiles(), preset)
+			edit.Catalog = catalogModelForAdd(rt.Gateway(), rec.Name, id, preset)
 		}
 		edits = append(edits, edit)
 	}
@@ -240,12 +232,8 @@ func (d *Daemon) UpdateProviderModels(ctx context.Context, rawWS, name string, r
 	return d.ListWorkspaceProviders(ctx, rawWS)
 }
 
-// catalogModelForAdd resolves metadata for newly declared model IDs. Static
-// profiles work before sign-in. The gateway supplies live provider metadata.
-func catalogModelForAdd(gw gateway.Gateway, provider, id string, profiles []profile.Profile, preset func() *warp.ModelProvider) *warp.ProviderModel {
-	if i := slices.IndexFunc(profiles, func(p profile.Profile) bool { return p.ID == id }); i >= 0 {
-		return manifestModelFromProfile(profiles[i])
-	}
+// catalogModelForAdd resolves metadata from the gateway or bundled preset.
+func catalogModelForAdd(gw gateway.Gateway, provider, id string, preset func() *warp.ModelProvider) *warp.ProviderModel {
 	if gw != nil {
 		if prof, ok := gw.GetProfile(provider + "/" + id); ok {
 			return manifestModelFromProfile(prof)
@@ -627,10 +615,8 @@ func isValidProviderName(name string) bool {
 
 // ListProviderCatalog returns the models a provider type offers, so the
 // /providers model manager can offer a curated list (context window, pricing,
-// capabilities) instead of asking for raw IDs. Types with a static loom catalog
-// answer from it; ollama answers from its live endpoint when reachable; other
-// types fall back to the built-in preset's model list. Entries already declared
-// in the manifest are flagged Listed.
+// capabilities) instead of asking for raw IDs. It uses the gateway's catalog
+// when available and falls back to the built-in preset.
 func (d *Daemon) ListProviderCatalog(ctx context.Context, rawWS, name string) ([]api.ProviderCatalogEntry, error) {
 	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
@@ -643,20 +629,19 @@ func (d *Daemon) ListProviderCatalog(ctx context.Context, rawWS, name string) ([
 	}
 
 	var profiles []profile.Profile
-	static := false
-	if list, hasStatic := gateway.TypeCatalog(rec.Def.Spec.Type); hasStatic {
-		profiles, static = list, true
+	var available bool
+	if gw := rt.Gateway(); gw != nil {
+		profiles, available, err = gw.ListModels(ctx, name)
+		if err != nil {
+			return nil, fmt.Errorf("discover models for %q: %w", name, err)
+		}
 	}
-	if !static && rec.Def.Spec.Type == "ollama" {
-		profiles = ollamaCatalogProfiles(ctx, rec.Def.Spec.Endpoint)
-		static = len(profiles) > 0
-	}
-	if !static {
+	if !available {
 		if preset := findPreset(cmp.Or(rec.Def.Spec.Type, name)); preset != nil {
 			for _, m := range preset.Spec.Models {
 				profiles = append(profiles, profile.Profile{
 					ID:     m.ID,
-					Name:   cmp.Or(m.Name, m.ID),
+					Name:   cmp.Or(m.Label, m.Name, m.ID),
 					Limits: profile.Limits{Context: m.Limits.Context, Output: m.Limits.Output},
 				})
 			}
@@ -685,29 +670,6 @@ func (d *Daemon) ListProviderCatalog(ctx context.Context, rawWS, name string) ([
 		return cmp.Compare(a.ID, b.ID)
 	})
 	return out, nil
-}
-
-// ollamaCatalogProfiles queries a local Ollama endpoint for installed models.
-// A dead endpoint is a normal state (server not running), so it yields no
-// profiles rather than an error.
-func ollamaCatalogProfiles(ctx context.Context, endpoint string) []profile.Profile {
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		endpoint = "http://localhost:11434"
-	}
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return nil
-	}
-	client := ollamaapi.NewClient(u, &http.Client{Timeout: 3 * time.Second})
-	prov := (&loomollama.Provider{}).NewProvider(client, u)
-	queryCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
-	profiles, err := prov.ListModels(queryCtx)
-	if err != nil {
-		return nil
-	}
-	return profiles
 }
 
 func boolTrue() *bool {

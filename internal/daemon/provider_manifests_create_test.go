@@ -10,6 +10,27 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 )
 
+func TestCreateProviderCopiesOAuthPresetModels(t *testing.T) {
+	for _, name := range []string{"antigravity", "codex"} {
+		t.Run(name, func(t *testing.T) {
+			_, cli, _ := setupDaemonTest(t, nil)
+			ctx := t.Context()
+			provider, err := cli.CreateProvider(ctx, api.CreateProviderRequest{Name: name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			preset := findPreset(name)
+			if provider.DefaultModel != preset.Spec.DefaultModels.Completion || len(provider.Models) != len(preset.Spec.Models) {
+				t.Fatalf("created provider = %+v, want default and models from the preset", provider)
+			}
+			catalog, err := cli.ListProviderCatalog(ctx, name)
+			if err != nil || len(catalog) != len(preset.Spec.Models) {
+				t.Fatalf("catalog before sign-in = %+v, %v", catalog, err)
+			}
+		})
+	}
+}
+
 // TestCreateProviderCustomTypeDoesNotInheritPreset guards the secret-leak and
 // dangling-default path: a custom provider named differently from its type may
 // borrow the preset endpoint but must never copy the preset's auth (which

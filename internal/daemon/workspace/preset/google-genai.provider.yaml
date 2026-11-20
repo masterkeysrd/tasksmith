@@ -6,16 +6,23 @@ spec:
   type: google-genai
   endpoint: https://generativelanguage.googleapis.com/v1beta
   defaultModels:
-    completion: gemini-4-hydrogen
+    completion: gemini-4-neon
   auth:
     type: api-key
     header: x-goog-api-key
     token: "${env:GOOGLE_API_KEY}"
   models:
+    - id: gemini-4-neon
+      name: gemini-4-neon
+      label: Gemini 4 Neon
+      aliases: [smart, balanced, gemini-neon, neon]
+      limits:
+        context: 1048576
+        output: 65536
     - id: gemini-4-hydrogen
       name: gemini-4-hydrogen
       label: Gemini 4 Hydrogen
-      aliases: [balanced, fast, gemini-hydrogen, gemini-4-hydrogen, hydrogen]
+      aliases: [fast, gemini-hydrogen, gemini-4-hydrogen, hydrogen]
       limits:
         context: 1048576
         output: 65536
@@ -25,14 +32,14 @@ spec:
       aliases: [flagship, gemini-carbon, gemini-4-carbon, carbon]
       limits:
         context: 1048576
-        output: 65536
+        output: 32768
     - id: gemini-4-argon
       name: gemini-4-argon
       label: Gemini 4 Argon
-      aliases: [smart, gemini-argon, gemini-4-argon, argon]
+      aliases: [gemini-argon, gemini-4-argon, argon]
       limits:
         context: 1048576
-        output: 65536
+        output: 32768
     - id: gemini-3.8-flash
       name: gemini-3.8-flash
       label: Gemini 3.8 Flash

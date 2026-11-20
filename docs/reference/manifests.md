@@ -6,6 +6,8 @@ Model `cost` pricing and tiers (`label`, `tier.type`, `tier.size`) drive the cos
 
 For model provider configurations (`kind: ModelProvider`), including `spec.enabled`, `cost`, tier precedence over built-in pricing, and 1-to-1 `@alias` editing, see the [Providers Reference](./providers.md).
 
+For Codex, use the `codex` provider name and type with `spec.auth.type: oauth2`. See the [Codex provider guide](./providers/codex.md).
+
 ---
 
 ## 1. Resource Hierarchy & Metadata
