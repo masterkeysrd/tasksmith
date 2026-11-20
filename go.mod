@@ -11,7 +11,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.7-0.20261118073631-ce28699d019e
-	github.com/masterkeysrd/loom v0.0.11-0.20261120205501-f4756a4e4a4b
+	github.com/masterkeysrd/loom v0.0.11-0.20261120222403-41b415b077a6
 	github.com/masterkeysrd/warp v0.0.7-0.20261120020207-9b2980bf4ae4
 	github.com/mattn/go-isatty v0.0.24
 	github.com/modelcontextprotocol/go-sdk v1.8.0
