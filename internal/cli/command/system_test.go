@@ -319,28 +319,58 @@ func noticeTexts() []string {
 	return texts
 }
 
-func TestModelCompletionOffersChatCapableModelsByAlias(t *testing.T) {
-	store.ResetSession()
-	defer store.ResetSession()
+func TestModelCompletionWithDuplicateAliases(t *testing.T) {
+	previous := store.Client()
+	t.Cleanup(func() { store.SetClient(previous) })
 
+	models := modelListing()
+	models[0].Aliases = []string{"fast", "smart"}
+	models[1].Aliases = []string{"fast"}
+	models[2].Aliases = []string{" @SMART "}
 	c, err := client.New("test.sock", client.WithCWD("."),
-		client.WithHTTPClient(&http.Client{Transport: &modelsTransport{models: modelListing()}}))
+		client.WithHTTPClient(&http.Client{Transport: &modelsTransport{models: models}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.InitSession(t.Context(), c, store.InitSessionOptions{})
+	store.SetClient(c)
 
-	candidates, err := completeModels(t.Context(), autocomplete.Request{})
-	if err != nil {
-		t.Fatal(err)
+	engine := autocomplete.New()
+	for _, source := range NewRegistry().Sources() {
+		if err := engine.Register(source); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if len(candidates) != 2 {
-		t.Fatalf("candidates = %+v, want the two chat-capable models", candidates)
-	}
-	if candidates[0].Value != "openai/gpt-5.5" || !slices.Contains(candidates[0].Aliases, "@fast") {
-		t.Fatalf("aliases = %+v, want the alias users type", candidates[0].Aliases)
-	}
-	if candidates[1].Value != "local/plain" || len(candidates[1].Aliases) != 0 {
-		t.Fatalf("candidate without aliases = %+v", candidates[1])
+
+	for _, tt := range []struct {
+		query string
+		ids   []string
+	}{
+		{"", []string{"openai/gpt-5.5", "local/plain"}},
+		{"openai/gpt-5.5", []string{"openai/gpt-5.5"}},
+		{"local/plain", []string{"local/plain"}},
+		{"@fa", []string{"openai/gpt-5.5"}},
+		{"@smart", nil},
+	} {
+		t.Run("query="+tt.query, func(t *testing.T) {
+			input := "/model " + tt.query
+			result, err := engine.Complete(t.Context(), input, len(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Source != "commands:model" {
+				t.Fatalf("source = %q, want commands:model", result.Source)
+			}
+			var ids []string
+			for i, candidate := range result.Candidates {
+				ids = append(ids, candidate.Value)
+				text, _, err := result.Apply(i)
+				if err != nil || text != "/model "+candidate.Value {
+					t.Errorf("Apply(%d) = %q, %v; want /model %s", i, text, err, candidate.Value)
+				}
+			}
+			if !slices.Equal(ids, tt.ids) {
+				t.Errorf("model IDs = %v, want %v", ids, tt.ids)
+			}
+		})
 	}
 }

@@ -80,8 +80,8 @@ func (e *Engine) Register(source Source) error {
 }
 
 // Complete resolves suggestions at cursor, a UTF-8 byte offset in input.
-// Triggers match unquoted token prefixes. The nearest trigger wins, with the
-// longest trigger breaking ties. A whitespace-terminated trigger such as
+// Triggers match unquoted token prefixes. Higher priority wins, then the nearest
+// trigger, then the longest. A whitespace-terminated trigger such as
 // "/mode " activates only after that token's separator. Quotes and backslash
 // escapes group whitespace into tokens; unfinished quotes/escapes are accepted.
 func (e *Engine) Complete(ctx context.Context, input string, cursor int) (Result, error) {
@@ -304,7 +304,8 @@ func findSource(sources []registeredSource, tokens []token, active token, index 
 		if !matches || !prefixMatches {
 			continue
 		}
-		if root > bestRoot || (root == bestRoot && len(source.key) > len(match.key)) {
+		nearer := root > bestRoot || (root == bestRoot && len(source.key) > len(match.key))
+		if bestRoot < 0 || source.Priority > match.Priority || (source.Priority == match.Priority && nearer) {
 			match = source
 			bestRoot = root
 			replacement.Start = active.start + length

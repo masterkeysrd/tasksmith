@@ -47,6 +47,7 @@ type Source struct {
 	Name     string
 	Trigger  string
 	Complete Completer
+	Priority int
 	// StartOnly restricts the trigger to the first non-whitespace token.
 	StartOnly bool
 	// CaseSensitive applies to trigger, value, label, and alias matching.

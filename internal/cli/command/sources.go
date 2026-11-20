@@ -3,6 +3,7 @@ package command
 import (
 	"cmp"
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
@@ -73,12 +74,17 @@ func (r *Registry) Sources() []autocomplete.Source {
 		if cmd.Complete == nil {
 			continue
 		}
+		priority := 0
+		if cmd.Name == "model" {
+			priority = 1
+		}
 		for _, key := range keys {
 			sources = append(sources, autocomplete.Source{
 				Name:      "commands:" + key,
 				Trigger:   "/" + key + " ",
 				StartOnly: true,
 				Complete:  cmd.Complete,
+				Priority:  priority,
 			})
 		}
 	}
@@ -134,6 +140,7 @@ func completeModels(ctx context.Context, _ autocomplete.Request) ([]autocomplete
 	}
 
 	candidates := make([]autocomplete.Candidate, 0, len(models))
+	aliasOwners := make(map[string]int)
 	for _, m := range models {
 		if !m.Capabilities.SupportsCompletion() {
 			continue
@@ -144,13 +151,25 @@ func completeModels(ctx context.Context, _ autocomplete.Request) ([]autocomplete
 		} else if m.Name != "" {
 			label = m.Name
 		}
+		aliases := modelAliasRefs(m.Aliases)
+		for _, alias := range aliases {
+			key := strings.ToLower(alias)
+			if owner, exists := aliasOwners[key]; exists && owner != len(candidates) {
+				aliasOwners[key] = -1
+			} else {
+				aliasOwners[key] = len(candidates)
+			}
+		}
 		candidates = append(candidates, autocomplete.Candidate{
 			Value:       m.ID,
 			Label:       label,
 			Description: m.Provider,
-			// Aliases answer to the name users actually type ("@fast") while the
-			// canonical model id is what gets inserted.
-			Aliases: modelAliasRefs(m.Aliases),
+			Aliases:     aliases,
+		})
+	}
+	for i := range candidates {
+		candidates[i].Aliases = slices.DeleteFunc(candidates[i].Aliases, func(alias string) bool {
+			return aliasOwners[strings.ToLower(alias)] != i
 		})
 	}
 	return candidates, nil

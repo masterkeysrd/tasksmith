@@ -8,7 +8,7 @@ The `/model` picker groups models by provider and displays three columns:
 2. **Capacity & aliases**: context window and typed aliases (for example, `"400.0k ctx · @fast, @default"`).
 3. **Billing**: `"quota"` for subscription-billed providers, `"$3/$15 /M"` for per-token input/output pricing, or blank when pricing is unknown.
 
-A muted footer beneath the list describes the highlighted model. Live filtering matches labels, aliases, model IDs, provider names, and billing cells.
+A muted footer beneath the list describes the highlighted model. Live filtering matches labels, aliases, model IDs, provider names, and billing cells. When typing `/model ` in the composer, autocomplete matches unique `@alias` values and inserts the full `provider/model` ID. Shared aliases are skipped; their models are still selectable by ID.
 
 A muted alias status line under the title shows where each standard tier resolves (`@default → anthropic/claude-x · @fast → unassigned`). `Enter` stays a strictly ephemeral session model switch; `F2` opens the shared alias editor (below) on the highlighted model, and printable keys keep feeding the filter.
 
