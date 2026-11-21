@@ -225,6 +225,8 @@ flowchart LR
 4. **Permission Mode & Tool Toggles**: Set default session permission mode and selectively exclude built-in tools or global MCP servers.
 5. **Review & Write**: Summarizes planned filesystem mutations and offers to run `/init` if `AGENTS.md` is not yet present.
 
+Adding another provider preset leaves existing model aliases in place. For example, if `@smart` already points to a model, setup reports it and skips `@smart` on the new model. You can still select either model by its full ID or change the assignment intentionally in the [alias editor](../reference/cli.md#model-alias-editor-f2).
+
 ---
 
 ## Workspace Metadata & Version Migrations (`workspace.json`)

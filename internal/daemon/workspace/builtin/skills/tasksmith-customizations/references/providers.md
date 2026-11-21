@@ -29,6 +29,8 @@ Endpoint and configuration support varies by driver. For example, Ollama has a l
 
 `spec.enabled` (`*bool`, default `true`) is the declarative switch for provider availability: a disabled provider contributes no models, aliases, or role defaults, and comes back unchanged when re-enabled. When a patch targets a manifest the workspace may write (workspace or current-project tier), the owning `*.provider.yaml` is rewritten through WARP formatting; when the provider is only inherited from the user tier, disabling instead writes a shadow override at `.agents/providers/<name>.provider.yaml` with `enabled: false` (plus the inherited identity), so muting a global provider for one repository never edits `~/.config/tasksmith/`. Re-enabling removes the shadow when the inherited manifest is already enabled. The daemon hot-reloads the workspace after every patch so the gateway, model catalog, and manifests agree.
 
+Preset installs through `/setup` and `/providers` copy every preset model, but treat aliases as suggestions. An alias already assigned to another model in the destination is skipped and reported; existing provider assignments and workspace overrides remain in place.
+
 ## Model resolution
 
 A model identifier commonly has the form `provider/model`. Workspace resolution considers explicit overrides, workspace role defaults, the configured default provider's role defaults, then other effective providers' defaults and capability matches. `defaultModels` can separately select `completion`, `decision`, and `embedding`. The gateway also considers provider availability and authentication when resolving models. See `workspace-and-context.md` for workspace precedence.

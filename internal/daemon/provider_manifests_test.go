@@ -1,17 +1,20 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/loom/profile"
 	loomopenai "github.com/masterkeysrd/loom/providers/openai"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -343,5 +346,289 @@ func TestProviderCatalogAPIPrefersGatewayCatalog(t *testing.T) {
 	entries, err = cli.ListProviderCatalog(t.Context(), "empty-provider")
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("empty catalog = %+v, %v", entries, err)
+	}
+}
+
+func TestCreateProviderCopiesOAuthPresetModels(t *testing.T) {
+	for _, name := range []string{"antigravity", "codex"} {
+		t.Run(name, func(t *testing.T) {
+			_, cli, _ := setupDaemonTest(t, nil)
+			ctx := t.Context()
+			provider, err := cli.CreateProvider(ctx, api.CreateProviderRequest{Name: name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			preset := findPreset(name)
+			if provider.DefaultModel != preset.Spec.DefaultModels.Completion || len(provider.Models) != len(preset.Spec.Models) {
+				t.Fatalf("created provider = %+v, want default and models from the preset", provider)
+			}
+			catalog, err := cli.ListProviderCatalog(ctx, name)
+			if err != nil || len(catalog) != len(preset.Spec.Models) {
+				t.Fatalf("catalog before sign-in = %+v, %v", catalog, err)
+			}
+		})
+	}
+}
+
+// TestCreateProviderCustomTypeDoesNotInheritPreset guards the secret-leak and
+// dangling-default path: a custom provider named differently from its type may
+// borrow the preset endpoint but must never copy the preset's auth (which
+// would point an existing secret at a custom endpoint), config, default
+// models, or model list.
+func TestCreateProviderCustomTypeDoesNotInheritPreset(t *testing.T) {
+	_, cli, wsDir := setupDaemonTest(t, nil)
+	ctx := context.Background()
+
+	created, err := cli.CreateProvider(ctx, api.CreateProviderRequest{
+		Scope:    "workspace",
+		Name:     "vllm",
+		Type:     "openai",
+		Endpoint: "http://localhost:8000/v1",
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	if created.Name != "vllm" {
+		t.Fatalf("created = %+v, want vllm", created)
+	}
+
+	manifest, err := os.ReadFile(filepath.Join(wsDir, ".agents", "providers", "vllm.provider.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(manifest)
+	if !strings.Contains(got, "endpoint: http://localhost:8000/v1") {
+		t.Errorf("custom manifest lost the requested endpoint:\n%s", got)
+	}
+	for _, forbidden := range []string{"OPENAI_API_KEY", "defaultModels", "gpt-6", "store: false"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("custom manifest inherited preset %q:\n%s", forbidden, got)
+		}
+	}
+	if strings.Contains(got, "auth:") {
+		t.Errorf("keyless custom manifest declares auth:\n%s", got)
+	}
+}
+
+// TestCreateProviderHonorsNoneAuthType proves an explicit auth type "none"
+// without a key or env var writes an unauthenticated manifest instead of
+// silently falling through to the preset's auth.
+func TestCreateProviderHonorsNoneAuthType(t *testing.T) {
+	_, cli, wsDir := setupDaemonTest(t, nil)
+	ctx := context.Background()
+
+	if _, err := cli.CreateProvider(ctx, api.CreateProviderRequest{
+		Scope: "workspace", Name: "local", Type: "ollama", AuthType: "none",
+	}); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(wsDir, ".agents", "providers", "local.provider.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(manifest)
+	if !strings.Contains(got, "type: none") {
+		t.Errorf("manifest lacks auth type none:\n%s", got)
+	}
+	if strings.Contains(got, "OLLAMA_API_KEY") {
+		t.Errorf("none-auth manifest still references a preset secret:\n%s", got)
+	}
+}
+
+// TestCreateProviderPresetKeepsAuthScheme proves a preset-backed create with a
+// pasted key preserves the preset's auth scheme and header (api-key +
+// X-Api-Key for anthropic) rather than rewriting it to bearer, and routes the
+// secret to the preset's own env var.
+func TestCreateProviderPresetKeepsAuthScheme(t *testing.T) {
+	_, cli, wsDir := setupDaemonTest(t, nil)
+	ctx := context.Background()
+
+	if _, err := cli.CreateProvider(ctx, api.CreateProviderRequest{
+		Scope: "workspace", Name: "anthropic", Type: "anthropic", APIKey: "sk-ant-test",
+	}); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(wsDir, ".agents", "providers", "anthropic.provider.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(manifest)
+	if !strings.Contains(got, "type: api-key") || !strings.Contains(got, "header: X-Api-Key") {
+		t.Errorf("preset auth scheme was clobbered:\n%s", got)
+	}
+	if strings.Contains(got, "type: bearer") {
+		t.Errorf("preset auth rewritten to bearer:\n%s", got)
+	}
+	if !strings.Contains(got, "${env:ANTHROPIC_API_KEY}") {
+		t.Errorf("preset env var not kept:\n%s", got)
+	}
+	envFile, err := os.ReadFile(filepath.Join(wsDir, ".env"))
+	if err != nil {
+		t.Fatalf("workspace .env not written: %v", err)
+	}
+	if !strings.Contains(string(envFile), "ANTHROPIC_API_KEY=sk-ant-test") {
+		t.Errorf("secret not stored under the preset env var:\n%s", envFile)
+	}
+}
+
+// TestCreateProviderCustomModelsDropPresetDefaults proves that replacing a
+// preset's model list clears preset default-model references that no longer
+// resolve instead of shipping a dangling completion default.
+func TestCreateProviderCustomModelsDropPresetDefaults(t *testing.T) {
+	_, cli, wsDir := setupDaemonTest(t, nil)
+	ctx := context.Background()
+
+	if _, err := cli.CreateProvider(ctx, api.CreateProviderRequest{
+		Scope:  "workspace",
+		Name:   "openai",
+		Type:   "openai",
+		Models: []api.ProviderModelRequest{{ID: "my-model", Name: "my-model"}},
+	}); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(wsDir, ".agents", "providers", "openai.provider.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(manifest)
+	if strings.Contains(got, "defaultModels") {
+		t.Errorf("dangling preset defaults survived the model replacement:\n%s", got)
+	}
+	if !strings.Contains(got, "my-model") || strings.Contains(got, "gpt-6") {
+		t.Errorf("model list not replaced as requested:\n%s", got)
+	}
+}
+
+func TestPresetInstallationPreservesAliasOwners(t *testing.T) {
+	for _, installer := range []string{"setup", "providers"} {
+		for _, scenario := range []string{"fresh", "workspace", "user"} {
+			t.Run(installer+"/"+scenario, func(t *testing.T) {
+				_, cli, dir := setupDaemonTest(t, nil)
+				ctx := t.Context()
+				scope := "workspace"
+				var ownerPath string
+				var before []byte
+				wantSkipped := map[string]api.SkippedPresetAlias{}
+				if scenario != "fresh" {
+					const ownerManifest = `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: existing
+spec:
+  type: openai
+  auth:
+    type: none
+  models:
+    - id: existing-model
+      name: existing-model
+      aliases: [smart]
+`
+					var err error
+					ownerPath, err = xdg.SubConfigDir("agents", "providers", "existing.provider.yaml")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.MkdirAll(filepath.Dir(ownerPath), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					before = []byte(ownerManifest)
+					if err := os.WriteFile(ownerPath, before, 0o644); err != nil {
+						t.Fatal(err)
+					}
+					wantSkipped["@smart"] = api.SkippedPresetAlias{Alias: "@smart", ModelID: "openai/gpt-6.2-sol", Owner: "existing/existing-model"}
+				}
+				if scenario == "workspace" {
+					const ws = `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: test
+spec:
+  projects: ['.']
+  modelAliases:
+    fast: existing/existing-model
+---
+`
+					if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(ws), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					wantSkipped["@fast"] = api.SkippedPresetAlias{Alias: "@fast", ModelID: "openai/gpt-6-luna", Owner: "existing/existing-model", WorkspaceOverride: true}
+				}
+				if scenario == "user" {
+					scope = "user"
+					seedWorkspaceProvider(t, dir, "existing", "  type: openai\n  enabled: false\n")
+				}
+
+				var skipped []api.SkippedPresetAlias
+				if installer == "setup" {
+					result, err := cli.InitWorkspaceWithResult(ctx, api.InitWorkspaceRequest{CWD: dir, Scope: scope, Provider: "openai"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					skipped = result.SkippedPresetAliases
+				} else {
+					result, err := cli.CreateProvider(ctx, api.CreateProviderRequest{Scope: scope, Name: "openai"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					skipped = result.SkippedPresetAliases
+				}
+				if len(skipped) != len(wantSkipped) {
+					t.Fatalf("skipped = %+v, want %+v", skipped, wantSkipped)
+				}
+				for _, warning := range skipped {
+					if warning != wantSkipped[warning.Alias] {
+						t.Errorf("unexpected warning: %+v", warning)
+					}
+				}
+				providers, err := cli.ListWorkspaceProviders(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				installed, ok := findWorkspaceProvider(providers, "openai")
+				preset := findPreset("openai")
+				if !ok || len(installed.Models) != len(preset.Spec.Models) {
+					t.Fatalf("installed provider = %+v; want all preset models", installed)
+				}
+				for i, model := range installed.Models {
+					original := preset.Spec.Models[i]
+					want := slices.DeleteFunc(slices.Clone(original.Aliases), func(alias string) bool {
+						_, skip := wantSkipped["@"+alias]
+						return skip
+					})
+					if model.ID != original.ID || !slices.Equal(model.Aliases, want) {
+						t.Errorf("installed model = %+v; want ID %q with aliases %v", model, original.ID, want)
+					}
+				}
+				if ownerPath != "" {
+					after, err := os.ReadFile(ownerPath)
+					if err != nil || !bytes.Equal(after, before) {
+						t.Fatalf("existing provider manifest changed: %v", err)
+					}
+				}
+				if scenario == "workspace" {
+					assignments, err := cli.ListAliasAssignments(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, alias := range []string{"smart", "fast"} {
+						if !slices.ContainsFunc(assignments, func(a api.AliasAssignment) bool {
+							return a.Alias == alias && a.Provider == "existing" && a.Model == "existing-model" && !a.Duplicate && a.WorkspaceDefault == (alias == "fast")
+						}) {
+							t.Errorf("alias %q lost its owner: %+v", alias, assignments)
+						}
+					}
+					models, err := cli.ListModels(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, id := range []string{"existing/existing-model", "openai/gpt-6.2-sol"} {
+						if !slices.ContainsFunc(models, func(m api.Model) bool { return m.ID == id && m.Capabilities.SupportsCompletion() }) {
+							t.Errorf("model %q is not selectable by ID", id)
+						}
+					}
+				}
+			})
+		}
 	}
 }

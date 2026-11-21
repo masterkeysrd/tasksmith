@@ -236,13 +236,20 @@ func (c *Client) GetWorkspaceStatus(ctx context.Context) (*api.WorkspaceStatus, 
 
 // InitWorkspace initializes a workspace according to req.
 func (c *Client) InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest) error {
+	_, err := c.InitWorkspaceWithResult(ctx, req)
+	return err
+}
+
+func (c *Client) InitWorkspaceWithResult(ctx context.Context, req api.InitWorkspaceRequest) (api.InitWorkspaceResponse, error) {
+	var out api.InitWorkspaceResponse
 	if err := c.requireCWD(); err != nil {
-		return err
+		return out, err
 	}
 	if req.CWD == "" {
 		req.CWD = c.CWD()
 	}
-	return c.doJSON(ctx, http.MethodPost, "/v1/workspace/init", nil, req, nil)
+	err := c.doJSON(ctx, http.MethodPost, "/v1/workspace/init", nil, req, &out)
+	return out, err
 }
 
 // VerifyProvider tests credentials or endpoint reachability for a provider.

@@ -207,6 +207,8 @@ When an agent declares `spec.models`, the list doubles as the allowlist enforced
 
 ### Alias Editing & 1-to-1 Moves
 
+During a preset install, existing aliases take precedence over the preset, including aliases inherited from user providers and aliases defined in `WORKSPACE.md`. Conflicting aliases are omitted only from the new manifest; every preset model remains selectable by ID.
+
 Bare aliases are kept 1-to-1 across providers: saving from the `F2` alias editor (shared by `/model` and `/providers`) strips a reassigned alias from every other model across writable manifests before adding it to the target model — an atomic move persisted directly to the owning `*.provider.yaml` — and checking `@default` writes the owning manifest's `spec.defaultModels.completion` instead of a model alias. Manual YAML edits that declare the same bare alias on two models are reported as `⚠ duplicate on …` in the editor, and saving assigns the alias only to the edited model. `WORKSPACE.md` `spec.modelAliases` entries shadow per-model aliases and are never rewritten by the editor. See [CLI Reference — Model Alias Editor](./cli.md#model-alias-editor-f2).
 
 ### Enabling and Disabling Providers (`spec.enabled`)

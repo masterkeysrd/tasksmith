@@ -52,7 +52,7 @@ type WorkspaceBackend interface {
 	TrustWorkspace(ctx context.Context, req api.TrustFolderRequest) error
 	RevokeTrust(ctx context.Context, workspace string) error
 	GetWorkspaceStatus(ctx context.Context, workspace string) (*api.WorkspaceStatus, error)
-	InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest) error
+	InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest) (*api.InitWorkspaceResponse, error)
 	VerifyProvider(ctx context.Context, req api.VerifyProviderRequest) (*api.VerifyProviderResponse, error)
 	StartProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error)
 	GetProviderAuthStatus(ctx context.Context, provider string) (*api.ProviderAuthResponse, error)

@@ -76,7 +76,9 @@ func workspaceManifestWithToolExcludes(names ...string) string {
 	var b strings.Builder
 	b.WriteString("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: policies-ws\nspec:\n  policies:\n    tools:\n      exclude:\n")
 	for _, n := range names {
-		b.WriteString("        - \"" + n + "\"\n")
+		b.WriteString("        - \"")
+		b.WriteString(n)
+		b.WriteString("\"\n")
 	}
 	b.WriteString("---\n")
 	return b.String()
@@ -470,7 +472,7 @@ Body.
 func TestInitializeWritesPolicyExclusions(t *testing.T) {
 	setupTestXDG(t)
 	root := t.TempDir()
-	if err := Initialize(context.Background(), root, InitOptions{
+	if _, err := Initialize(context.Background(), root, InitOptions{
 		ProjectName:   "policies",
 		DisabledTools: []string{"web_search"},
 		DisabledMCPs:  []string{"github"},

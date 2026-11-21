@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -66,6 +68,36 @@ func openProviderTestWorkspace(t *testing.T) (*Workspace, string, string) {
 		t.Fatal(err)
 	}
 	return w, filepath.Join(root, ".agents", "providers"), userPath
+}
+
+func TestFilterPresetAliasesNormalizesWhitespace(t *testing.T) {
+	w, _, _ := openProviderTestWorkspace(t)
+	wantSkipped := []api.SkippedPresetAlias{{Alias: "@smart", ModelID: "newprov/new-model", Owner: "testprov/mid-model"}}
+	wantAliases := []string{"unique"}
+
+	for _, tt := range []struct {
+		name  string
+		alias string
+	}{
+		{"bare", "smart"},
+		{"surrounding whitespace", " @smart "},
+		{"whitespace after prefix", "@ smart"},
+		{"mixed case and whitespace", "\t@\tSmArT\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := warp.ModelProviderSpec{Models: []warp.ProviderModel{{
+				ID:      "new-model",
+				Aliases: []string{tt.alias, "unique"},
+			}}}
+			skipped := w.FilterPresetAliases("newprov", "workspace", &spec, nil)
+			if !slices.Equal(skipped, wantSkipped) {
+				t.Errorf("skipped aliases for %q = %+v, want %+v", tt.alias, skipped, wantSkipped)
+			}
+			if got := spec.Models[0].Aliases; !slices.Equal(got, wantAliases) {
+				t.Errorf("retained aliases = %q, want %q", got, wantAliases)
+			}
+		})
+	}
 }
 
 func TestProviderRecordsListsUserTier(t *testing.T) {

@@ -8,23 +8,36 @@ package api
 // providers disabled with spec.enabled and workspace shadows that mute an
 // inherited user provider.
 type WorkspaceProvider struct {
-	Name         string              `json:"name"`
-	DisplayName  string              `json:"display_name,omitempty"`
-	Type         string              `json:"type,omitempty"`
-	Endpoint     string              `json:"endpoint,omitempty"`
-	Scope        string              `json:"scope,omitempty"`    // "user", "workspace", "local", or "system"
-	Path         string              `json:"path,omitempty"`     // home-shortened manifest path of the owning file
-	Enabled      bool                `json:"enabled"`            // spec.enabled (true when omitted)
-	Shadowed     bool                `json:"shadowed,omitempty"` // a workspace-tier override mutes an inherited provider
-	Status       string              `json:"status,omitempty"`   // "active", "disabled", "missing_auth", "local"
-	HasKey       bool                `json:"has_key,omitempty"`
-	AuthType     string              `json:"auth_type,omitempty"`
-	AuthEnv      string              `json:"auth_env,omitempty"`
-	Account      string              `json:"account,omitempty"`
-	DefaultModel string              `json:"default_model,omitempty"`
-	Models       []ProviderModelInfo `json:"models,omitempty"`
-	Writable     bool                `json:"writable,omitempty"`    // manifest can be patched by /providers
-	Overridable  bool                `json:"overridable,omitempty"` // a workspace shadow can mute an inherited provider
+	Name                 string               `json:"name"`
+	DisplayName          string               `json:"display_name,omitempty"`
+	Type                 string               `json:"type,omitempty"`
+	Endpoint             string               `json:"endpoint,omitempty"`
+	Scope                string               `json:"scope,omitempty"`    // "user", "workspace", "local", or "system"
+	Path                 string               `json:"path,omitempty"`     // home-shortened manifest path of the owning file
+	Enabled              bool                 `json:"enabled"`            // spec.enabled (true when omitted)
+	Shadowed             bool                 `json:"shadowed,omitempty"` // a workspace-tier override mutes an inherited provider
+	Status               string               `json:"status,omitempty"`   // "active", "disabled", "missing_auth", "local"
+	HasKey               bool                 `json:"has_key,omitempty"`
+	AuthType             string               `json:"auth_type,omitempty"`
+	AuthEnv              string               `json:"auth_env,omitempty"`
+	Account              string               `json:"account,omitempty"`
+	DefaultModel         string               `json:"default_model,omitempty"`
+	Models               []ProviderModelInfo  `json:"models,omitempty"`
+	Writable             bool                 `json:"writable,omitempty"`    // manifest can be patched by /providers
+	Overridable          bool                 `json:"overridable,omitempty"` // a workspace shadow can mute an inherited provider
+	SkippedPresetAliases []SkippedPresetAlias `json:"skipped_preset_aliases,omitempty"`
+}
+
+type SkippedPresetAlias struct {
+	Alias             string `json:"alias"`
+	ModelID           string `json:"model_id"`
+	Owner             string `json:"owner,omitempty"`
+	WorkspaceOverride bool   `json:"workspace_override,omitempty"`
+}
+
+type InitWorkspaceResponse struct {
+	Status               string               `json:"status"`
+	SkippedPresetAliases []SkippedPresetAlias `json:"skipped_preset_aliases,omitempty"`
 }
 
 // ProviderModelInfo is one model entry of a provider manifest, carrying the

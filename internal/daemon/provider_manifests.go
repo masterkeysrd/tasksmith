@@ -378,6 +378,9 @@ func providerEnvPath(scope, rootDir string) (string, error) {
 // referenced from the manifest through a ${env:...} expression, so no secret is
 // ever stored in YAML.
 func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.CreateProviderRequest) (*api.WorkspaceProvider, error) {
+	d.providerInstallMu.Lock()
+	defer d.providerInstallMu.Unlock()
+
 	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
@@ -474,6 +477,11 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 		}
 	}
 
+	var skipped []api.SkippedPresetAlias
+	if isPreset && len(req.Models) == 0 {
+		skipped = ws.FilterPresetAliases(name, scope, &spec, nil)
+	}
+
 	authEnv := strings.TrimSpace(req.AuthEnv)
 	apiKey := strings.TrimSpace(req.APIKey)
 	authType := strings.TrimSpace(req.AuthType)
@@ -560,6 +568,9 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 	if err := rt.Reload(ctx); err != nil {
 		return nil, fmt.Errorf("daemon: reload workspace after provider create: %w", err)
 	}
+	if scope == "user" {
+		d.reloadAllWorkspaces(ctx)
+	}
 
 	providers, err := d.ListWorkspaceProviders(ctx, rawWS)
 	if err != nil {
@@ -567,6 +578,7 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 	}
 	for _, p := range providers {
 		if p.Name == name {
+			p.SkippedPresetAliases = skipped
 			return &p, nil
 		}
 	}

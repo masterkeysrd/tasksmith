@@ -120,8 +120,9 @@ type Daemon struct {
 	closeErr     error
 	serveErrCh   chan error
 
-	providerAuthMu sync.Mutex
-	providerAuths  map[string]*providerAuthFlow
+	providerInstallMu sync.Mutex
+	providerAuthMu    sync.Mutex
+	providerAuths     map[string]*providerAuthFlow
 }
 
 var _ server.Backend = (*Daemon)(nil)
@@ -1133,10 +1134,13 @@ func (d *Daemon) scanGlobalMCPs() []string {
 	return mcps
 }
 
-func (d *Daemon) InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest) error {
+func (d *Daemon) InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest) (*api.InitWorkspaceResponse, error) {
+	d.providerInstallMu.Lock()
+	defer d.providerInstallMu.Unlock()
+
 	cleanDir, err := fsutils.CleanPath(req.CWD)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var defaultModels map[warp.ModelRole]string
@@ -1160,18 +1164,19 @@ func (d *Daemon) InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest
 		DisabledMCPs:  req.DisabledMCPs,
 	}
 
-	if err := workspace.Initialize(ctx, cleanDir, opts); err != nil {
-		return err
+	skipped, err := workspace.Initialize(ctx, cleanDir, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	if req.DefaultMode != "" {
 		if err := permissions.UpdateGlobal(req.DefaultMode); err != nil {
-			return fmt.Errorf("daemon: update default permission mode: %w", err)
+			return nil, fmt.Errorf("daemon: update default permission mode: %w", err)
 		}
 	}
 
 	d.reloadAllWorkspaces(ctx)
-	return nil
+	return &api.InitWorkspaceResponse{Status: "ok", SkippedPresetAliases: skipped}, nil
 }
 
 // SessionBackend implementation

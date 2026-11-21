@@ -101,7 +101,7 @@ func TestIsConfigured_IsInitialized_Initialize_CopyConfig(t *testing.T) {
 
 	// Test TrustOnly initialization first on a separate directory
 	trustDir := t.TempDir()
-	if err := Initialize(ctx, trustDir, InitOptions{TrustOnly: true}); err != nil {
+	if _, err := Initialize(ctx, trustDir, InitOptions{TrustOnly: true}); err != nil {
 		t.Fatalf("Initialize(TrustOnly) error: %v", err)
 	}
 	if IsConfigured(trustDir) {
@@ -121,7 +121,7 @@ func TestIsConfigured_IsInitialized_Initialize_CopyConfig(t *testing.T) {
 		DefaultAgent:    "main",
 		AuthorizedTools: []string{"ls", "view", "write"},
 	}
-	if err := Initialize(ctx, dir, opts); err != nil {
+	if _, err := Initialize(ctx, dir, opts); err != nil {
 		t.Fatalf("Initialize error: %v", err)
 	}
 
@@ -871,7 +871,7 @@ func warnContains(warnings []string, sub string) bool {
 func builtinToolManifests(names []string) fstest.MapFS {
 	m := fstest.MapFS{}
 	for _, name := range names {
-		m["tools/"+name+".tool.md"] = &fstest.MapFile{Data: []byte(fmt.Sprintf(`---
+		m["tools/"+name+".tool.md"] = &fstest.MapFile{Data: fmt.Appendf(nil, `---
 apiVersion: warp/v1alpha1
 kind: Tool
 metadata:
@@ -883,7 +883,7 @@ spec:
     isIdempotent: true
 ---
 Builtin %s tool.
-`, name, name, name))}
+`, name, name, name)}
 	}
 	return m
 }
@@ -1095,7 +1095,7 @@ spec:
 		mfs := builtinToolManifests(builtinToolNames)
 		for i := range 25 {
 			name := fmt.Sprintf("tool%02d", i)
-			mfs["tools/"+name+".tool.md"] = &fstest.MapFile{Data: []byte(fmt.Sprintf(`---
+			mfs["tools/"+name+".tool.md"] = &fstest.MapFile{Data: fmt.Appendf(nil, `---
 apiVersion: warp/v1alpha1
 kind: Tool
 metadata:
@@ -1106,7 +1106,7 @@ spec:
     isReadOnly: true
 ---
 Builtin %s tool.
-`, name, name, name))}
+`, name, name, name)}
 		}
 
 		agentsDir := filepath.Join(dir, ".agents")
@@ -1358,7 +1358,7 @@ func TestInitializeModelAliases(t *testing.T) {
 			"default": "openai/gpt-5.5",
 		},
 	}
-	if err := Initialize(ctx, dir, opts); err != nil {
+	if _, err := Initialize(ctx, dir, opts); err != nil {
 		t.Fatalf("Initialize error: %v", err)
 	}
 

@@ -641,6 +641,8 @@ When TaskSmith is launched for the first time in an unconfigured directory, or w
 6. **Tools & MCPs**: Selectively enable or disable built-in tools and global MCP servers. Skipped when the chosen provider scope is `User`, since these choices are recorded as repository `WORKSPACE.md` policy exclusions.
 7. **Review & Write**: Review configured settings, write out manifests, and optionally offer `/init`.
 
+Both `/setup` and [Add Provider](#adding-a-provider) install all preset models and keep unclaimed aliases. An alias assigned to another model, including through an inherited provider or a `WORKSPACE.md` override, is omitted from the new manifest. The result names each skipped alias and its owner. Use `F2` to move a provider alias intentionally, or edit `spec.modelAliases` for a workspace override.
+
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
 | `↑` / `↓` or `k` / `j` | Setup Wizard | Navigates between selectable options, list items, or menu entries. |
@@ -865,4 +867,7 @@ All onboarding and trust endpoints operate on the workspace directory resolved f
 | `POST` | `/v1/workspace/trust` | Records trust for a workspace directory. Body: `path` (absolute path) and `scope` (`folder` or `parent`). |
 | `DELETE` | `/v1/workspace/trust` | Revokes trust for the current workspace directory, returning it to restricted mode. |
 | `POST` | `/v1/providers/verify` | Validates API credentials or endpoint reachability against upstream model provider. Body: `name`, `apiKey`, optional `endpoint`, and `scope` (`user` or `workspace`). Returns success status, latency, or validation error. |
-| `POST` | `/v1/workspace/init` | Initializes workspace configuration and applies user choices. Body: `InitWorkspaceRequest` (`scope`, `provider`, `apiKey`, `endpoint`, `defaultMode`, `disabled_tools`, `disabled_mcps`). `disabled_tools` / `disabled_mcps` are written as `WORKSPACE.md` policy exclusions and ignored for `user` scope. Writes configuration files and initial `workspace.json` metadata. |
+| `POST` | `/v1/workspace/init` | Initializes workspace configuration and applies user choices. Body: `InitWorkspaceRequest` (`scope`, `provider`, `api_key`, `endpoint`, `default_mode`, `disabled_tools`, `disabled_mcps`). Tool and MCP exclusions are ignored for `user` scope. Returns `status: "ok"` and optional `skipped_preset_aliases`. |
+| `POST` | `/v1/workspace/providers` | Creates a provider from `CreateProviderRequest`; the returned `WorkspaceProvider` can include `skipped_preset_aliases`. |
+
+Each `skipped_preset_aliases` entry has `alias`, `model_id` (full ID of the new model), optional `owner`, and `workspace_override` when the alias is set in `WORKSPACE.md`.

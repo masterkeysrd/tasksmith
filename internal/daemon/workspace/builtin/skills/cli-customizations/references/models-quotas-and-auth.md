@@ -23,6 +23,8 @@ A muted alias status line under the title shows where each standard tier resolve
 - **Model catalog** (`Catalog · <name>`): filter-first — every printable key types into the filter, `enter` toggles an entry, `ctrl+s` adds the selected entries in one write, `esc` goes back.
 - **Add provider**: preset list (or `Custom provider…`) then a field form; `enter` toggles `Scope` and submits `Create provider`, `e` edits the highlighted text field (non-text rows show why they have no free-text value), `esc` steps back. Supplied API keys are written **only** to the scope's `.env` (`~/.config/tasksmith/.env` or `<workspace-root>/.env`, with `.env` gitignored in workspace scope) and referenced from the manifest as `${env:<NAME>_API_KEY}` — never paste secrets into YAML or ask the user to. A preset-backed create keeps the preset's auth scheme and env var; a custom provider (name different from its type) never inherits the preset's auth, config, defaults, or models.
 
+Installing a preset through `/setup` or `/providers` keeps all preset models but skips aliases already assigned to other models. The transcript names each skipped alias and its owner. Use `F2` for intentional provider alias moves; for a workspace override, edit `spec.modelAliases` in `WORKSPACE.md`.
+
 ## Model alias editor (`F2` in `/model` and `/providers`)
 
 One checklist card shared by both commands, persisting directly to the owning `*.provider.yaml`:

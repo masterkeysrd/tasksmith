@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -169,21 +170,22 @@ func CopyConfig(srcDir, dstDir string) error {
 // It records a setup.json sentinel in the XDG workspace data directory, writes
 // any provided APIKey into <dir>/.env (ensuring .env is listed in .gitignore),
 // and—unless opts.TrustOnly is true—writes WORKSPACE.md and .agents/providers/<provider>.yaml.
-func Initialize(ctx context.Context, dir string, opts InitOptions) error {
+func Initialize(ctx context.Context, dir string, opts InitOptions) ([]api.SkippedPresetAlias, error) {
+	var skipped []api.SkippedPresetAlias
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if strings.TrimSpace(dir) == "" {
-		return errors.New("workspace: directory path must not be empty")
+		return nil, errors.New("workspace: directory path must not be empty")
 	}
 
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return fmt.Errorf("workspace: resolve directory %q: %w", dir, err)
+		return nil, fmt.Errorf("workspace: resolve directory %q: %w", dir, err)
 	}
 
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
-		return fmt.Errorf("workspace: ensure directory %q: %w", absDir, err)
+		return nil, fmt.Errorf("workspace: ensure directory %q: %w", absDir, err)
 	}
 
 	// 1. Write workspace.json metadata in XDG workspace directory
@@ -191,11 +193,26 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 		Schema:  WorkspaceMetadataSchema,
 		Version: version.Get(),
 	}); err != nil {
-		return fmt.Errorf("workspace: write %s: %w", WorkspaceMetadataFile, err)
+		return nil, fmt.Errorf("workspace: write %s: %w", WorkspaceMetadataFile, err)
 	}
 
 	provName := opts.providerName()
 	baseProvider := findWarpPreset(provName)
+	var destination *Workspace
+	modelAliases := maps.Clone(opts.ModelAliases)
+	if baseProvider != nil && (!opts.TrustOnly || opts.Scope == "user") {
+		destination, err = Open(ctx, absDir, WithRestrictedMode(true))
+		if err != nil {
+			return nil, fmt.Errorf("workspace: inspect existing model aliases: %w", err)
+		}
+		if current := destination.Catalog().WorkspaceSpec(); current != nil && current.Def != nil {
+			modelAliases = maps.Clone(current.Def.Spec.ModelAliases)
+			if modelAliases == nil && len(opts.ModelAliases) > 0 {
+				modelAliases = make(map[string]string)
+			}
+			maps.Copy(modelAliases, opts.ModelAliases)
+		}
+	}
 
 	// If provider scope is "user" (global), write to ~/.config/tasksmith/ and omit repo config.
 	if opts.Scope == "user" {
@@ -208,21 +225,21 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 			}
 			cfgDir, err := xdg.SubConfigDir()
 			if err != nil {
-				return fmt.Errorf("workspace: get user config dir: %w", err)
+				return nil, fmt.Errorf("workspace: get user config dir: %w", err)
 			}
 			envPath := filepath.Join(cfgDir, ".env")
 			if err := env.SetInFile(envPath, envVarName, opts.APIKey); err != nil {
-				return fmt.Errorf("workspace: write user .env: %w", err)
+				return nil, fmt.Errorf("workspace: write user .env: %w", err)
 			}
 		}
 
 		if provName != "" {
 			userProvidersDir, err := xdg.SubConfigDir("agents/providers")
 			if err != nil {
-				return fmt.Errorf("workspace: get user providers dir: %w", err)
+				return nil, fmt.Errorf("workspace: get user providers dir: %w", err)
 			}
 			if err := os.MkdirAll(userProvidersDir, 0o755); err != nil {
-				return fmt.Errorf("workspace: create user providers dir: %w", err)
+				return nil, fmt.Errorf("workspace: create user providers dir: %w", err)
 			}
 			targetFile := filepath.Join(userProvidersDir, provName+".provider.yaml")
 			if _, err := os.Stat(targetFile); os.IsNotExist(err) {
@@ -230,6 +247,7 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 				providerSpec.Type = provName
 				if baseProvider != nil {
 					providerSpec = *baseProvider.Spec.DeepCopy()
+					skipped = destination.FilterPresetAliases(provName, opts.Scope, &providerSpec, nil)
 				}
 				if opts.Endpoint != "" {
 					providerSpec.Endpoint = opts.Endpoint
@@ -245,13 +263,16 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 					Spec: providerSpec,
 				}
 				provData, err := warp.Format(provDef)
-				if err == nil {
-					_ = os.WriteFile(targetFile, provData, 0o644)
+				if err != nil {
+					return nil, fmt.Errorf("workspace: format user provider manifest: %w", err)
+				}
+				if err := fsutils.WriteFileAtomic(targetFile, provData, 0o644); err != nil {
+					return nil, fmt.Errorf("workspace: write user provider manifest: %w", err)
 				}
 			}
 		}
 
-		return nil
+		return skipped, nil
 	}
 
 	// 2. Persist API key in <dir>/.env and ensure .env is in <dir>/.gitignore
@@ -265,17 +286,17 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 
 		envPath := filepath.Join(absDir, ".env")
 		if err := env.SetInFile(envPath, envVarName, opts.APIKey); err != nil {
-			return fmt.Errorf("workspace: write .env: %w", err)
+			return nil, fmt.Errorf("workspace: write .env: %w", err)
 		}
 
 		if err := EnsureGitignoreEntry(absDir, ".env"); err != nil {
-			return fmt.Errorf("workspace: update .gitignore: %w", err)
+			return nil, fmt.Errorf("workspace: update .gitignore: %w", err)
 		}
 	}
 
 	// 3. If TrustOnly is set, skip writing WORKSPACE.md and .agents/providers/
 	if opts.TrustOnly {
-		return nil
+		return skipped, nil
 	}
 
 	// 4. Write WORKSPACE.md
@@ -333,25 +354,25 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 			DefaultProvider: provName,
 			DefaultModels:   defaultModels,
 			DefaultAgent:    opts.DefaultAgent,
-			ModelAliases:    maps.Clone(opts.ModelAliases),
+			ModelAliases:    modelAliases,
 			Policies:        policies,
 		},
 	}
 
 	wsData, err := warp.Format(wsDef)
 	if err != nil {
-		return fmt.Errorf("workspace: format WORKSPACE.md: %w", err)
+		return nil, fmt.Errorf("workspace: format WORKSPACE.md: %w", err)
 	}
 	wsPath := filepath.Join(absDir, warp.WorkspaceFileName)
 	if err := os.WriteFile(wsPath, wsData, 0o644); err != nil {
-		return fmt.Errorf("workspace: write WORKSPACE.md: %w", err)
+		return nil, fmt.Errorf("workspace: write WORKSPACE.md: %w", err)
 	}
 
 	// 5. Write .agents/providers/<provider>.yaml when a provider is specified
 	if provName != "" {
 		providersDir := filepath.Join(absDir, warp.DefaultAgentsDir, "providers")
 		if err := os.MkdirAll(providersDir, 0o755); err != nil {
-			return fmt.Errorf("workspace: create providers directory: %w", err)
+			return nil, fmt.Errorf("workspace: create providers directory: %w", err)
 		}
 
 		var providerSpec warp.ModelProviderSpec
@@ -413,33 +434,21 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 			Spec: providerSpec,
 		}
 
+		if baseProvider != nil {
+			skipped = destination.FilterPresetAliases(provName, opts.Scope, &providerSpec, opts.ModelAliases)
+		}
+
 		providerData, err := warp.Format(providerRes)
 		if err != nil {
-			return fmt.Errorf("workspace: format provider manifest: %w", err)
+			return nil, fmt.Errorf("workspace: format provider manifest: %w", err)
 		}
 		providerPath := filepath.Join(providersDir, provName+".provider.yaml")
 		if err := os.WriteFile(providerPath, providerData, 0o644); err != nil {
-			return fmt.Errorf("workspace: write provider manifest: %w", err)
+			return nil, fmt.Errorf("workspace: write provider manifest: %w", err)
 		}
 	}
 
-	return nil
-}
-
-// Init initializes the workspace directory at dir according to opts and opens it.
-func Init(ctx context.Context, dir string, opts InitOptions, openOpts ...Option) (*Workspace, error) {
-	if err := Initialize(ctx, dir, opts); err != nil {
-		return nil, err
-	}
-	return Open(ctx, dir, openOpts...)
-}
-
-// Initialize initializes the workspace's root directory and reloads its registry and environment.
-func (w *Workspace) Initialize(ctx context.Context, opts InitOptions) error {
-	if err := Initialize(ctx, w.RootDir(), opts); err != nil {
-		return err
-	}
-	return w.Reload(ctx)
+	return skipped, nil
 }
 
 // EnsureGitignoreEntry appends entry to <dir>/.gitignore under a secrets

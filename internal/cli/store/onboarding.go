@@ -254,9 +254,11 @@ func FinishOnboarding(ctx context.Context, c *client.Client) error {
 		DisabledMCPs:  disabledMcps,
 	}
 
-	if err := c.InitWorkspace(ctx, req); err != nil {
+	result, err := c.InitWorkspaceWithResult(ctx, req)
+	if err != nil {
 		return err
 	}
+	AppendSkippedPresetAliasNotices(result.SkippedPresetAliases)
 
 	updateOnboarding(func(s *OnboardingState) {
 		s.Step = StepDone

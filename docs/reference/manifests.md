@@ -103,7 +103,7 @@ Ensure error handling wraps sentinels using `%w`.
 | `projects` | array of strings | Relative paths to registered subprojects or packages. |
 | `defaultProvider` | string | Default model provider name (e.g. `openai`, `ollama`). |
 | `defaultModels` | map[string]string | Role-based model assignments: `completion`, `decision`, `embedding`. |
-| `modelAliases` | map[string]string | Named model shorthands resolved to a canonical `<provider>/<model-id>`; referenced as `@<alias>`, `@default`, or `<provider>/@<alias>`. Shadows per-model `aliases` and is never rewritten by the `/providers` / `/model` `F2` alias editor. |
+| `modelAliases` | map[string]string | Named model shorthands resolved to a canonical `<provider>/<model-id>`; referenced as `@<alias>`, `@default`, or `<provider>/@<alias>`. Shadows per-model `aliases`. The F2 alias editor leaves these entries untouched, and preset installs defer to existing entries. |
 | `defaultAgent` | string | Persona activated for new sessions (defaults to `main`). |
 | `plugins` | array of objects | External plugin resources to load: `source`, `version`, `namespace`, `imports.include`, `imports.exclude`. |
 | `policies.tools.include` | array of strings | Tool grant glob patterns allowed in this workspace. |

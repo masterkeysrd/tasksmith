@@ -403,11 +403,12 @@ func (w *workspaceRouter) postWorkspaceInit(rw http.ResponseWriter, r *http.Requ
 	if strings.TrimSpace(req.CWD) == "" {
 		req.CWD = RequestWorkspace(r)
 	}
-	if err := w.b.InitWorkspace(r.Context(), req); err != nil {
+	resp, err := w.b.InitWorkspace(r.Context(), req)
+	if err != nil {
 		WriteError(rw, err)
 		return
 	}
-	WriteJSON(rw, http.StatusOK, map[string]string{"status": "ok"})
+	WriteJSON(rw, http.StatusOK, resp)
 }
 
 func (w *workspaceRouter) postVerifyProvider(rw http.ResponseWriter, r *http.Request) {

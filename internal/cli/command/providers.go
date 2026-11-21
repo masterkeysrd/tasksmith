@@ -375,6 +375,7 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 				store.RemoveSlot(props.slotID)
 				refreshProviderWorkspaceContext(context.Background())
 				store.AppendCommandOutput("/providers", "Added provider "+created.Name+" ("+providerStatusLabel(created.Status)+")"+verdict+".")
+				store.AppendSkippedPresetAliasNotices(created.SkippedPresetAliases)
 			},
 		})
 	case providersPaneAlias:
