@@ -210,6 +210,21 @@ type Color struct {
 	Transcript TranscriptColor
 	Meter      MeterColor
 	Syntax     SyntaxColor
+	BrandMark  BrandMarkColor
+}
+
+type BrandMarkColor struct {
+	Top    color.Color
+	Center color.Color
+	Base   color.Color
+}
+
+func BrandMarkColors() BrandMarkColor {
+	return BrandMarkColor{
+		Top:    color.RGBA{R: 42, G: 195, B: 222, A: 255},
+		Center: color.RGBA{R: 26, G: 188, B: 156, A: 255},
+		Base:   color.RGBA{R: 255, G: 95, B: 95, A: 255},
+	}
 }
 
 type TextColor struct {
@@ -442,6 +457,7 @@ func ResolveFor(t *Theme, client Client) (*Scheme, error) {
 		Name:    t.Name,
 		Type:    themeType,
 		Palette: resolvedPalette,
+		Color:   Color{BrandMark: BrandMarkColors()},
 	}
 
 	if err := s.resolveTokenStruct(reflect.ValueOf(merged.Colors), reflect.ValueOf(&s.Color).Elem(), ""); err != nil {

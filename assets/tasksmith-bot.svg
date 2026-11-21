@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Full-bleed dark surface (add rx="96" if embedding directly in a README) -->
+  <rect width="512" height="512" fill="#16161e" />
+
+  <!-- Row 2 (█▜▛█): Teal head — tucked 1px under Row 1 & Row 3 to prevent anti-alias seams -->
+  <path d="M184,211 H328 V301 H292 V256 H274 V301 H238 V256 H220 V301 H184 Z" fill="#1abc9c" />
+
+  <!-- Row 1 (▜████████▛): Stepped cyan anvil helmet — flush top boundary at y=212 -->
+  <path d="M76,124 H436 V168 H418 V212 H94 V168 H76 Z" fill="#2ac3de" />
+
+  <!-- Row 3 (▟▛▀▀▜▙): Flared coral boots — flush at y=300, closing both eye cutouts -->
+  <path d="M166,300 H346 V344 H364 V388 H310 V344 H202 V388 H148 V344 H166 Z" fill="#ff5f5f" />
+</svg>

@@ -46,6 +46,7 @@ func TestTranscriptRendersHeaderAndRemountsOnReset(t *testing.T) {
 
 	for _, want := range []string{
 		"TaskSmith v1.0.0",
+		"█▜▛█",
 		"TestModel with medium effort",
 		"/workspace/initial",
 	} {
@@ -85,6 +86,26 @@ func TestTranscriptRendersHeaderAndRemountsOnReset(t *testing.T) {
 		if !strings.Contains(postResetText, want) {
 			t.Fatalf("static scrollback missing reset item %q, got:\n%s", want, postResetText)
 		}
+	}
+}
+
+func TestTranscriptFreezesMascotInReadyPose(t *testing.T) {
+	store.ClearTranscript()
+	t.Cleanup(store.ClearTranscript)
+
+	app := testutils.NewApp(t, Transcript(), 80, 24)
+	if text := app.Text(); !strings.Contains(text, "◥██████████◣") {
+		t.Fatalf("missing live startup T:\n%s", text)
+	}
+
+	store.FreezeTranscript()
+	app.WaitFor(func(string) bool { return strings.Contains(testutils.ScrollbackText(app.Backend), "█▜▛█") })
+	got := testutils.ScrollbackText(app.Backend)
+	if strings.Count(got, "█▜▛█") != 1 || strings.Contains(got, "◥██████████◣") {
+		t.Fatalf("expected exactly one static mascot and no startup T in scrollback:\n%s", got)
+	}
+	if text := app.Text(); strings.Contains(text, "▜████████▛") {
+		t.Fatalf("mascot still visible in the live region after freeze:\n%s", text)
 	}
 }
 

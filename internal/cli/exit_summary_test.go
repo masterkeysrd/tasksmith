@@ -50,9 +50,9 @@ func TestFormatExitSummary(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("expected 4 rows (3 logo + 1 blank gutter), got %d:\n%s", len(lines), out)
 	}
-	for i, line := range lines {
-		if !strings.Contains(line, "   ") {
-			t.Errorf("row %d missing logo gutter: %q", i, line)
+	for i, want := range []string{"  ▜████████▛    Changes", "     █▜▛█       Cost", "    ▟▛▀▀▜▙      Tokens", "                Resume"} {
+		if !strings.HasPrefix(lines[i], want) {
+			t.Errorf("row %d = %q, want prefix %q", i, lines[i], want)
 		}
 	}
 }
@@ -132,7 +132,9 @@ func TestFormatExitSummaryColors(t *testing.T) {
 		Usage:     sampleUsage(),
 		Color:     true,
 	})
-	if !strings.Contains(out, "\x1b[38;2;") {
-		t.Errorf("expected true-color ANSI sequences when Color is enabled, got:\n%s", out)
+	for _, want := range []string{"\x1b[38;2;42;195;222m", "\x1b[38;2;26;188;156m", "\x1b[38;2;255;95;95m"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("exit mascot missing color %q:\n%s", want, out)
+		}
 	}
 }

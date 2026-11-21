@@ -52,14 +52,19 @@ func sandboxBannerSuffix(scheme *theme.Scheme, mode api.SandboxMode) (string, st
 	}
 }
 
+type HeaderProps struct {
+	store.HeaderData
+	AnimateMascot bool
+}
+
 // Header is a trail functional component rendering the startup banner:
-// Left: 3-line ASCII brand Logo
+// Left: 3-line terminal mascot
 // Right: 3 session info lines:
 // 1. TaskSmith <version>
 // 2. <model> with <thinking> effort
 // 3. <ShortenHomePath(workspace)>
 // Below (optional): workspace warnings
-var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
+var Header = trail.FC("Header", func(props HeaderProps) trail.Node {
 	scheme := theme.UseTheme()
 
 	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Agent.Brand)
@@ -83,8 +88,12 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 		line3 = append(line3, trail.Span(trail.SpanProps{Style: sandboxStyle}, trail.Text(sandboxLabel)))
 	}
 
+	mascot := mascotMark(mascotReady)
+	if props.AnimateMascot {
+		mascot = animatedMascot(mascotIdleWait)
+	}
 	bannerContent := []trail.Node{
-		Logo(),
+		mascot,
 		trail.Box(trail.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).

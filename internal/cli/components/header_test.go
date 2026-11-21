@@ -49,17 +49,17 @@ func TestShortenHomePath(t *testing.T) {
 
 func TestHeaderRender(t *testing.T) {
 	env := testutils.NewEnv(t, 80, 24)
-	text := env.Render(Header(store.HeaderData{
+	text := env.Render(Header(HeaderProps{HeaderData: store.HeaderData{
 		Version:   "0.1.0",
 		Model:     "Claude 3.7 Sonnet",
 		Thinking:  "high",
 		Workspace: "/workspace/project",
-	}))
+	}}))
 
 	for _, want := range []string{
-		"◥██████████◣",
-		"▐██▌",
-		"◢████◣",
+		"▜████████▛",
+		"█▜▛█",
+		"▟▛▀▀▜▙",
 		"TaskSmith v0.1.0",
 		"Claude 3.7 Sonnet with high effort",
 		"/workspace/project",
@@ -72,14 +72,14 @@ func TestHeaderRender(t *testing.T) {
 
 func TestHeaderDefaults(t *testing.T) {
 	env := testutils.NewEnv(t, 80, 24)
-	text := env.Render(Header(store.HeaderData{
+	text := env.Render(Header(HeaderProps{HeaderData: store.HeaderData{
 		Workspace: "/work",
-	}))
+	}}))
 
 	for _, want := range []string{
-		"◥██████████◣",
-		"▐██▌",
-		"◢████◣",
+		"▜████████▛",
+		"█▜▛█",
+		"▟▛▀▀▜▙",
 		"TaskSmith v0.0.0-dev",
 		"default · provider default",
 		"/work",
@@ -92,7 +92,7 @@ func TestHeaderDefaults(t *testing.T) {
 
 func TestHeaderWithWarnings(t *testing.T) {
 	env := testutils.NewEnv(t, 80, 24)
-	text := env.Render(Header(store.HeaderData{
+	text := env.Render(Header(HeaderProps{HeaderData: store.HeaderData{
 		Version:   "0.2.0",
 		Model:     "Claude 3.7 Sonnet",
 		Thinking:  "high",
@@ -101,7 +101,7 @@ func TestHeaderWithWarnings(t *testing.T) {
 			"Agent configuration missing tools",
 			"Workspace config overrides default model",
 		},
-	}))
+	}}))
 
 	for _, want := range []string{
 		"TaskSmith v0.2.0",
@@ -155,13 +155,13 @@ func TestHeaderWithWarnings(t *testing.T) {
 
 func TestHeaderSandboxModeSuffix(t *testing.T) {
 	env := testutils.NewEnv(t, 80, 24)
-	text := env.Render(Header(store.HeaderData{
+	text := env.Render(Header(HeaderProps{HeaderData: store.HeaderData{
 		Version:     "0.3.0",
 		Model:       "Claude 3.7 Sonnet",
 		Thinking:    "high",
 		Workspace:   "/workspace/project",
 		SandboxMode: "native",
-	}))
+	}}))
 
 	if !strings.Contains(text, "/workspace/project · native sandbox") {
 		t.Errorf("expected workspace line with native sandbox suffix, got:\n%s", text)
@@ -171,24 +171,24 @@ func TestHeaderSandboxModeSuffix(t *testing.T) {
 		t.Fatal("expected rendered surface")
 	}
 
-	env.Render(Header(store.HeaderData{
+	env.Render(Header(HeaderProps{HeaderData: store.HeaderData{
 		Version:     "0.3.0",
 		Model:       "Claude 3.7 Sonnet",
 		Thinking:    "high",
 		Workspace:   "/workspace/project",
 		SandboxMode: "local",
-	}))
+	}}))
 	text = env.Text()
 	if !strings.Contains(text, "/workspace/project · local sandbox") {
 		t.Errorf("expected workspace line with local sandbox suffix, got:\n%s", text)
 	}
 
-	env.Render(Header(store.HeaderData{
+	env.Render(Header(HeaderProps{HeaderData: store.HeaderData{
 		Version:   "0.3.0",
 		Model:     "Claude 3.7 Sonnet",
 		Thinking:  "high",
 		Workspace: "/workspace/project",
-	}))
+	}}))
 	text = env.Text()
 	if strings.Contains(text, "sandbox") {
 		t.Errorf("expected no sandbox suffix before a session exists, got:\n%s", text)
@@ -215,12 +215,12 @@ func testHeaderThemeSwitching(t *testing.T) {
 	_ = theme.Set("dark")
 
 	env := testutils.NewEnv(t, 80, 24)
-	env.Render(Header(store.HeaderData{
+	env.Render(Header(HeaderProps{HeaderData: store.HeaderData{
 		Version:   "1.0.0",
 		Model:     "default",
 		Thinking:  "auto",
 		Workspace: "/ws",
-	}))
+	}}))
 
 	frame := env.Backend.LastFrame().Surface
 	if frame == nil {
@@ -298,12 +298,12 @@ func TestHeaderCustomRegisteredTheme(t *testing.T) {
 	}
 
 	env := testutils.NewEnv(t, 80, 24)
-	env.Render(Header(store.HeaderData{
+	env.Render(Header(HeaderProps{HeaderData: store.HeaderData{
 		Version:   "1.0.0",
 		Model:     "default",
 		Thinking:  "auto",
 		Workspace: "/ws",
-	}))
+	}}))
 
 	if env.Backend.LastFrame().Surface == nil {
 		t.Fatal("expected rendered surface")

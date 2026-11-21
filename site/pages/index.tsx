@@ -233,9 +233,9 @@ function TerminalHeader() {
           userSelect: 'none',
         }}
       >
-        <span style={{ color: TERM.logoTop }}>{' ◥██████████◣\n'}</span>
-        <span style={{ color: TERM.logoCenter }}>{'     ▐██▌    \n'}</span>
-        <span style={{ color: TERM.logoBase }}>{'    ◢████◣   '}</span>
+        <span style={{ color: TERM.logoTop }}>{'  ▜████████▛ \n'}</span>
+        <span style={{ color: TERM.logoCenter }}>{'     █▜▛█    \n'}</span>
+        <span style={{ color: TERM.logoBase }}>{'    ▟▛▀▀▜▙   '}</span>
       </pre>
       <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', lineHeight: 1.38 }}>
         <div>

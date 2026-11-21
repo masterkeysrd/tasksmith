@@ -118,14 +118,19 @@ func renderWizardHeader(wsPath string, step store.OnboardingStep, scheme *theme.
 	}
 
 	titleBar := trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexRow).MarginBottom(1),
+		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).MarginBottom(1),
 	},
-		trail.Span(trail.SpanProps{
-			Style: style.S().Bold(true).Foreground(scheme.Color.Text.Primary),
-		}, trail.Text("TaskSmith setup")),
-		trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Muted).MarginLeft(2),
-		}, trail.Text(shortPath)),
+		animatedMascot(mascotIdleWait),
+		trail.Box(trail.BoxProps{
+			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
+		},
+			trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{
+				Style: style.S().Bold(true).Foreground(scheme.Color.Text.Primary),
+			}, trail.Text("TaskSmith setup"))),
+			trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{
+				Style: style.S().Foreground(scheme.Color.Text.Muted),
+			}, trail.Text(shortPath))),
+		),
 	)
 
 	border := style.RoundedBorder().Color(scheme.Color.Border.Default)

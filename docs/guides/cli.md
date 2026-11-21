@@ -80,9 +80,9 @@ tasksmith exec --session 018f3a52-9b24-7800-842a-594247e62a1c --fork "Try the ot
 When you exit a session, TaskSmith prints a goodbye block pairing the brand mark with the session's changes, cost (or remaining quota for subscription-billed providers), token totals, and the exact command needed to resume where you left off:
 
 ```text
- ◥██████████◣   Changes    +42 -11 (5 files)
-     ▐██▌       Cost       $0.18 (1m 02s)
-    ◢████◣      Tokens     ↑ 25.1k (21.4k cached, 300 written) • ↓ 1.2k
+  ▜████████▛    Changes    +42 -11 (5 files)
+     █▜▛█       Cost       $0.18 (1m 02s)
+    ▟▛▀▀▜▙      Tokens     ↑ 25.1k (21.4k cached, 300 written) • ↓ 1.2k
                 Resume     tasksmith --session 018f3a52-9b24-7800-842a-594247e62a1c
 ```
 
@@ -98,9 +98,9 @@ The TaskSmith terminal interface is organized into a clean vertical flow:
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│  ▲ TaskSmith v0.2.0                                                    │
-│  anthropic/claude-sonnet-4-5 with auto effort                          │
-│  ~/projects/acme-service                                               │
+│  ▜████████▛    TaskSmith v0.2.0                                        │
+│     █▜▛█       anthropic/claude-sonnet-4-5 with auto effort            │
+│    ▟▛▀▀▜▙      ~/projects/acme-service                                 │
 │  ⚠ Provider "anthropic" has no API key set in .env                     │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
@@ -121,7 +121,7 @@ The TaskSmith terminal interface is organized into a clean vertical flow:
 ### 1. Header Banner & Workspace Warnings
 
 The top banner displays:
-- **Logo & Version**: Current TaskSmith build version (e.g., `v0.2.0`).
+- **Mascot & Version**: The live banner’s T turns into the mascot next to the TaskSmith version. It blinks and looks side to side while you’re idle. Input returns it to its resting pose, and the header in scrollback stays still.
 - **Active Model & Reasoning Effort**: The daemon-resolved model and current reasoning effort tier (e.g., `anthropic/claude-sonnet-4-5 with auto effort`). Draft selections are resolved by the daemon; context usage is available after the session is created.
 - **Workspace Path**: The normalized workspace path (shortening the user home directory to `~`).
 - **Status & Warning Indicators**: If a provider lacks an API key or a configuration file contains an issue, a yellow warning banner (`⚠`) highlights the problem with troubleshooting instructions. Only problems that stay true until the workspace is re-read appear here; MCP server health is reported in the transcript instead, because it changes while you work.

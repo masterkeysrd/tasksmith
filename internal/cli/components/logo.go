@@ -2,15 +2,13 @@ package components
 
 import (
 	"image/color"
+	"time"
 
+	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
-)
-
-var (
-	logoColorTop    = color.RGBA{R: 42, G: 195, B: 222, A: 255} // #2ac3de (Top Bar)
-	logoColorCenter = color.RGBA{R: 26, G: 188, B: 156, A: 255} // #1abc9c (Center Pillar)
-	logoColorBase   = color.RGBA{R: 255, G: 95, B: 95, A: 255}  // #ff5f5f (Flared Base)
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 const (
@@ -19,43 +17,110 @@ const (
 	logoLine3 = "    ◢████◣   "
 )
 
-// LogoLines returns the ASCII brand mark rows paired with their per-row colors
+// LogoLines returns the resting mascot rows paired with their per-row colors
 // for callers rendering the mark outside the component tree, such as the
 // post-REPL exit summary.
 func LogoLines() ([]string, []color.Color) {
-	return []string{logoLine1, logoLine2, logoLine3},
-		[]color.Color{logoColorTop, logoColorCenter, logoColorBase}
+	colors := theme.BrandMarkColors()
+	rows := mascotRows[mascotReady]
+	return rows[:], []color.Color{colors.Top, colors.Center, colors.Base}
 }
 
-// Logo renders the 3-line ASCII brand logo with distinct colors for the top bar,
-// center pillar, and flared base.
-var Logo = trail.SimpleFC("Logo", func() trail.Node {
-	line1Style := style.S().
-		WhiteSpace(style.WhiteSpacePre).
-		Foreground(logoColorTop)
+type mascotPose uint8
 
-	line2Style := style.S().
-		WhiteSpace(style.WhiteSpacePre).
-		Foreground(logoColorCenter)
+const (
+	mascotReady mascotPose = iota
+	mascotT
+	mascotMorph
+	mascotBlink
+	mascotLeft
+	mascotRight
+)
 
-	line3Style := style.S().
-		WhiteSpace(style.WhiteSpacePre).
-		Foreground(logoColorBase)
+const (
+	mascotHelmet   = "  ▜████████▛ "
+	mascotBoots    = "    ▟▛▀▀▜▙   "
+	mascotIdleStep = 2
+	mascotIdleWait = 4 * time.Second
+)
 
+var mascotRows = [...][3]string{
+	mascotReady: {mascotHelmet, "     █▜▛█    ", mascotBoots},
+	mascotT:     {logoLine1, logoLine2, logoLine3},
+	mascotMorph: {mascotHelmet, logoLine2, mascotBoots},
+	mascotBlink: {mascotHelmet, "     ████    ", mascotBoots},
+	mascotLeft:  {mascotHelmet, "     ▛█▜█    ", mascotBoots},
+	mascotRight: {mascotHelmet, "     █▛█▜    ", mascotBoots},
+}
+
+var mascotMark = trail.FC("MascotMark", func(pose mascotPose) trail.Node {
+	scheme := theme.UseTheme()
+	rows := mascotRows[pose]
+	row := func(text string, fg color.Color) trail.Node {
+		return trail.Span(trail.SpanProps{
+			Style: style.S().WhiteSpace(style.WhiteSpacePre).Foreground(fg),
+		}, trail.Text(text))
+	}
+
+	colors := scheme.Color.BrandMark
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexColumn).
 			MarginRight(3),
-	},
-		trail.Span(trail.SpanProps{
-			Style: line1Style,
-		}, trail.Text(logoLine1)),
-		trail.Span(trail.SpanProps{
-			Style: line2Style,
-		}, trail.Text(logoLine2)),
-		trail.Span(trail.SpanProps{
-			Style: line3Style,
-		}, trail.Text(logoLine3)),
-	)
+	}, row(rows[0], colors.Top), row(rows[1], colors.Center), row(rows[2], colors.Base))
+})
+
+var mascotAnimation = [...]struct {
+	pose  mascotPose
+	delay time.Duration
+}{
+	{mascotT, 400 * time.Millisecond},
+	{mascotMorph, 300 * time.Millisecond},
+	{mascotReady, mascotIdleWait},
+	{mascotBlink, 140 * time.Millisecond},
+	{mascotReady, 700 * time.Millisecond},
+	{mascotLeft, 350 * time.Millisecond},
+	{mascotRight, 350 * time.Millisecond},
+}
+
+type mascotAnimationState struct {
+	step     int
+	activity uint64
+}
+
+var animatedMascot = trail.FC("AnimatedMascot", func(idleWait time.Duration) trail.Node {
+	getState, setState := kitex.UseState(mascotAnimationState{})
+	state := getState()
+	frame := mascotAnimation[state.step]
+	if state.step == mascotIdleStep {
+		frame.delay = idleWait
+	}
+
+	onInput := func() {
+		setState(mascotAnimationState{step: mascotIdleStep, activity: getState().activity + 1})
+	}
+	trail.UseInput(func(_ string, _ event.KeyEvent) { onInput() })
+
+	doc := kitex.UseDocument()
+	kitex.UseEffectCleanup(func() func() {
+		if d := doc(); d != nil {
+			sub := d.AddEventListener(event.EventPaste, func(event.Event) { onInput() }, event.Capture())
+			return sub.Cancel
+		}
+		return nil
+	}, []any{})
+
+	kitex.UseTimeout(func() {
+		if getState() != state {
+			return
+		}
+		next := state.step + 1
+		if next == len(mascotAnimation) {
+			next = mascotIdleStep
+		}
+		setState(mascotAnimationState{step: next, activity: state.activity})
+	}, frame.delay, []any{state})
+
+	return mascotMark(frame.pose)
 })

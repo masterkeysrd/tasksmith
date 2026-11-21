@@ -25,7 +25,7 @@ git diff | tasksmith -p "review this diff"
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
-| **`repl`** | `tasksmith repl [flags]` | Starts the interactive terminal REPL (identical to invoking `tasksmith` directly). |
+| **`repl`** | `tasksmith repl [flags]` | Starts the [interactive terminal REPL](../guides/cli.md#1-header-banner--workspace-warnings) (identical to invoking `tasksmith` directly). |
 | **`exec`** | `tasksmith exec [flags] [prompt...]` | Runs a single headless task against the Brain daemon and exits. Prompt text comes from arguments and/or piped stdin; `--input-format jsonl` drives a bidirectional NDJSON session. See the [Headless Execution Reference](./exec.md). |
 | **`daemon serve`** | `tasksmith daemon serve [flags]` | Runs the Brain daemon server in the foreground. |
 | **`daemon start`** | `tasksmith daemon start` | Spawns and detaches the Brain daemon process in the background. |
@@ -631,7 +631,7 @@ The inspector shows the tool name with its scope, status, and estimated token co
 
 ### Onboarding & Setup Wizard (`/setup`)
 
-When TaskSmith is launched for the first time in an unconfigured directory, or when explicitly invoking `/setup`, the interactive wizard guides configuration across seven focused screens:
+When TaskSmith is launched for the first time in an unconfigured directory, or when explicitly invoking `/setup`, the interactive wizard shows the animated TaskSmith mascot and the current workspace path in its header. It guides configuration across seven screens:
 
 1. **Trust Prompt**: Review detected executable configurations (`.agents/tools/`, `.agents/mcps/`, `.env`) and grant folder or parent trust, or proceed in restricted mode.
 2. **Provider Source**: Choose whether to reuse machine-wide global providers or configure project-specific credentials.

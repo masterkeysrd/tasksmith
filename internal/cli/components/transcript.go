@@ -14,7 +14,7 @@ func renderTranscriptItem(item store.TranscriptItem, _ int) trail.Node {
 	switch item.Kind {
 	case store.TranscriptKindHeader:
 		if d, ok := item.Data.(store.HeaderData); ok {
-			return Header(d)
+			return Header(HeaderProps{HeaderData: d})
 		}
 	case store.TranscriptKindMessage:
 		if m, ok := item.Data.(store.Message); ok {
@@ -90,7 +90,7 @@ var Transcript = trail.SimpleFC("Transcript", func() trail.Node {
 
 		if !frozen {
 			children = make([]trail.Node, 0, len(items)+1)
-			children = append(children, Header(liveHeader))
+			children = append(children, Header(HeaderProps{HeaderData: liveHeader, AnimateMascot: true}))
 			for i, item := range items {
 				if n := renderTranscriptItem(item, i); n != nil {
 					children = append(children, n)

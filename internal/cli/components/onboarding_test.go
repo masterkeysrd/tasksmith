@@ -7,7 +7,29 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
+
+func TestOnboardingHeaderAnimatesMascotAndShowsWorkspace(t *testing.T) {
+	app := testutils.NewApp(t, renderWizardHeader("/workspace/example", store.StepTrust, theme.Get()), 80, 24)
+	if out := testutils.SurfaceText(app.Backend); !strings.Contains(out, "◥██████████◣") {
+		t.Fatalf("setup header did not start with the T:\n%s", out)
+	}
+	out := app.WaitFor(func(text string) bool { return strings.Contains(text, "█▜▛█") })
+	lines := testutils.TrimmedLines(out)
+	for i, line := range lines {
+		if !strings.Contains(line, "TaskSmith setup") {
+			continue
+		}
+		if i+2 >= len(lines) || !strings.Contains(line, "▜████████▛") || strings.Contains(line, "/workspace/example") ||
+			!strings.Contains(lines[i+1], "█▜▛█") || !strings.Contains(lines[i+1], "/workspace/example") ||
+			!strings.Contains(lines[i+2], "▟▛▀▀▜▙") {
+			t.Fatalf("expected the mascot beside the setup title and workspace on separate rows:\n%s", out)
+		}
+		return
+	}
+	t.Fatalf("setup title missing:\n%s", out)
+}
 
 func TestOnboardingShowsChatGPTBrowserSignIn(t *testing.T) {
 	props := OnboardingWizardProps{}
