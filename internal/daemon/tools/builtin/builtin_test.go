@@ -484,6 +484,45 @@ func TestWriteEditAndCASConflict(t *testing.T) {
 	}
 }
 
+func TestEditFallbackPreviewMatchesExecution(t *testing.T) {
+	ctx := t.Context()
+	dir, c, _, _, _ := setupBuiltinEnv(t, false)
+	const name = "config.txt"
+	const before = "start\r\n  port=8080\t\r\nend\r\n"
+	file := filepath.Join(dir, name)
+	if err := os.WriteFile(file, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	view := &message.ToolCall{ID: "view-config", Name: builtin.ToolView, Args: map[string]any{"path": name}}
+	if res, err := c.Execute(ctx, view); err != nil || res.IsError {
+		t.Fatalf("Execute(view) = %+v, %v", res, err)
+	}
+	edit := &message.ToolCall{ID: "edit-config", Name: builtin.ToolEdit, Args: map[string]any{
+		"path": name, "old_text": "  port=8080\n", "new_text": "  port=9090\n",
+	}}
+	plan, err := c.Prepare(ctx, edit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.Diff, "-  port=8080\t\n+  port=9090\n") {
+		t.Fatalf("fallback preview diff = %q", plan.Diff)
+	}
+	if got, err := os.ReadFile(file); err != nil || string(got) != before {
+		t.Fatalf("Prepare modified the file: got %q, err %v", got, err)
+	}
+	res, err := c.Execute(ctx, edit)
+	if err != nil || res.IsError {
+		t.Fatalf("Execute(edit) = %+v, %v", res, err)
+	}
+	out, ok := res.StructuredContent.(api.EditOutput)
+	if !ok || out.Diff != plan.Diff || out.Replacements != 1 {
+		t.Fatalf("Execute(edit) output = %+v, want one replacement with diff %q", res.StructuredContent, plan.Diff)
+	}
+	if got, err := os.ReadFile(file); err != nil || string(got) != "start\r\n  port=9090\r\nend\r\n" {
+		t.Fatalf("edited file = %q, err %v", got, err)
+	}
+}
+
 func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 	ctx := context.Background()
 	dir, c, _, _, ws := setupBuiltinEnv(t, true)

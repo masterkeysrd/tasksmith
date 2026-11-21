@@ -29,6 +29,7 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - [x] **Built-in `web_search` & CLI `auth`**: host-mediated web search tool and `tasksmith auth login|status|logout` subcommands
 - [x] **WARP-managed `/providers` & `spec.enabled`**: interactive `/providers` browser with model manager, catalog, and add flow, inline `F2` alias editor shared with `/model`, and manifest-driven `spec.enabled` for providers with workspace shadow overrides
 - [x] **Deterministic tool & MCP availability**: `spec.enabled` on Tool/MCP manifests plus `WORKSPACE.md` `spec.policies.tools.exclude` / `spec.policies.mcps.exclude` as the only availability switches (legacy `permissions.json` disabled lists removed), with `[Disabled]` listings and in-place toggling in `/tools` and `/mcp`
+- [x] **SmartReplace in `edit`**: exact-first matching with conservative fallbacks for line endings, whitespace, indentation, and minor typos; preserves diff previews and file-change checks.
 - [x] **ChatGPT Codex & live model catalogs** — Sign in with a ChatGPT plan and browse the models available to that account in `/providers`. The gateway uses live catalogs where providers expose them. OpenAI, Google GenAI, and Antigravity presets include updated models and tier aliases. [Codex setup](./docs/reference/providers/codex.md)
 - [ ] **Claude Code & GitHub Copilot providers**: subscription-backed `claudecode` and `github-copilot` LLM gateway providers (via `loom`) with OAuth sign-in, built-in presets, `@fast`/`@balanced`/`@smart`/`@flagship` model tiers, and quota tracking
 

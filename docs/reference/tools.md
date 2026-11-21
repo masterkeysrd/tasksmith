@@ -13,7 +13,7 @@ TaskSmith provides 22 core built-in system tools backed by virtualized OS sandbo
 | **`glob`** | `FS` | Safe & Read-Only / Auto-allowed | Matches workspace paths against wildcard glob patterns. |
 | **`grep`** | `FS` | Safe & Read-Only / Auto-allowed | Searches file contents using regular expressions with match line numbers and context. |
 | **`write`** | `FS` | Mutating / Prompts in `default`, auto in `accept_edits` | Creates or overwrites files with atomic comparison and diff tracking. |
-| **`edit`** | `FS` | Mutating / Prompts in `default`, auto in `accept_edits` | Replaces exact string matches within a file with unified diff generation. |
+| **`edit`** | `FS` | Mutating / Prompts in `default`, auto in `accept_edits` | Replaces text using exact matches first, with conservative whole-line fallbacks and a unified diff. |
 | **`remove`** | `FS` | Mutating / Prompts in `default`, auto in `accept_edits` | Deletes a file within the workspace with safety checks. |
 | **`bash`** | `Proc` | Dangerous & Open-World / Prompts in `default` & `accept_edits` | Executes commands inside the sandbox with synchronous timeout or background task delegation. |
 | **`web_fetch`** | `Net` | Prompts in `default` unless allow rule exists | Fetches web documents via HTTP/HTTPS with body extraction. |
@@ -250,7 +250,7 @@ Creates a new file or completely replaces the contents of an existing file. Enfo
 
 ### `edit`
 
-Performs an exact literal text search and replacement on an existing file, generating a unified diff.
+Replaces text in an existing file and generates a unified diff. Supply exact text from `view`. If no exact match exists, `edit` can recover some minor differences in whole-line matches while preserving the file’s line endings. It rejects ambiguous matches unless `replace_all` is set.
 
 - **Annotations**: `isReadOnly: false`, `isIdempotent: false`, `isDangerous: false`, `isOpenWorld: false`
 - **User Hint**: `"Edit file: %s"`
@@ -262,7 +262,7 @@ Performs an exact literal text search and replacement on an existing file, gener
 | `path` | string | **Yes** | Target file path within the workspace. |
 | `old_text` | string | **Yes** | Exact literal substring to search for and replace. |
 | `new_text` | string | **Yes** | Replacement text string. |
-| `replace_all` | boolean | No | Replace every occurrence of `old_text` when `true` (defaults to single match). |
+| `replace_all` | boolean | No | Replace all non-overlapping matches from the first successful matching pass (defaults to one unambiguous match). |
 | `force` | boolean | No | Bypass read-before-overwrite and compare-and-swap safety checks. |
 
 #### Output Fields

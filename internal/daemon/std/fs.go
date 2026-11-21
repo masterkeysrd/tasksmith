@@ -738,9 +738,8 @@ func (s *Std) Write(ctx context.Context, req WriteRequest) (*WriteResult, error)
 	}, nil
 }
 
-// Edit performs an exact literal string replacement on an existing text file in
-// the sandbox, enforcing Read-Before-Overwrite and Compare-And-Swap unless
-// req.Force is true.
+// Edit replaces text in an existing file in the sandbox, enforcing
+// Read-Before-Overwrite and Compare-And-Swap unless req.Force is true.
 func (s *Std) Edit(ctx context.Context, req EditRequest) (*EditResult, error) {
 	if strings.TrimSpace(req.Path) == "" {
 		return nil, fmt.Errorf("%w: path is required", ErrInvalidArgument)
@@ -769,24 +768,12 @@ func (s *Std) Edit(ctx context.Context, req EditRequest) (*EditResult, error) {
 	}
 
 	beforeStr := string(diskBytes)
-	count := strings.Count(beforeStr, req.OldText)
-	if count == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrTargetNotFound, normPath)
+	afterStr, replacements, err := smartReplace(beforeStr, req.OldText, req.NewText, req.ReplaceAll)
+	if errors.Is(err, ErrAmbiguousEdit) {
+		return nil, fmt.Errorf("%w: %s (%d matches)", err, normPath, replacements)
 	}
-	if count > 1 && !req.ReplaceAll {
-		return nil, fmt.Errorf("%w: %s (%d matches)", ErrAmbiguousEdit, normPath, count)
-	}
-
-	var (
-		afterStr     string
-		replacements int
-	)
-	if req.ReplaceAll {
-		afterStr = strings.ReplaceAll(beforeStr, req.OldText, req.NewText)
-		replacements = count
-	} else {
-		afterStr = strings.Replace(beforeStr, req.OldText, req.NewText, 1)
-		replacements = 1
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, normPath)
 	}
 
 	afterBytes := []byte(afterStr)

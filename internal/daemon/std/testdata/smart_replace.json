@@ -1,0 +1,257 @@
+[
+  {
+    "name": "exact substring",
+    "before": "workers: 4\n",
+    "old": "workers: 4",
+    "new": "workers: 8",
+    "after": "workers: 8\n",
+    "replacements": 1
+  },
+  {
+    "name": "exact before trailing fallback",
+    "before": "enable_cache: true\t\nenable_cache: true\n",
+    "old": "enable_cache: true\n",
+    "new": "enable_cache: false\n",
+    "replace_all": true,
+    "after": "enable_cache: true\t\nenable_cache: false\n",
+    "replacements": 1
+  },
+  {
+    "name": "exact ambiguity before fallback",
+    "before": "enabled\nenabled\n enabled\n",
+    "old": "enabled",
+    "new": "disabled",
+    "error": "ambiguous"
+  },
+  {
+    "name": "LF request on CRLF file",
+    "before": "[server]\r\nport=8080\r\nhost=localhost\r\n",
+    "old": "port=8080\nhost=localhost\n",
+    "new": "port=9090\nhost=localhost\ntimeout=30\n",
+    "after": "[server]\r\nport=9090\r\nhost=localhost\r\ntimeout=30\r\n",
+    "replacements": 1
+  },
+  {
+    "name": "CRLF request on LF file",
+    "before": "alpha\nbeta\ngamma",
+    "old": "alpha\r\nbeta\r\n",
+    "new": "delta\r\n",
+    "after": "delta\ngamma",
+    "replacements": 1
+  },
+  {
+    "name": "mixed endings replace all",
+    "before": "head\r\nflag=off\nmiddle\r\nflag=off\r\ntail\n",
+    "old": "flag=off\n",
+    "new": "flag=on\r\nreason=test\r\n",
+    "replace_all": true,
+    "after": "head\r\nflag=on\nreason=test\nmiddle\r\nflag=on\r\nreason=test\r\ntail\n",
+    "replacements": 2
+  },
+  {
+    "name": "mixed endings within a replaced block",
+    "before": "head\nflag=off\r\nmode=old\nend\r\n",
+    "old": "flag=off\nmode=old\n",
+    "new": "flag=on\nmode=new\n",
+    "after": "head\nflag=on\r\nmode=new\nend\r\n",
+    "replacements": 1
+  },
+  {
+    "name": "mixed endings append into unterminated final line",
+    "before": "head\ntail\r\nflag=off",
+    "old": "flag=off",
+    "new": "flag=on\nreason=test",
+    "after": "head\ntail\r\nflag=on\r\nreason=test",
+    "replacements": 1
+  },
+  {
+    "name": "trailing tabs and spaces on different lines",
+    "before": "header \t\n  retries: 3 \t\n  strategy: linear\nend\n",
+    "old": "  retries: 3\n  strategy: linear \n",
+    "new": "  retries: 5\n  strategy: exponential\n",
+    "after": "header \t\n  retries: 5\n  strategy: exponential\nend\n",
+    "replacements": 1
+  },
+  {
+    "name": "trailing fallback preserves missing final newline",
+    "before": "head\ncache=off \t",
+    "old": "cache=off\t",
+    "new": "cache=on",
+    "after": "head\ncache=on",
+    "replacements": 1
+  },
+  {
+    "name": "trailing cleanup and deletion with explicit newline",
+    "before": "keep before\nobsolete entry\t\nkeep after\n",
+    "old": "obsolete entry\n",
+    "new": "",
+    "after": "keep before\nkeep after\n",
+    "replacements": 1
+  },
+  {
+    "name": "Go four spaces to tabs with residual spaces",
+    "before": "func run() {\n\tif ready {\n\t\t logNotice()\n\t}\n}\n",
+    "old": "        if ready {\n             logNotice()\n        }\n",
+    "new": "        if ready {\n             logSuccess()\n        }\n",
+    "after": "func run() {\n\tif ready {\n\t\t logSuccess()\n\t}\n}\n",
+    "replacements": 1
+  },
+  {
+    "name": "Python shifted block keeps blank line and nested body",
+    "before": "def process():\n    if ready:\n        consume()\n\n    return result\n",
+    "old": "        if ready:\n            consume()\n\n        return result\n",
+    "new": "        if ready:\n            consume_now()\n\n        return result\n",
+    "after": "def process():\n    if ready:\n        consume_now()\n\n    return result\n",
+    "replacements": 1
+  },
+  {
+    "name": "YAML shifted block with internal spaces",
+    "before": "services:\n  api:\n    message: 'hello  world'\n    port: 3000\n",
+    "old": "api:\n  message: 'hello  world'\n  port: 3000\n",
+    "new": "api:\n  message: 'hello  world'\n  port: 3001\n",
+    "after": "services:\n  api:\n    message: 'hello  world'\n    port: 3001\n",
+    "replacements": 1
+  },
+  {
+    "name": "raw string interior spaces survive the shift",
+    "before": "func label() string {\n\tvalue := `north  south`\n\treturn value\n}\n",
+    "old": "    value := `north  south`\n    return value\n",
+    "new": "    value := `north  south`\n    return render(value)\n",
+    "after": "func label() string {\n\tvalue := `north  south`\n\treturn render(value)\n}\n",
+    "replacements": 1
+  },
+  {
+    "name": "fuzzy anchored typo with a Go closing brace",
+    "before": "package demo\nfunc reportTotals() {\n  summarizeTransactions()\n}\n",
+    "old": "func reportTotals() {\n  sumarizeTransactions()\n}\n",
+    "new": "func reportTotals() {\n  summarizeSettledTransactions()\n}\n",
+    "after": "package demo\nfunc reportTotals() {\n  summarizeSettledTransactions()\n}\n",
+    "replacements": 1
+  },
+  {
+    "name": "fuzzy transposition with indentation drift",
+    "before": "  section: finance\n    calculateAnnualRevenue()\n  end: finance\n",
+    "old": "    section: finance\n      caluclateAnnualRevenue()\n    end: finance\n",
+    "new": "    section: finance\n      calculateAnnualNetRevenue()\n    end: finance\n",
+    "after": "  section: finance\n    calculateAnnualNetRevenue()\n  end: finance\n",
+    "replacements": 1
+  },
+  {
+    "name": "overlapping line matches replace all without rematching output",
+    "before": "row\t\nrow\t\nrow\t\nrow\t\nrow\t\n",
+    "old": "row\nrow\n",
+    "new": "row\nrow\ninserted\n",
+    "replace_all": true,
+    "after": "row\nrow\ninserted\nrow\nrow\ninserted\nrow\t\n",
+    "replacements": 2
+  },
+  {
+    "name": "overlapping line matches are ambiguous without replace all",
+    "before": "row\t\nrow\t\nrow\t\n",
+    "old": "row\nrow\n",
+    "new": "updated\n",
+    "error": "ambiguous"
+  },
+  {
+    "name": "duplicate blocks with different base indentation",
+    "before": "  jobs:\n    count: 1\n\n    jobs:\n      count: 1\n",
+    "old": "jobs:\n  count: 1\n",
+    "new": "jobs:\n  count: 2\n",
+    "error": "ambiguous"
+  },
+  {
+    "name": "replace all rebases each indentation separately",
+    "before": "  jobs:\n    count: 1\n\n    jobs:\n      count: 1\n",
+    "old": "jobs:\n  count: 1\n",
+    "new": "jobs:\n  count: 2\n  ready: true\n",
+    "replace_all": true,
+    "after": "  jobs:\n    count: 2\n    ready: true\n\n    jobs:\n      count: 2\n      ready: true\n",
+    "replacements": 2
+  },
+  {
+    "name": "two high-confidence fuzzy candidates are ambiguous",
+    "before": "begin report\nsummarizeTransactions()\nend report\n---\nbegin report\nsummarizeTransactons()\nend report\n",
+    "old": "begin report\nsumarizeTransactions()\nend report\n",
+    "new": "begin report\ncalculateTotals()\nend report\n",
+    "error": "ambiguous"
+  },
+  {
+    "name": "replace all accepts multiple high-confidence fuzzy candidates",
+    "before": "begin report\nsummarizeTransactions()\nend report\n---\nbegin report\nsummarizeTransactons()\nend report\n",
+    "old": "begin report\nsumarizeTransactions()\nend report\n",
+    "new": "begin report\ncalculateTotals()\nend report\n",
+    "replace_all": true,
+    "after": "begin report\ncalculateTotals()\nend report\n---\nbegin report\ncalculateTotals()\nend report\n",
+    "replacements": 2
+  },
+  {
+    "name": "reordered context does not delete unrelated block",
+    "before": "func run() {\n  prepareInputs()\n  prepareOutputs()\n  prepareSnapshots()\n  if !ready {\n    return\n  }\n  runReport()\n}\n",
+    "old": "  if !ready {\n    return\n  }\n  prepareInputs()\n  prepareOutputs()\n  prepareSnapshots()\n  runReport()\n",
+    "new": "  if !ready {\n    return\n  }\n  runReport()\n",
+    "error": "not_found"
+  },
+  {
+    "name": "fuzzy does not permit whole block deletion",
+    "before": "begin report\nsummarizeTransactions()\nend report\n",
+    "old": "begin report\nsumarizeTransactions()\nend report\n",
+    "new": "",
+    "error": "not_found"
+  },
+  {
+    "name": "near match does not collapse literal spaces",
+    "before": "begin template\nlabel := `unusually  long title`\nend template\n",
+    "old": "begin template\nlabel := `unusually long title`\nend template\n",
+    "new": "begin template\nlabel := `unrelated`\nend template\n",
+    "error": "not_found"
+  },
+  {
+    "name": "relative Python indentation must match",
+    "before": "if enabled:\n    prepare_pipeline()\n    run_pipeline()\nfinish_pipeline()\n",
+    "old": "if enabled:\n    prepare_pipeline()\nrun_pipeline()\nfinish_pipeline()\n",
+    "new": "if enabled:\n    run_pipeline()\nfinish_pipeline()\n",
+    "error": "not_found"
+  },
+  {
+    "name": "one changed numeric character is not a typo fallback",
+    "before": "begin configuration\nrequest_timeout_ms: 6000\nend configuration\n",
+    "old": "begin configuration\nrequest_timeout_ms: 5000\nend configuration\n",
+    "new": "begin configuration\nrequest_timeout_ms: 8000\nend configuration\n",
+    "error": "not_found"
+  },
+  {
+    "name": "punctuation only anchors are too weak",
+    "before": "{\nsummarizeTransactions()\n}\n",
+    "old": "{\nsumarizeTransactions()\n}\n",
+    "new": "{\ncalculateTotals()\n}\n",
+    "error": "not_found"
+  },
+  {
+    "name": "hallucinated line with otherwise valid anchors",
+    "before": "begin report\nstartForecasting()\nend report\n",
+    "old": "begin report\nprepareNetworkConnections()\nend report\n",
+    "new": "begin report\ncalculateTotals()\nend report\n",
+    "error": "not_found"
+  },
+  {
+    "name": "fuzzy full-line matching does not accept a newline missing at EOF",
+    "before": "begin report\nsummarizeTransactions()\nend report",
+    "old": "begin report\nsumarizeTransactions()\nend report\n",
+    "new": "begin report\ncalculateTotals()\nend report\n",
+    "error": "not_found"
+  },
+  {
+    "name": "fuzzy matches only full line windows",
+    "before": "prefix begin report\nsummarizeTransactions()\nend report suffix\n",
+    "old": "begin report\nsumarizeTransactions()\nend report\n",
+    "new": "begin report\ncalculateTotals()\nend report\n",
+    "error": "not_found"
+  },
+  {
+    "name": "unsafe negative indentation shift is refused",
+    "before": "begin:\n  title: sample\n",
+    "old": "    begin:\n      title: sample\n",
+    "new": "title: migrated\n",
+    "error": "not_found"
+  }
+]
