@@ -805,6 +805,8 @@ Spawns a specialized subagent asynchronously in an isolated child session.
 | `agent` | string | Name of the subagent executing the task. |
 | `title` | string | Summary title of the delegated task. |
 | `work_dir` | string | Working directory where the subagent is executing. |
+| `model` | string | Optional. Resolved `provider/model` identifier of the child session, not the requested alias. |
+| `model_label` | string | Optional. Display label of the resolved child model. |
 | `status` | string | Execution status of the subagent (`'running'`). |
 | `message` | string | Status message explaining that the subagent is running asynchronously. |
 

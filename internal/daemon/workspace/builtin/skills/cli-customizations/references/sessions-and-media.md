@@ -18,6 +18,10 @@
   - **Timeline markers**: the fork records `⑂ Forked from "<source title>"` and the source records `⑂ Forked into "<fork title>"` at the branch point.
   - **Idle requirement**: forking requires the source session to be idle (not running or waiting on an approval/question prompt); suggest cancelling or completing the turn first if a conflict is returned.
 
+## Inspecting subagents (`/subagents`)
+
+- Run `/subagents` to see running child sessions, press `a` to include idle sessions, or press `Enter` to inspect the selected child. The list, inspector header, live activity rows, and `invoke_agent` result show the resolved model label or short ID when available, not the alias that requested it.
+
 ## Multimodal attachments & model-switch checks
 
 - **`@<path>` media mentions** (REPL and `tasksmith exec`): attach supported images (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`), PDFs (`.pdf`), and audio (`.wav`, `.mp3`, `.m4a`, `.ogg`, `.flac`), snapshotting payloads into content-addressed storage under `<session-dir>/media/<sha256>`. `.svg` files remain on the UTF-8 text path.

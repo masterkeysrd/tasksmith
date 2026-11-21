@@ -963,10 +963,12 @@ spec:
     completion: fake-balanced-model
   models:
     - id: fake-fast-model
+      label: Fake Fast
       aliases: [fast]
       capabilities:
         completion: true
     - id: fake-balanced-model
+      label: Fake Balanced
       aliases: [balanced]
       capabilities:
         completion: true
@@ -1132,8 +1134,11 @@ func TestInvokeSubagentAppliesResolvedModel(t *testing.T) {
 	if !ok {
 		t.Fatalf("child %q not registered", out.SessionID)
 	}
-	if child.Config.Model != "fake/fake-fast-model" {
-		t.Errorf("child model = %q, want fake/fake-fast-model", child.Config.Model)
+	if got := ToAPISession(child); got.Config.Model != out.Model || got.Model == nil || got.Model.ID != out.Model || got.Model.Label != out.ModelLabel {
+		t.Errorf("child model = %q (%+v), output model = %q (%q)", got.Config.Model, got.Model, out.Model, out.ModelLabel)
+	}
+	if out.Model != "fake/fake-fast-model" || out.ModelLabel != "Fake Fast" {
+		t.Errorf("output model = %q (%q), want fake/fake-fast-model (Fake Fast)", out.Model, out.ModelLabel)
 	}
 	_ = child.Wait(ctx)
 
@@ -1154,6 +1159,9 @@ func TestInvokeSubagentAppliesResolvedModel(t *testing.T) {
 	if child2.Config.Model != "fake/fake-balanced-model" {
 		t.Errorf("inherited child model = %q, want fake/fake-balanced-model", child2.Config.Model)
 	}
+	if out.Model != "fake/fake-balanced-model" || out.ModelLabel != "Fake Balanced" {
+		t.Errorf("output model = %q (%q), want fake/fake-balanced-model (Fake Balanced)", out.Model, out.ModelLabel)
+	}
 	_ = child2.Wait(ctx)
 
 	// A tier outside explore's allowlist is rejected without spawning a child.
@@ -1168,6 +1176,96 @@ func TestInvokeSubagentAppliesResolvedModel(t *testing.T) {
 	}
 	if after := len(parent.Children()); after != before {
 		t.Fatalf("rejected invoke spawned a child: %d -> %d children", before, after)
+	}
+}
+
+func TestDelegatedCommandReportsResolvedModel(t *testing.T) {
+	ctx := t.Context()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"done"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, pub, mgr := setupTwoModelEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	cmdDir := filepath.Join(ws.RootDir(), ".agents", "commands")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: delegated-model
+spec:
+  context: clean
+  models: [fast-model]
+---
+Run on the fast model.`
+	if err := os.WriteFile(filepath.Join(cmdDir, "delegated-model.command.md"), []byte(command), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	const parentModel = "fake/fake-default-model"
+	const commandModel = "fake/fast-model"
+	parent, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Parent",
+		Config: api.SessionConfig{Agent: "main", Model: parentModel},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Send(ctx, api.SendRequest{Content: "/delegated-model"}); err != nil {
+		t.Fatal(err)
+	}
+	children := parent.Children()
+	if len(children) != 1 {
+		t.Fatalf("got %d children, want 1", len(children))
+	}
+	child := children[0]
+	if err := child.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertModel := func(stage string, snapshot api.Session) {
+		t.Helper()
+		if snapshot.Config.Model != commandModel || snapshot.Model == nil || snapshot.Model.ID != commandModel {
+			t.Errorf("%s: Config.Model = %q, Model = %+v, want %s", stage, snapshot.Config.Model, snapshot.Model, commandModel)
+		}
+	}
+
+	var created, generating, idle bool
+	for _, rec := range pub.recordedRecords() {
+		if rec.topic != api.TopicSessions {
+			continue
+		}
+		switch ev := rec.event.(type) {
+		case api.SessionCreatedEvent:
+			if ev.Session.ID == child.ID {
+				created = true
+				assertModel("created event", ev.Session)
+			}
+		case api.SessionUpdatedEvent:
+			if ev.Session.ID != child.ID {
+				continue
+			}
+			assertModel(string(ev.Session.Status)+" update", ev.Session)
+			generating = generating || ev.Session.Status == api.StatusGenerating
+			idle = idle || (generating && ev.Session.Status == api.StatusIdle)
+		}
+	}
+	if !created || !generating || !idle {
+		t.Errorf("missing lifecycle snapshots: created=%t generating=%t idle after generation=%t", created, generating, idle)
+	}
+	assertModel("idle snapshot", ToAPISession(child))
+	if got := parent.configSnapshot().Model; got != parentModel {
+		t.Errorf("parent model = %q, want %s", got, parentModel)
+	}
+	if turns := prov.recordedTurns(); len(turns) == 0 || turns[0].model != commandModel {
+		t.Errorf("first provider turn did not use %s: %+v", commandModel, turns)
 	}
 }
 

@@ -182,12 +182,14 @@ type InvokeAgentInput struct {
 
 // InvokeAgentOutput defines the structured output of the invoke_agent tool.
 type InvokeAgentOutput struct {
-	SessionID string `json:"session_id" jsonschema:"Session ID of the spawned subagent."`
-	Agent     string `json:"agent" jsonschema:"Name of the subagent executing the task."`
-	Title     string `json:"title" jsonschema:"Summary title of the delegated task."`
-	WorkDir   string `json:"work_dir" jsonschema:"Working directory where the subagent is executing."`
-	Status    string `json:"status" jsonschema:"Execution status of the subagent ('running')."`
-	Message   string `json:"message" jsonschema:"Status message explaining that the subagent is running asynchronously."`
+	SessionID  string `json:"session_id" jsonschema:"Session ID of the spawned subagent."`
+	Agent      string `json:"agent" jsonschema:"Name of the subagent executing the task."`
+	Title      string `json:"title" jsonschema:"Summary title of the delegated task."`
+	WorkDir    string `json:"work_dir" jsonschema:"Working directory where the subagent is executing."`
+	Status     string `json:"status" jsonschema:"Execution status of the subagent ('running')."`
+	Message    string `json:"message" jsonschema:"Status message explaining that the subagent is running asynchronously."`
+	Model      string `json:"model,omitempty" jsonschema:"Resolved provider/model identifier of the child session, when available."`
+	ModelLabel string `json:"model_label,omitempty" jsonschema:"Display label of the resolved child model, when available."`
 }
 
 // LoadRuleInput defines the input parameters for the load_rule tool.

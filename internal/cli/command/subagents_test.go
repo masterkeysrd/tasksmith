@@ -97,11 +97,12 @@ func TestSubagentsBrowserRendering(t *testing.T) {
 		Title:     "Audit auth middleware",
 		Status:    api.StatusExecuting,
 		CreatedAt: time.Now().Add(-2 * time.Minute),
-		Config:    api.SessionConfig{Agent: "explore"},
+		Config:    api.SessionConfig{Agent: "explore", Model: "test/fast-v2"},
+		Model:     &api.Model{ID: "test/fast-v2", Label: "Fast v2"},
 	})
 
 	got = renderNode(t, SubagentsBrowser("slot-1"))
-	if !strings.Contains(got, "@explore") || !strings.Contains(got, "Audit auth middleware") || !strings.Contains(got, "executing") {
+	if !strings.Contains(got, "@explore") || !strings.Contains(got, "Audit auth middleware") || !strings.Contains(got, "executing") || !strings.Contains(got, "[Fast v2]") {
 		t.Fatalf("expected active subagent in browser, got %q", got)
 	}
 
@@ -130,7 +131,7 @@ func TestSubagentViewerRendering(t *testing.T) {
 		Title:     "Audit auth middleware",
 		Status:    api.StatusExecuting,
 		CreatedAt: time.Now().Add(-5 * time.Minute),
-		Config:    api.SessionConfig{Agent: "explore"},
+		Config:    api.SessionConfig{Agent: "explore", Model: "test/fast-v2"},
 		PendingPermissions: []api.PermissionRequest{
 			{
 				ID:       "req-1",
@@ -146,8 +147,8 @@ func TestSubagentViewerRendering(t *testing.T) {
 	}))
 
 	// Header
-	if !strings.Contains(got, "@explore") || !strings.Contains(got, "Audit auth middleware") || !strings.Contains(got, "executing") {
-		t.Fatalf("expected subagent header, got %q", got)
+	if !strings.Contains(got, "@explore [fast-v2]") || !strings.Contains(got, "Audit auth middleware") || !strings.Contains(got, "executing") {
+		t.Fatalf("expected subagent header with short model ID, got %q", got)
 	}
 
 	// Permission prompt rendered inline

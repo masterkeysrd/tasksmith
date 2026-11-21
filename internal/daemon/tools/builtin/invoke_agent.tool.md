@@ -49,6 +49,12 @@ spec:
       work_dir:
         type: string
         description: Working directory where the subagent is executing.
+      model:
+        type: string
+        description: Resolved provider/model identifier of the child session, when available.
+      model_label:
+        type: string
+        description: Display label of the resolved child model, when available.
       status:
         type: string
         description: Execution status of the subagent ('running').

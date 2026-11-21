@@ -162,9 +162,10 @@ func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (
 	}
 	s.AddChild(child)
 
+	snapshot := ToAPISession(child)
 	s.publisher.Publish(api.TopicSessions, api.SessionCreatedEvent{
 		Workspace: s.workspace.RootDir(),
-		Session:   ToAPISession(child),
+		Session:   snapshot,
 	})
 	child.notifyParentUpdate()
 
@@ -172,14 +173,19 @@ func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (
 		return api.InvokeAgentOutput{}, err
 	}
 
-	return api.InvokeAgentOutput{
-		SessionID: child.ID,
-		Agent:     child.Config.Agent,
-		Title:     child.Title,
-		WorkDir:   child.WorkDir,
+	out := api.InvokeAgentOutput{
+		SessionID: snapshot.ID,
+		Agent:     snapshot.Config.Agent,
+		Title:     snapshot.Title,
+		WorkDir:   snapshot.WorkDir,
 		Status:    "running",
-		Message:   fmt.Sprintf("Subagent %s (%s) spawned asynchronously in %s", child.Config.Agent, child.ID, child.WorkDir),
-	}, nil
+		Message:   fmt.Sprintf("Subagent %s (%s) spawned asynchronously in %s", snapshot.Config.Agent, snapshot.ID, snapshot.WorkDir),
+	}
+	if snapshot.Model != nil {
+		out.Model = snapshot.Model.ID
+		out.ModelLabel = snapshot.Model.Label
+	}
+	return out, nil
 }
 
 // configSnapshot returns a copy of the session's current configuration taken

@@ -1,16 +1,41 @@
 package components
 
 import (
+	"cmp"
 	"fmt"
 	"image/color"
+	"path"
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
+
+func SubagentModelBadge(scheme *theme.Scheme, sub api.Session) trail.Node {
+	id := sub.Config.Model
+	var label string
+	if sub.Model != nil {
+		label = sub.Model.Label
+		id = cmp.Or(sub.Model.ID, id, sub.Model.Name)
+	}
+	return subagentModelBadge(scheme, label, id)
+}
+
+func subagentModelBadge(scheme *theme.Scheme, label, id string) trail.Node {
+	label = format.CompactSingleLine(label, 24)
+	if label == "" {
+		id = strings.TrimSpace(id)
+		if id == "" || strings.HasPrefix(id, "@") {
+			return nil
+		}
+		label = format.CompactSingleLine(path.Base(id), 24)
+	}
+	return renderSuffixSpan(" ["+label+"]", scheme)
+}
 
 // SubagentColor deterministically picks a palette color for an agent persona.
 func SubagentColor(scheme *theme.Scheme, agentName string) color.Color {
@@ -85,6 +110,9 @@ var InvokeAgentToolWidget = trail.FC("InvokeAgentToolWidget", func(props InvokeA
 			Bold(true).
 			Foreground(agentColor),
 	}, trail.Text("@"+agentName)))
+	if badge := subagentModelBadge(scheme, output.ModelLabel, output.Model); badge != nil {
+		headerNodes = append(headerNodes, badge)
+	}
 
 	if title != "" {
 		headerNodes = append(headerNodes, trail.Span(trail.SpanProps{

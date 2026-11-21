@@ -16,11 +16,12 @@ func TestInvokeAgentToolWidget(t *testing.T) {
 			"agent":     "explore",
 			"title":     "Find auth middleware",
 			"workspace": "inherit",
+			"model":     "@fast",
 		},
 	}
 	response := &api.Message{
 		Name:              "invoke_agent",
-		StructuredContent: []byte(`{"session_id":"sess-sub-1","agent":"explore","title":"Find auth middleware","status":"running"}`),
+		StructuredContent: []byte(`{"session_id":"sess-sub-1","agent":"explore","title":"Find auth middleware","status":"running","model":"test/fast-v2","model_label":"Fast v2"}`),
 	}
 	failure := &api.Message{
 		Name:    "invoke_agent",
@@ -42,8 +43,8 @@ func TestInvokeAgentToolWidget(t *testing.T) {
 	got = render(MessageTool(MessageToolProps{
 		Tool: store.ToolPart{Call: call, Response: response, Status: store.ToolSucceeded},
 	}))
-	if !strings.Contains(got, "Spawned") || !strings.Contains(got, "(sess-sub-1)") {
-		t.Fatalf("expected spawned with sess-sub-1, got %q", got)
+	if !strings.Contains(got, "Spawned") || !strings.Contains(got, "(sess-sub-1)") || !strings.Contains(got, "[Fast v2]") || strings.Contains(got, "@fast") {
+		t.Fatalf("expected spawned with sess-sub-1 and resolved model, got %q", got)
 	}
 
 	// 3. Worktree suffix
@@ -62,8 +63,8 @@ func TestInvokeAgentToolWidget(t *testing.T) {
 	got = render(MessageTool(MessageToolProps{
 		Tool: store.ToolPart{Call: callWorktree, Response: responseWorktree, Status: store.ToolSucceeded},
 	}))
-	if !strings.Contains(got, "(sess-sub-2, worktree)") {
-		t.Fatalf("expected worktree suffix, got %q", got)
+	if !strings.Contains(got, "(sess-sub-2, worktree)") || strings.Contains(got, "[]") {
+		t.Fatalf("expected legacy worktree result without a model badge, got %q", got)
 	}
 
 	// 4. Failed
@@ -190,7 +191,8 @@ func TestTasksComponentUnifiedSubagentsAndTasks(t *testing.T) {
 		Status:    api.StatusExecuting,
 		Activity:  "Searching codebase",
 		CreatedAt: time.Now().Add(-10 * time.Second),
-		Config:    api.SessionConfig{Agent: "explore"},
+		Config:    api.SessionConfig{Agent: "explore", Model: "test/fast-v2"},
+		Model:     &api.Model{ID: "test/fast-v2", Label: "Fast v2"},
 	}
 	store.UpsertSubagent(sub)
 
@@ -204,14 +206,20 @@ func TestTasksComponentUnifiedSubagentsAndTasks(t *testing.T) {
 	store.UpsertTask(task)
 
 	got := render(Tasks())
-	if !strings.Contains(got, "Agent(explore: Audit auth middleware)") {
-		t.Fatalf("expected Agent(explore: Audit auth middleware), got %q", got)
+	if !strings.Contains(got, "Agent(explore: Audit auth middleware) [Fast v2]") {
+		t.Fatalf("expected running subagent with resolved model, got %q", got)
 	}
 	if !strings.Contains(got, "Searching codebase") {
 		t.Fatalf("expected activity Searching codebase, got %q", got)
 	}
 	if !strings.Contains(got, "npm test") {
 		t.Fatalf("expected task npm test, got %q", got)
+	}
+
+	sub.Title = strings.Repeat("Long title ", 12)
+	store.UpsertSubagent(sub)
+	if got := renderComponent(t, 48)(Tasks()); !strings.Contains(got, "[Fast v2]") {
+		t.Fatalf("expected resolved model on a narrow activity row, got %q", got)
 	}
 }
 

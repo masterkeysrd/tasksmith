@@ -652,7 +652,8 @@ func TestExecCommandSubagentPermissionBubblesAndApprovesByRequestID(t *testing.T
 		_ = outW.Close()
 	})
 
-	var sawSubCreated, sawSubPerm bool
+	var createdSubagent *api.Session
+	var sawSubPerm bool
 	driverDone := make(chan struct{})
 	go func() {
 		defer close(driverDone)
@@ -674,7 +675,7 @@ func TestExecCommandSubagentPermissionBubblesAndApprovesByRequestID(t *testing.T
 			case string(api.EventSessionCreated):
 				var payload api.SessionCreatedEvent
 				if json.Unmarshal(raw["payload"], &payload) == nil && payload.Session.ParentID == rootID {
-					sawSubCreated = true
+					createdSubagent = &payload.Session
 				}
 			case string(api.EventPermissionRequested):
 				var payload api.PermissionRequestedEvent
@@ -726,8 +727,12 @@ func TestExecCommandSubagentPermissionBubblesAndApprovesByRequestID(t *testing.T
 	if code := exec.ExitCode(runErr); code != exec.ExitOK {
 		t.Fatalf("exit code = %d (err=%v stderr=%q), want ok", code, runErr, errBuf.String())
 	}
-	if !sawSubCreated {
+	if createdSubagent == nil {
 		t.Fatal("expected session_created frame for child subagent")
+	}
+	const wantModel = "fake/fake-default-model"
+	if createdSubagent.Config.Model != wantModel || createdSubagent.Model == nil || createdSubagent.Model.ID != wantModel {
+		t.Fatalf("child frame config model = %q, resolved model = %+v; want %q", createdSubagent.Config.Model, createdSubagent.Model, wantModel)
 	}
 	if !sawSubPerm {
 		t.Fatal("expected permission_requested frame keyed by child subagent session_id")

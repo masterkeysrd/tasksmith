@@ -22,11 +22,11 @@ var tasksBar = trail.FC("TasksBar", func(props tasksBarProps) trail.Node {
 	scheme := theme.UseTheme()
 
 	tick, setTick := kitex.UseState(0)
-	if len(props.Subagents) > 0 {
-		kitex.UseInterval(func() {
+	kitex.UseInterval(func() {
+		if len(props.Subagents) > 0 {
 			setTick(tick() + 1)
-		}, time.Second, []any{len(props.Subagents)})
-	}
+		}
+	}, time.Second, []any{len(props.Subagents)})
 
 	dotStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap).Foreground(scheme.Color.Icon.Primary)
 	timeStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap).Foreground(scheme.Color.Text.Secondary)
@@ -69,7 +69,8 @@ var tasksBar = trail.FC("TasksBar", func(props tasksBarProps) trail.Node {
 			trail.Span(trail.SpanProps{Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(agentColor)}, trail.Text("● ")),
 			trail.Span(trail.SpanProps{Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)}, trail.Text("Agent(")),
 			trail.Span(trail.SpanProps{Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Bold(true).Foreground(agentColor)}, trail.Text(sub.Config.Agent)),
-			trail.Span(trail.SpanProps{Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)}, trail.Text(": "+title+")")),
+			trail.Span(trail.SpanProps{Style: summaryStyle.Flex(0, 1).WhiteSpace(style.WhiteSpacePre)}, trail.Text(": "+title+")")),
+			SubagentModelBadge(scheme, sub),
 			trail.Span(trail.SpanProps{
 				Style: style.S().
 					Flex(1, 1).
@@ -163,12 +164,10 @@ func subagentActivityText(sub api.Session) string {
 
 // Tasks renders an indicator list of active background tasks and running subagents.
 var Tasks = trail.SimpleFC("Tasks", func() trail.Node {
-	if store.UseHasActiveSlot() {
-		return nil
-	}
+	hasActiveSlot := store.UseHasActiveSlot()
 	runningSubs := store.UseRunningSubagents()
 	runningTasks := store.UseRunningTasks()
-	if len(runningSubs) == 0 && len(runningTasks) == 0 {
+	if hasActiveSlot || (len(runningSubs) == 0 && len(runningTasks) == 0) {
 		return nil
 	}
 	return tasksBar(tasksBarProps{Subagents: runningSubs, Tasks: runningTasks})

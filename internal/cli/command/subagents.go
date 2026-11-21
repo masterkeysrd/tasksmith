@@ -89,6 +89,7 @@ type SubagentViewerProps struct {
 
 // SubagentViewer renders a live, non-static, navigable chat view of a subagent session.
 var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) trail.Node {
+	scheme := theme.UseTheme()
 	allSubs := store.UseSubagents()
 	var sub *api.Session
 	for i := range allSubs {
@@ -182,7 +183,6 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 		}
 	})
 
-	scheme := theme.UseTheme()
 	border := style.
 		SingleBorder().
 		Top(true).
@@ -219,10 +219,13 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 		trail.Span(trail.SpanProps{
 			Style: style.S().Bold(true).Foreground(agentColor),
 		}, trail.Text("@"+agentName)),
-		trail.Span(trail.SpanProps{
-			Style: style.S().Bold(true).Foreground(scheme.Color.Text.Primary),
-		}, trail.Text(" · "+title+" ("+formatSubagentStatus(status)+")")),
 	}
+	if sub != nil {
+		headerChildren = append(headerChildren, components.SubagentModelBadge(scheme, *sub))
+	}
+	headerChildren = append(headerChildren, trail.Span(trail.SpanProps{
+		Style: style.S().Bold(true).Foreground(scheme.Color.Text.Primary),
+	}, trail.Text(" · "+title+" ("+formatSubagentStatus(status)+")")))
 	if isWorktree {
 		headerChildren = append(headerChildren, trail.Span(trail.SpanProps{
 			Style: style.S().Foreground(scheme.Color.Text.Secondary),
@@ -378,6 +381,7 @@ var emptySubagentsView = trail.FC("EmptySubagentsView", func(props emptySubagent
 
 // SubagentsBrowser renders an interactive subagents list and inline live viewer inside <Slot />.
 var SubagentsBrowser = trail.FC("SubagentsBrowser", func(slotID string) trail.Node {
+	scheme := theme.UseTheme()
 	showAll, setShowAll := kitex.UseState(false)
 	allSubs := store.UseSubagents()
 
@@ -466,6 +470,7 @@ var SubagentsBrowser = trail.FC("SubagentsBrowser", func(slotID string) trail.No
 			Value: s.ID,
 			Label: label,
 			Cells: []string{label, formatSubagentStatus(s.Status), durStr},
+			Icon:  components.SubagentModelBadge(scheme, s),
 		}
 	}
 

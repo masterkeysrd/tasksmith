@@ -412,10 +412,11 @@ When an agent runs a persistent daemon command, dev server, or test suite using 
 
 When an agent delegates work using `invoke_agent`, TaskSmith spawns an asynchronous child session (`@explore`, `@general`, or a custom agent) and surfaces its real-time status in the TUI without interrupting your main conversation flow:
 
-- **Bottom Activity Bar**: Running subagents and running background tasks share the status block directly below the composer. Each running subagent displays its persona, task title, current activity (first line of its active thought, `"Generating"`, or current tool action such as `"Reading files"` / `"Editing files"`), and live elapsed time:
+- **Bottom Activity Bar**: Running subagents and running background tasks share the status block directly below the composer. Each running subagent displays its persona, task title, resolved model, current activity (first line of its active thought, `"Generating"`, or current tool action such as `"Reading files"` / `"Editing files"`), and live elapsed time:
   ```text
-  ● Agent(explore: Trace auth token refresh)  Reading files · 14s
+  ● Agent(explore: Trace auth token refresh) [Haiku]  Reading files · 14s
   ```
+  The `invoke_agent` result, `/subagents` rows, and inspector header also show the resolved model when available. The badge uses the model's display label or short ID, not the requested alias.
 - **Non-Blocking Permission & Question Alerts**: When a background subagent needs permission or asks a question, a warning banner appears above the composer so your typing is never interrupted:
   - Press `Ctrl+Y` to approve the pending permission request (`allow_once`) immediately without leaving the composer.
   - Press `Ctrl+G` to open the waiting subagent's live view inside `<Slot />` to inspect full details, choose a broader permission scope, or answer a questionnaire.

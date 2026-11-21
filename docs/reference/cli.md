@@ -561,7 +561,7 @@ While browsing history, the composer's bottom border is replaced by a centered r
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `Enter` | Subagents Browser | Opens the live streaming chat view and history for the highlighted subagent. |
+| `Enter` | Subagents Browser | Opens the live streaming chat view and history for the highlighted subagent. Browser rows and the viewer header show the resolved model when available. |
 | `x` | Subagents Browser | Sends cancel signal to terminate the highlighted running subagent. |
 | `a` | Subagents Browser | Toggles between displaying all subagents and active running subagents only. |
 | `Esc` | Subagents Browser | Closes the subagents browser and returns to composer. |
