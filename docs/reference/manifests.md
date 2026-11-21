@@ -436,13 +436,14 @@ Every parameter declared in `spec.arguments` supports:
 | `required` | boolean | No | When `true`, invocation fails validation if the argument is omitted and has no default. |
 | `default` | string | No | Fallback value automatically injected by the renderer when omitted. |
 
-*The Markdown body below the frontmatter contains the execution instructions.*
+*The Markdown body below the frontmatter contains the execution instructions. In a slash invocation, `{{.RawArguments}}` holds the argument text as received by the daemon after the command name and surrounding whitespace are removed. Use it for free-form input instead of a structured argument definition.*
 
 ### Built-in System Commands
 
 TaskSmith embeds system-tier command manifests directly within the binary. These commands are universally available across all workspaces unless shadowed by a higher-priority definition:
 
 - **`system:init` (`/init`)**: Built-in command that inspects the workspace codebase (directory layout, existing agent/editor rule files, build/CI configs, and representative source/test files) and interactively generates or updates `AGENTS.md`. Employs `inline` context, activates the `tasksmith-customizations` skill, and requests safe read/inspection tools (`ls`, `view`, `glob`, `grep`), interactive input (`ask_question`), and file modification tools (`write`, `edit`).
+- **`system/Command/grill-me` (`/grill-me [idea, plan, or problem]`)**: Inline design interview that uses repository inspection and `ask_question` rounds to settle choices without writing files. See [Design Interviews](../guides/cli.md#design-interviews-grill-me).
 
 ---
 

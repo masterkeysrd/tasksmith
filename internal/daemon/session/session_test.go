@@ -4940,6 +4940,59 @@ Agent: {{.Agent.Name}}, Command: {{.Command.Name}}, Tools: {{len .Command.Tools}
 	}
 }
 
+func TestSessionSlashCommandGrillMe(t *testing.T) {
+	ctx := t.Context()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Design interview"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const topic = "Should retries use retry=3  or \"adaptive backoff\"?\nConsider reconnects and $timeouts."
+	for _, tt := range []struct {
+		name, input, want, absent string
+	}{
+		{"explicit topic", "/grill-me " + topic, topic, "Infer the interview subject"},
+		{"bare", "/grill-me", "Infer the interview subject", "Interview topic supplied by the user:"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			execution, err := sess.resolveCommandExecution(message.NewUserText(tt.input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if execution == nil || execution.Name != "grill-me" || execution.Subagent || execution.ContextMode != warp.CommandContextInline {
+				t.Fatalf("expected inline grill-me execution, got %+v", execution)
+			}
+			text := msgText(execution.Message)
+			if !strings.Contains(text, tt.want) || strings.Contains(text, tt.absent) || !strings.Contains(text, "ask_question") {
+				t.Fatalf("unexpected interview prompt:\n%s", text)
+			}
+		})
+	}
+
+	commandDir := filepath.Join(ws.RootDir(), ".agents", "commands")
+	if err := os.MkdirAll(commandDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const override = `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: grill-me
+---
+Local interview: {{.RawArguments}}`
+	if err := os.WriteFile(filepath.Join(commandDir, "grill-me.command.md"), []byte(override), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := sess.resolveSlashCommand(message.NewUserText("/grill-me " + topic))
+	if err != nil || msgText(rendered) != "Local interview: "+topic {
+		t.Fatalf("workspace override did not resolve, err = %v, prompt = %q", err, msgText(rendered))
+	}
+}
+
 // TestSessionSlashCommandEmbedsSkillsAndActivatesTools verifies that a /command
 // declaring spec.skills, spec.rules, and spec.tools embeds the skill's and
 // rule's rendered instructions as <embedded_skill> and <embedded_rule> blocks and

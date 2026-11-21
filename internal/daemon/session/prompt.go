@@ -264,6 +264,7 @@ func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecutio
 			(cmd.Def.Spec.Agent != "" && !strings.EqualFold(cmd.Def.Spec.Agent, s.Config.Agent))
 
 		positionalArgs, mergedGlobals := prepareSlashArgs(cmd.Def.Spec.Arguments, rawArgs)
+		mergedGlobals["RawArguments"] = strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
 		rendered, err := cmd.Def.Render(&warp.CommandRenderOptions{
 			Workspace: cat.WorkspaceSpec(),
 			Project:   cat.Project(),

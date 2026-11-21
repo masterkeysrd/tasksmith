@@ -372,6 +372,38 @@ func TestExecCommandNeedsInputGuard(t *testing.T) {
 	}
 }
 
+func TestExecGrillMeNeedsInput(t *testing.T) {
+	const topic = "Should task retries use limit=3?"
+	prov := &fakeProvider{chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+		found := false
+		for _, m := range req.Messages {
+			if text := m.GetContent().Text(); strings.Contains(text, topic) && strings.Contains(text, "Interview in dependency order") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("exec did not forward the interview topic to the built-in command")
+		}
+		return func(yield func(message.AssistantChunk, error) bool) {
+			yield(message.AssistantChunk{
+				BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+				Model:     req.Model,
+				Content: []message.Block{&message.ToolCall{ID: "tc-interview", Name: "ask_question", Args: map[string]any{
+					"questions": []map[string]any{{"type": "text", "question": "What should be retried?", "description": "Choose which failures can be retried safely."}},
+				}}},
+				Done: true,
+			}, nil)
+		}, nil
+	}}
+	_, sockPath, wsDir := setupCLITestDaemon(t, prov)
+
+	out, errOut, code := runExecCLI(t, sockPath, wsDir, "", "/grill-me "+topic)
+	if code != exec.ExitNeedsInput || !strings.Contains(errOut, "1 question(s)") || !strings.Contains(errOut, "--input-format jsonl") {
+		t.Fatalf("exit code = %d (stderr=%q stdout=%q), want needs_input with question and JSONL guidance", code, errOut, out)
+	}
+}
+
 func TestExecCommandResumeSessionFlag(t *testing.T) {
 	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
 

@@ -115,6 +115,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/statusline`** | `/status` | *(none)* | Opens the interactive editor to toggle, reorder, and move segments between rows, with a compact option and live preview; saves to `statusline.json`. See [Status Line Editor](#status-line-editor-statusline). |
 | **`/warnings`** | | *(none)* | Opens the interactive list of active workspace and MCP warnings. See [Warnings View](#warnings-view-warnings). |
 | **`/init`** | | *(none)* | Invokes the built-in `system:init` command to inspect codebase conventions and interactively generate or update `AGENTS.md`. |
+| **`/grill-me`** | | `[idea, plan, or problem]` | Runs a design interview in the current session without writing files or switching modes. Use it before `/plan` to settle design decisions. See [Design Interviews](../guides/cli.md#design-interviews-grill-me). |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
 

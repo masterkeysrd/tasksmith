@@ -186,6 +186,8 @@ Other REPL-oriented events (`task_updated`, `todos_updated`, `queue_updated`, `c
 
 Results print as plain text in `text` output and as `command_result` frames in `jsonl`. `!command` shell input works in both modes. An unrecognized bare `/name` fails fast with `unknown slash command` (exit `1`) instead of being sent to the model; filesystem paths (`/etc/hosts`) and `mcp:` references are never mistaken for commands.
 
+`/grill-me [topic]` is a forwarded workspace command. Use `--input-format jsonl` to answer its `question_requested` events with `question` control frames; a non-interactive run exits with `needs_input` at the first question.
+
 ---
 
 ## 7. Exit Codes

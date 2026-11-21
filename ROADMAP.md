@@ -20,8 +20,10 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - [x] **Subprocess network allowlisting**: per-domain outbound proxy enforcement and interactive network approvals for sandboxed child processes
 - [x] **Subscription quota tracking & enriched `/model` picker**: live SSE quota updates, adaptive status line countdowns, `/usage` quotas tab, and grouped `/model` pricing and context metadata
 - [x] **Subagent model tiers & discovery**: governed `@fast`, `@balanced`, `@smart`, `@flagship`, and `@inherit` routing enforced against `spec.models` globs, plus `manage_agents` model search
+- [x] **Resolved subagent models**: see the actual model in the activity bar, `invoke_agent` results, `/subagents` rows, and the live inspector.
 - [x] **CI/CD & `main` cutover**: GitHub Actions verification, CodeQL, docs deployment, and GoReleaser workflows alongside promotion of the `v2` architecture to `main`
 - [x] **Unified session modes & planning**: decoupled permission gates and behavioral postures (`default`, `accept_edits`, `plan`, `ask`, `auto`), safe `<session-dir>/plans/` storage, `enter_plan_mode` / `exit_plan_mode`, and `/plan`
+- [x] **Design interviews (`/grill-me`)**: verify repository facts, settle design choices in dependency order, and confirm the decision summary before planning or implementation.
 - [x] **Mode-aware pending approvals**: widening a mode resolves eligible pending permissions without granting rules or approving unsafe requests; eligible write prompts can switch directly to `accept_edits`.
 - [x] **Headless, bidirectional stdio, & SDK execution**: one-shot and bidirectional streaming `tasksmith exec` / `-p` modes (`text`, `json`, and 1:1 `api/` `jsonl` over `stdin`/`stdout`) plus Go `client` SDK lifecycle helpers for CI, pipelines, and programmatic integrations
 - [ ] **Agent Client Protocol (`tasksmith acp`)**: JSON-RPC 2.0 stdio adapter over the shared local daemon for Zed, JetBrains, and Neovim with live TUI session sharing, tool diffs, and interactive permission prompts

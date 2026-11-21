@@ -39,6 +39,8 @@ Arguments are positional in declaration order or named, for example `ticker=EXAM
 
 The body can reference a named argument as `$ticker`, `${ticker}`, or `{{.ticker}}`, and positional values as `$1`, `$2`, and so on. WARP renders the body as a Go template and interprets dollar shorthand; use `$$` for a literal dollar sign. Workspace and project template context is also available.
 
+For free-form input, use `{{.RawArguments}}` in a slash-command template. It contains the text after the command name as received by the daemon, trimmed at the ends, or an empty string for a bare invocation. Existing positional and named argument parsing is unchanged.
+
 ## Example
 
 ```markdown

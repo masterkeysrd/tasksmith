@@ -219,6 +219,24 @@ For `/effort`, `/budget`, and `/thinking`, the active model determines supported
 
 For a complete reference of flags, keybindings, and autocomplete shortcuts, see the [CLI Reference](../reference/cli.md).
 
+### Design Interviews (`/grill-me`)
+
+Use `/grill-me` when you know the outcome you want but haven't settled the choices behind it. Start with a loose idea, such as `/grill-me Should task retries be automatic?`, or type `/grill-me` on its own. With no topic, the agent uses the current conversation if the subject is clear; otherwise it asks what you want to explore. For a project question it reads relevant code and docs first. For an unrelated idea it starts with the idea, not a workspace scan.
+
+For example, suppose the code shows that a task can time out **after** sending an email. The interview might go like this:
+
+> **Agent:** If we don't know whether the email was sent, which is worse: missing a notification or sending it twice?
+>
+> **You:** Sending it twice. A customer might act on both messages.
+>
+> **Agent:** Then I'd leave those timeouts for review. Should automatic retries apply only to failures we know happened *before* sending?
+
+Your answer changed the next question: **which failures to retry** matters before **how many times to retry**. The agent groups up to five independent questions in a round; ask for one at a time if you prefer. The recommended option comes first with a reason. You can write in a different answer, narrow the scope, or say “I don't know.” If a choice needs a prototype, the agent notes what it would need to show and leaves that choice open.
+
+When you've heard enough, say so. The agent summarizes what you chose, why, and what's still open. You can correct the summary, stop there, or confirm it and request planning or implementation as a separate step. The interview itself doesn't write files or change modes.
+
+Use `/plan` afterward to turn the agreed design into an implementation plan in `<session-dir>/plans/`. With `tasksmith exec`, use [`--input-format jsonl`](../reference/exec.md) to answer the interview's questions.
+
 ---
 
 ## Interactive Modals (`<Slot />`)

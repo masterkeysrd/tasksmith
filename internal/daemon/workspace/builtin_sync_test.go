@@ -232,6 +232,73 @@ func TestBuiltinInitCommandResolves(t *testing.T) {
 	}
 }
 
+func TestBuiltinGrillMeCommandResolves(t *testing.T) {
+	setupTestXDG(t)
+	ctx := t.Context()
+	root := t.TempDir()
+	const name = "grill-me"
+	const path = "commands/grill-me.command.md"
+	builtinDir, err := EnsureBuiltinDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirrored, err := os.ReadFile(filepath.Join(builtinDir, filepath.FromSlash(path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedded, err := builtinFS.ReadFile("builtin/" + path)
+	if err != nil || string(mirrored) != string(embedded) {
+		t.Fatalf("mirrored command differs from embedded source: %v", err)
+	}
+
+	for _, source := range []string{"mirror", "embedded fallback"} {
+		t.Run(source, func(t *testing.T) {
+			if source == "embedded fallback" {
+				blocked := filepath.Join(t.TempDir(), "blocked")
+				if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("XDG_DATA_HOME", blocked)
+				xdg.ClearCache()
+				t.Cleanup(xdg.ClearCache)
+			}
+			ws, err := Open(ctx, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cat := ws.Catalog()
+			cmd, ok := cat.GetCommand(name)
+			if !ok || cmd.Namespace != warp.NamespaceSystem {
+				t.Fatalf("%s command missing from system catalog: %+v", name, cmd)
+			}
+			if cmd.Def.Metadata.DisplayName != "Grill Me" || cmd.Def.Spec.Context != warp.CommandContextInline || cmd.Def.Spec.ArgumentHint != "[idea, plan, or problem]" {
+				t.Fatalf("unexpected command metadata or spec: %+v / %+v", cmd.Def.Metadata, cmd.Def.Spec)
+			}
+			wantTools := []string{"ls", "view", "glob", "grep", "web_fetch", "web_search", "invoke_agent", "manage_agents", "ask_question"}
+			if !slices.Equal(cmd.Def.Spec.Tools, wantTools) {
+				t.Fatalf("tools = %v, want %v", cmd.Def.Spec.Tools, wantTools)
+			}
+			if !slices.ContainsFunc(cat.Commands(), func(c CommandSnapshot) bool { return c.Name == name }) {
+				t.Fatalf("%s command not listed for client registration", name)
+			}
+			resolved, err := cat.ResolveCommand("main", cmd.Def.QualifiedName())
+			if err != nil {
+				t.Fatal(err)
+			}
+			const topic = "How should task retries work?"
+			text, err := cmd.Def.Render(&warp.CommandRenderOptions{
+				Workspace: cat.WorkspaceSpec(),
+				Project:   cat.Project(),
+				Resolved:  resolved,
+				Globals:   map[string]any{"RawArguments": topic},
+			})
+			if err != nil || !strings.Contains(text, topic) || !strings.Contains(text, "Confirm shared understanding") {
+				t.Fatalf("rendered %s: %v\n%s", name, err, text)
+			}
+		})
+	}
+}
+
 // TestBuiltinSandboxPermissionReferences guards Task 7 of the sandbox plan:
 // both customization skills must sync their sandbox-and-permissions reference
 // through EnsureBuiltinDir, resolve on the main agent, and stay readable under

@@ -36,6 +36,10 @@ that the new mode allows and that are not classified as unsafe are approved once
 rejected automatically and no rules are created. Pending explicit sandbox-bypass retries and
 unlisted proxy hosts still need approval.
 
+## Design interviews (`/grill-me [topic]`)
+
+Use `/grill-me` to stress-test a design before `/plan`. The interview verifies repository facts, asks dependency-ordered rounds of up to five independent questions, then asks for confirmation of the decision summary. Omit the topic to use a clear subject from the conversation or be prompted for one. The interview does not write files, change modes, or implement anything; `/plan` is the separate step for drafting a plan. In `tasksmith exec`, use `--input-format jsonl` to answer the questions.
+
 ## Plan storage & `exit_plan_mode` review
 
 - **Safe plans directory (`<session-dir>/plans/`)**: session-scoped and automatically writable in
