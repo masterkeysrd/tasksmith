@@ -92,6 +92,8 @@ manifests, and the two browsers are where users toggle it:
   `Space` toggles it.
 - `/mcp` marks disabled servers `disabled (spec.enabled)` or `disabled (WORKSPACE.md policy)`;
   `e` (or `Space`) toggles, and restart/auth on a disabled server are refused until enabled.
+- Background MCP health changes update [`/warnings` and the status-line count](./appearance.md#inspecting-active-warnings-warnings)
+  without adding transcript announcements. Explicit `/mcp` actions still report their outcomes.
 
 A toggle is a manifest write: `spec.enabled` is patched into the resource's own workspace-scope
 manifest when it has one, otherwise the name is added to (or removed from) `WORKSPACE.md`

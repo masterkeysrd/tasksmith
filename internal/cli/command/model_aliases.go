@@ -147,7 +147,7 @@ func refreshProviderWorkspaceContext(ctx context.Context) {
 		return
 	}
 	if ws, err := c.GetWorkspace(ctx); err == nil {
-		store.SetWorkspaceWarnings(ws.Warnings)
+		store.SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
 	}
 	if state := store.GetSession(); state.Session != nil {
 		if updated, err := c.GetSession(ctx, state.Session.ID); err == nil && updated != nil {

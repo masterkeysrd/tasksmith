@@ -251,11 +251,21 @@ function TerminalHeader() {
 function TerminalComposerAndStatus({
   modeLabel,
   modeColor,
-  rightStats,
+  model,
+  effort,
+  warningCount = 0,
+  context,
+  billing,
+  tokens,
 }: {
   modeLabel: string;
   modeColor: string;
-  rightStats: string;
+  model: string;
+  effort: string;
+  warningCount?: number;
+  context: { used: string; capacity: string; percent: number };
+  billing: { label: 'Cost' | 'Quota'; value: string };
+  tokens: { input: string; output: string };
 }) {
   return (
     <>
@@ -281,21 +291,21 @@ function TerminalComposerAndStatus({
         />
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: '1rem',
-          fontSize: '0.78rem',
-          color: TERM.fgSecondary,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        <span>shift+tab cycle mode • /help commands</span>
-        <div>
-          <span style={{ color: modeColor, fontWeight: 700 }}>{modeLabel}</span>
-          <span>{rightStats}</span>
+      <div style={{ display: 'grid', gap: '0.15rem', fontSize: '0.78rem', color: TERM.fgSecondary, whiteSpace: 'nowrap' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+          <span>Shift+Tab mode · /help</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <span style={{ color: modeColor, fontWeight: 700 }}>[{modeLabel}]</span>
+            <span>{model}</span>
+            <span>{effort}</span>
+            {warningCount > 0 && (
+              <span style={{ color: TERM.permission }}>⚠ {warningCount} {warningCount === 1 ? 'warning' : 'warnings'}</span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+          <span>Context {context.used}/{context.capacity} ({context.percent}%)</span>
+          <span>{billing.label} {billing.value} · Tokens ↑{tokens.input} ↓{tokens.output}</span>
         </div>
       </div>
     </>
@@ -380,9 +390,13 @@ function AgentScenarioBody() {
       </div>
 
       <TerminalComposerAndStatus
-        modeLabel="accept_edits"
+        modeLabel="accept edits"
         modeColor={TERM.diffAdded}
-        rightStats=" · 42.8k/200.0k (21%) · $0.04 · ↑18.4k ↓1.2k · Claude Sonnet 5.5 · high"
+        model="Claude Sonnet 5.5"
+        effort="high"
+        context={{ used: '42.8k', capacity: '200.0k', percent: 21 }}
+        billing={{ label: 'Cost', value: '$0.04' }}
+        tokens={{ input: '18.4k', output: '1.2k' }}
       />
     </>
   );
@@ -467,7 +481,11 @@ function SandboxScenarioBody() {
       <TerminalComposerAndStatus
         modeLabel="default"
         modeColor={TERM.modeDefault}
-        rightStats=" · 28.1k/200.0k (14%) · $0.02 · ↑11.2k ↓0.6k · Claude Sonnet 5.5 · high"
+        model="Claude Sonnet 5.5"
+        effort="high"
+        context={{ used: '28.1k', capacity: '200.0k', percent: 14 }}
+        billing={{ label: 'Cost', value: '$0.02' }}
+        tokens={{ input: '11.2k', output: '0.6k' }}
       />
     </>
   );
@@ -566,9 +584,13 @@ function TimelineScenarioBody() {
       </div>
 
       <TerminalComposerAndStatus
-        modeLabel="accept_edits"
+        modeLabel="accept edits"
         modeColor={TERM.diffAdded}
-        rightStats=" · 42.8k/200.0k (21%) · $0.04 · ↑18.4k ↓1.2k · Claude Sonnet 5.5 · high"
+        model="Claude Sonnet 5.5"
+        effort="high"
+        context={{ used: '42.8k', capacity: '200.0k', percent: 21 }}
+        billing={{ label: 'Cost', value: '$0.04' }}
+        tokens={{ input: '18.4k', output: '1.2k' }}
       />
     </>
   );

@@ -350,7 +350,7 @@ func TestRunStartupHeader(t *testing.T) {
 	}
 
 	waitFor(t, func() bool {
-		return strings.Contains(testutils.SurfaceText(b), "shift+tab cycle mode")
+		return strings.Contains(testutils.SurfaceText(b), store.DefaultHint)
 	}, 2*time.Second, "default hint on status line")
 }
 
@@ -409,10 +409,10 @@ func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 		errCh <- Run(ctx, opts)
 	}()
 
-	// Wait for initial render where ModeDefault is hidden
 	waitFor(t, func() bool {
-		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
-	}, 2*time.Second, "initial composer render")
+		frame := testutils.SurfaceText(b)
+		return strings.Contains(frame, ">") && strings.Contains(frame, "[default]")
+	}, 2*time.Second, "initial composer render with default mode")
 
 	if store.GetSession().Config.Mode != api.ModeDefault {
 		t.Fatalf("expected ModeDefault initially, got %q", store.GetSession().Config.Mode)
@@ -425,8 +425,8 @@ func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 
 	waitFor(t, func() bool {
 		return store.GetSession().Config.Mode == api.ModeAcceptEdits &&
-			strings.Contains(testutils.SurfaceText(b), "accept_edits")
-	}, 2*time.Second, "status line to show accept_edits mode")
+			strings.Contains(testutils.SurfaceText(b), "[accept edits]")
+	}, 2*time.Second, "status line to show accept edits mode")
 
 	// Press Shift+Tab again -> cycles to plan
 	b.PostEvent(&backend.RawKeyEvent{
@@ -435,7 +435,7 @@ func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 
 	waitFor(t, func() bool {
 		return store.GetSession().Config.Mode == api.ModePlan &&
-			strings.Contains(testutils.SurfaceText(b), "plan")
+			strings.Contains(testutils.SurfaceText(b), "[plan]")
 	}, 2*time.Second, "status line to show plan mode")
 }
 
@@ -522,7 +522,7 @@ func TestRunSubmitPromptAndActiveStream(t *testing.T) {
 		return !store.GetStream().Streaming &&
 			!strings.Contains(txt, "Thinking...") &&
 			!strings.Contains(txt, "streaming • esc to cancel") &&
-			strings.Contains(txt, "shift+tab cycle mode • /help commands")
+			strings.Contains(txt, store.DefaultHint)
 	}, 2*time.Second, "UI state reset on cancel")
 }
 
@@ -870,13 +870,22 @@ func TestStatusLineCommandDoesNotCorruptLayoutOrSegments(t *testing.T) {
 
 	app := testutils.NewApp(t, App(), 100, 30)
 
-	initial := app.Text()
-	if !strings.Contains(initial, store.DefaultHint) {
-		t.Fatalf("expected initial statusline to contain hint %q, got:\n%s", store.DefaultHint, initial)
+	checkRows := func(text string, hintVisible bool) {
+		t.Helper()
+		lines := testutils.TrimmedLines(strings.TrimSpace(text))
+		if len(lines) < 2 {
+			t.Fatalf("expected two status rows, got:\n%s", text)
+		}
+		top, bottom := lines[len(lines)-2], lines[len(lines)-1]
+		if strings.Contains(top, store.DefaultHint) != hintVisible || !strings.Contains(top, "[auto]  Qwen3.8 Flash Next oQ4e-mtp  medium") {
+			t.Fatalf("unexpected status header: %q\n%s", top, text)
+		}
+		if !strings.HasPrefix(bottom, "Context 99.4k/262.1k (37%)") ||
+			!strings.HasSuffix(bottom, "Cost ≥ $0.00 · Tokens ↑42.7M ↓329.2k") {
+			t.Fatalf("unexpected status metrics: %q\n%s", bottom, text)
+		}
 	}
-	if !strings.Contains(initial, "auto · 99.4k/262.1k (37%) · ≥ $0.00 · ↑42.7M ↓329.2k") {
-		t.Fatalf("expected initial statusline segments with separators, got:\n%s", initial)
-	}
+	checkRows(app.Text(), true)
 
 	// Type /statusline and press Enter. Wait until the /statusline query itself
 	// has settled (no /stats sibling from earlier /stat prefix results), then
@@ -900,13 +909,7 @@ func TestStatusLineCommandDoesNotCorruptLayoutOrSegments(t *testing.T) {
 	if !strings.Contains(after, "Status line configuration") {
 		t.Fatalf("expected /statusline editor to open, got:\n%s", after)
 	}
-	// Verify preview status line is not corrupted or concatenated without separators
-	if strings.Contains(after, "auto99.4k") {
-		t.Fatalf("statusline layout corrupted with missing separators: got 'auto99.4k' in:\n%s", after)
-	}
-	if !strings.Contains(after, "auto · 99.4k/262.1k (37%) · ≥ $0.00 · ↑42.7M ↓329.2k · Qwen3.8 Flash Next oQ4e-mtp · medium") {
-		t.Fatalf("expected statusline preview to contain clean separated segments, got:\n%s", after)
-	}
+	checkRows(after, false)
 
 	// Press Esc to exit the editor
 	app.Press(key.Key{Code: key.KeyEscape})
@@ -914,10 +917,5 @@ func TestStatusLineCommandDoesNotCorruptLayoutOrSegments(t *testing.T) {
 	if strings.Contains(afterEsc, "Status line configuration") {
 		t.Fatalf("expected /statusline editor to close on Esc, got:\n%s", afterEsc)
 	}
-	if !strings.Contains(afterEsc, store.DefaultHint) {
-		t.Fatalf("expected hint to restore after closing editor, got:\n%s", afterEsc)
-	}
-	if !strings.Contains(afterEsc, "auto · 99.4k/262.1k (37%) · ≥ $0.00 · ↑42.7M ↓329.2k") {
-		t.Fatalf("expected statusline segments to restore cleanly after Esc, got:\n%s", afterEsc)
-	}
+	checkRows(afterEsc, true)
 }

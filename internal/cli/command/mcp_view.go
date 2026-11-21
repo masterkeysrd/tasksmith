@@ -1522,7 +1522,7 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 				report("Failed to update " + name + ": " + err.Error())
 				return
 			}
-			store.SetWorkspaceMCPServersSilent(list)
+			store.SetWorkspaceMCPServers(list)
 			if target {
 				report("Disabled " + name + ".")
 			} else {

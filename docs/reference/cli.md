@@ -112,7 +112,8 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/providers`** | `/provider` | *(none)* | Opens the interactive provider browser to enable/disable, manage models, browse catalogs, and add configured model providers from their WARP manifests, with an `F2` alias editor shared with `/model`. See [Providers Browser](#providers-browser-providers). |
 | **`/setup`** | | *(none)* | Opens the interactive workspace onboarding and configuration wizard to reconfigure providers, scopes, permissions, tools, or MCP servers. |
 | **`/login`** | `/auth`, `/signin` | `[provider]` | Opens the provider sign-in screen to authorize an OAuth provider (e.g. Antigravity) through the daemon. With no provider, resolves automatically when exactly one OAuth provider exists. See [Provider Sign-In (`/login`)](#provider-sign-in-login). |
-| **`/statusline`** | `/status` | *(none)* | Opens the interactive status line editor to toggle, reorder, and compact the status line segments with a live preview; saves to `statusline.json`. See [Status Line Fields](#status-line-fields). |
+| **`/statusline`** | `/status` | *(none)* | Opens the interactive editor to toggle, reorder, and move segments between rows, with a compact option and live preview; saves to `statusline.json`. See [Status Line Editor](#status-line-editor-statusline). |
+| **`/warnings`** | | *(none)* | Opens the interactive list of active workspace and MCP warnings. See [Warnings View](#warnings-view-warnings). |
 | **`/init`** | | *(none)* | Invokes the built-in `system:init` command to inspect codebase conventions and interactively generate or update `AGENTS.md`. |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
@@ -702,44 +703,65 @@ TaskSmith adheres to the XDG Base Directory Specification for state persistence,
 
 ## Status Line Fields
 
-The status line composition is user-configurable via `/statusline` (or by editing
-`~/.config/tasksmith/statusline.json` directly, which takes effect on the next REPL start). The
-default composition, from left to right, is: the shortcut hint, the permission mode, context
-window usage, session usage, and the model with its thinking effort. The first enabled segment
-renders on the left of the line, the remaining ones on the right separated by ` · `.
+Edit `~/.config/tasksmith/statusline.json` to configure the status line on the next REPL start, or use `/statusline` to preview changes live. The default file is:
 
-| Segment ID | Renders | Compact form |
+```json
+{
+  "rows": [
+    ["hint", "mode", "model", "effort", "warnings"],
+    ["context", "cost", "tokens"]
+  ],
+  "compact": false
+}
+```
+
+| Field | Type | Behavior |
 | :--- | :--- | :--- |
-| `hint` | Shortcut hint or the Ctrl+C cancel prompt | — |
-| `mode` | Permission mode badge | — |
-| `context` | Context window usage, e.g. `109.5k/400.0k (27%)` | `27%` |
-| `usage` | Session usage as `<cost> · ↑<input> ↓<output>` (for example `$0.42 · ↑128.4k ↓8.3k`) once the session has recorded an LLM call; updates live from `usage_updated` events. `↑` is the total prompt size (including cached tokens) and `↓` is output tokens. A leading `≥` on the cost means some calls had no pricing data. For quota-billed models the cost is replaced by remaining capacity — `94% (↻ 3h40m)` — updated from `quota_updated` events, amber under 20% and red at 0%; only the token counters render until the first reading arrives. | — |
-| `model` | Model and thinking effort, e.g. `gpt-5 · high` | model name only |
+| `rows` | Array of up to two ordered arrays of segment IDs | The first configured segment in each row is left-aligned; the rest are grouped on the right. The second row separates its right-hand segments with `·`. Rows with no visible segments are omitted. |
+| `compact` | Boolean | Defaults to `false`. Uses shorter segment text where available without changing row assignments. |
 
-Unknown segment IDs in the config file are dropped and reported; duplicates collapse; an empty
-result falls back to the default composition.
+| Segment ID | Default text | Compact text |
+| :--- | :--- | :--- |
+| `hint` | `Shift+Tab mode · /help`, or the Ctrl+C cancel prompt. | Unchanged. |
+| `mode` | Permission mode badge, e.g. `[accept edits]`. | `[edits]` for accept edits; other modes are unchanged. |
+| `model` | Active model. | Unchanged. |
+| `effort` | Thinking effort. | Unchanged. |
+| `warnings` | Active workspace and MCP warning count (`⚠ N warnings`); hidden at zero. | `⚠ N` |
+| `context` | Context window usage, e.g. `Context 109.5k/400.0k (27%)`. | `27%` |
+| `cost` | Session cost, e.g. `Cost $0.42`. A leading `≥` means some calls had no pricing data. For subscription-billed models, shows remaining quota with a reset countdown when available, e.g. `Quota 94% (↻ 3h40m)`. | Amount or remaining quota, without the label or countdown. |
+| `tokens` | Session input and output tokens, e.g. `Tokens ↑128.4k ↓8.3k`. Input includes cached tokens. | `↑128.4k ↓8.3k` |
+
+IDs are trimmed and matched case-insensitively. Unknown IDs, duplicates after the first occurrence, and rows beyond the second are dropped and reported. If no valid segments remain, the default rows are used. The former `segments` field and `usage` ID are not supported; use `rows` with separate `cost` and `tokens` IDs instead.
 
 ### Status Line Editor (`/statusline`)
 
-The editor lists enabled segments (numbered, in layout order) followed by disabled ones, and
-previews every edit live in the real status line.
-
 | Key | Action |
 | :--- | :--- |
-| `↑` / `↓` (or `k` / `j`) | Move the cursor between rows. |
-| `Space` / `Enter` / `t` | Toggle the segment under the cursor (at least one segment must stay enabled). |
-| `←` / `→` (or `h` / `l`) | Reorder the enabled segment (its layout position). |
+| `↑` / `↓` (or `k` / `j`) | Select a segment. |
+| `Space` / `Enter` / `t` | Toggle the selected segment (at least one segment must stay enabled). |
+| `←` / `→` (or `h` / `l`) | Reorder the selected enabled segment within its row. |
+| `r` | Move the selected enabled segment to the other row. |
 | `c` | Toggle compact mode. |
 | `s` | Save the composition to `~/.config/tasksmith/statusline.json` and exit. |
 | `Esc` | Discard the draft, restore the previous composition, and exit. |
 
-### Responsive Narrowing
+### Warnings View (`/warnings`)
 
-When the terminal is too narrow for the configured composition, segments shrink or hide in a
-fixed ladder regardless of their layout order: `model` compacts then hides, `usage` compacts then
-hides, `hint` is ellipsized to the available room then hides, and `context` compacts then hides.
-The `mode` badge is safety-relevant and is never hidden by narrowing — only removing it from the
-composition hides it.
+Lists active workspace warnings (including provider, model alias, and sandbox warnings) and MCP health warnings, with remediation guidance where available. Submit `/warnings` or click the status-line warning count in a mouse-enabled terminal when no other interactive view is open.
+
+| Warning or notice | Where it appears |
+| :--- | :--- |
+| Routine workspace, provider, model alias, and MCP health warnings | `/warnings` and its status-line count. Passive MCP refresh does not announce changes in the transcript. |
+| Workspace sandbox warnings | Header banner, `/warnings`, and its status-line count. |
+| Operation-specific notices and failures, security notices, and explicit `/mcp` outcomes | Inline as before. |
+
+The view does not rewrite previously printed scrollback. See the [CLI guide](../guides/cli.md#4-status-line) for the workflow.
+
+| Key | Action |
+| :--- | :--- |
+| `↑` / `↓`, `k` / `j`, or `Ctrl+P` / `Ctrl+N` | Select a warning, or scroll its details. |
+| `Enter` | Open the selected warning's details. |
+| `Esc` | Return to the list from details, or close the list. |
 
 ## Turn Spinner and Summary
 
@@ -855,6 +877,15 @@ MCP endpoints act on the workspace resolved from the `X-TaskSmith-CWD` header. S
 | `PATCH` | `/v1/workspace/mcps/{name}/enabled` | Enables or disables one server for the workspace. Body: `enabled` (bool). Disabling patches `spec.enabled: false` into a workspace-writable manifest or adds the name to `WORKSPACE.md` `spec.policies.mcps.exclude`; enabling removes whichever opt-out exists. Reloads the workspace and returns the updated `MCPServer` list. `404` `not_found` for an unknown server; `409` `manifest_read_only` for an opt-out in a non-writable manifest; `409` `policy_pattern_conflict` when a WORKSPACE.md pattern would keep a re-enabled server excluded. |
 
 Prompt rendering and resource reads reject anything the server manifest's `policies` prohibit with `403` `mcp_policy_prohibited`; the rejection message names the prohibited item, the policy section it is excluded from (`policies.tools`, `policies.prompts`, or `policies.resources`), and the manifest path. Pass `allowProhibited: true` in the prompt or resource body to permit a single prohibited use without editing the manifest. See [Tools & MCP Servers](../guides/tools-and-mcp.md) for manifest authoring and [Manifests](./manifests.md) for the `MCP` schema.
+
+## Workspace Response
+
+`GET /v1/workspace` returns the resolved `Workspace` for the `X-TaskSmith-CWD` header. Each warning field is omitted when empty:
+
+| JSON field | Type | Description |
+| :--- | :--- | :--- |
+| `warnings` | array of strings | Full workspace warning list, including provider, model alias, and sandbox warnings. MCP health is tracked separately via `/v1/workspace/mcps`. |
+| `sandbox_warnings` | array of strings | Sandbox-specific subset (`Workspace.SandboxWarnings`) used in the REPL header. Every entry is also included in `warnings`. |
 
 ## Workspace Onboarding & Trust HTTP Endpoints
 

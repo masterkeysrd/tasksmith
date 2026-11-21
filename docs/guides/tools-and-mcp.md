@@ -257,9 +257,7 @@ Whatever the browser does, it is answered with a TaskSmith page rather than a wa
 
 A server that authenticates with static credentials has no authorization page to open, so the same action tells you which credential to provide instead — the environment variable to set, the header to render, or the credential file to point at — and you run `/mcp restart <name>` once it is in place. Unresolved `${VAR}` placeholders in `spec.headers` or `spec.env` are reported the same way.
 
-You do not have to go looking for broken servers. The first time the CLI sees a server settle into a broken state it writes a warning into the conversation timeline naming the server and the command to run — `MCP server "linear" requires authentication — run /mcp auth linear`, or `MCP server "search" failed to connect (connection refused) — run /mcp to inspect` — and again if the same server later breaks for a different reason. It is said once per problem, so refreshing the listing never repeats it.
-
-That line lives in the transcript rather than the startup banner deliberately. The banner is printed once and frozen when the conversation starts, so a server that authorizes or fails minutes later would either go unnoticed or leave a warning on screen long after it stopped being true. A timeline line stays where it was written: scroll back to read it, and nothing stale is held in front of you. See [CLI Interface](cli.md#1-header-banner--workspace-warnings).
+Passive server refresh updates the [status-line warning count and `/warnings` view](cli.md#4-status-line) without adding transcript announcements. Open `/warnings` for the current problem and suggested next step, such as `/mcp auth <name>` for a server that needs authorization. Resolved health warnings drop out of the view; previously printed scrollback is not rewritten. Explicit `/mcp` actions such as authorization and restart still report their outcomes as before.
 
 ---
 

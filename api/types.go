@@ -13,13 +13,14 @@ const HeaderCWD = "X-TaskSmith-CWD"
 
 // Workspace describes the resolved configuration metadata for a workspace directory.
 type Workspace struct {
-	Name         string   `json:"name"`
-	RootDir      string   `json:"root_dir"`
-	CWD          string   `json:"cwd,omitempty"`
-	DefaultAgent string   `json:"default_agent"`
-	DefaultModel *Model   `json:"default_model,omitempty"`
-	Warnings     []string `json:"warnings,omitempty"`
-	IsRestricted bool     `json:"is_restricted,omitempty"`
+	Name            string   `json:"name"`
+	RootDir         string   `json:"root_dir"`
+	CWD             string   `json:"cwd,omitempty"`
+	DefaultAgent    string   `json:"default_agent"`
+	DefaultModel    *Model   `json:"default_model,omitempty"`
+	Warnings        []string `json:"warnings,omitempty"`
+	SandboxWarnings []string `json:"sandbox_warnings,omitempty"`
+	IsRestricted    bool     `json:"is_restricted,omitempty"`
 	// SandboxMode reports the sandbox isolation backend new sessions in this
 	// workspace get by default ("native" or "local").
 	SandboxMode SandboxMode `json:"sandbox_mode,omitempty"`

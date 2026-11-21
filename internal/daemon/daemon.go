@@ -499,11 +499,10 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 
 	cleanDir, _ := fsutils.CleanPath(rawWS)
 
-	// Workspace warnings are the durable, startup-time problems a user has to fix
-	// before the session is useful. MCP server health is not one of them: it changes
-	// while the session runs, so the CLI reports it in the timeline as the listing is
-	// polled. See store.SetWorkspaceMCPServers.
-	var warnings []string
+	// Workspace warnings are durable startup diagnostics. MCP server health changes
+	// during the session, so the CLI reports it in /warnings from the MCP listing
+	// instead of this response.
+	var sandboxWarnings []string
 
 	// The effective sandbox posture comes from sandbox.json (global + project
 	// scopes); a manager failure degrades to the platform default rather than
@@ -521,13 +520,14 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 				// here; an explicit native request on such a host always
 				// deserves the warning too.
 				if eff.Mode == "" || eff.Mode == api.SandboxNative {
-					warnings = append(warnings, "Kernel sandboxing is unavailable on this host ("+availErr.Error()+"); sessions fall back to in-process (local) isolation, or fail when failIfUnavailable is enabled.")
+					sandboxWarnings = append(sandboxWarnings, "Kernel sandboxing is unavailable on this host ("+availErr.Error()+"); sessions fall back to in-process (local) isolation, or fail when failIfUnavailable is enabled.")
 				}
 			}
 		} else {
-			warnings = append(warnings, "sandbox.json could not be read ("+err.Error()+"); falling back to the default sandbox posture — check the global and project sandbox.json files for syntax errors.")
+			sandboxWarnings = append(sandboxWarnings, "sandbox.json could not be read ("+err.Error()+"); falling back to the default sandbox posture — check the global and project sandbox.json files for syntax errors.")
 		}
 	}
+	warnings := append([]string(nil), sandboxWarnings...)
 	if wsWarnings := rt.Workspace().Catalog().Warnings(); len(wsWarnings) > 0 {
 		warnings = append(warnings, wsWarnings...)
 	}
@@ -540,14 +540,15 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 	}
 
 	return &api.Workspace{
-		Name:         rt.Workspace().Name(),
-		RootDir:      rt.Workspace().RootDir(),
-		CWD:          cleanDir,
-		DefaultAgent: owner.Workspace().Catalog().DefaultAgentName(),
-		DefaultModel: resolvedDefault,
-		Warnings:     warnings,
-		IsRestricted: rt.Workspace().IsRestricted(),
-		SandboxMode:  sandboxMode,
+		Name:            rt.Workspace().Name(),
+		RootDir:         rt.Workspace().RootDir(),
+		CWD:             cleanDir,
+		DefaultAgent:    owner.Workspace().Catalog().DefaultAgentName(),
+		DefaultModel:    resolvedDefault,
+		Warnings:        warnings,
+		SandboxWarnings: sandboxWarnings,
+		IsRestricted:    rt.Workspace().IsRestricted(),
+		SandboxMode:     sandboxMode,
 	}, nil
 }
 

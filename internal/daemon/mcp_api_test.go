@@ -465,11 +465,8 @@ func TestWorkspaceMCPDefinitionsResolveByShortAndQualifiedName(t *testing.T) {
 	}
 }
 
-// TestGetWorkspaceExcludesMCPWarnings verifies MCP server health never reaches the
-// workspace payload. The header banner is frozen once the conversation starts, so
-// health that changes while the session runs would jitter it and then go stale; the
-// CLI reports it in the timeline from the MCP listing instead. Workspace warnings
-// that are genuinely durable still have to come through.
+// TestGetWorkspaceExcludesMCPWarnings verifies that the CLI gets changing MCP
+// health from the MCP listing, not from the workspace response.
 func TestGetWorkspaceExcludesMCPWarnings(t *testing.T) {
 	ctx := context.Background()
 	srv, rt, wsDir := setupMCPDaemon(t, map[string]string{"github.mcp.yaml": mcpManifestWithPolicies})

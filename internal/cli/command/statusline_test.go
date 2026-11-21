@@ -1,31 +1,22 @@
 package command
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
-// resetStatusLine restores the default composition so view tests start from a
-// known state regardless of test ordering within the package.
-func resetStatusLine(t *testing.T) {
-	t.Helper()
-	if _, err := store.ApplyStatusLine(store.StatusLineConfig{Segments: store.DefaultStatusLineSegments}); err != nil {
-		t.Fatalf("reset status line: %v", err)
-	}
-}
-
 func TestStatusLineCommandArgsValidation(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
-	resetStatusLine(t)
-
 	reg := NewRegistry()
 
 	if err := reg.Execute("/statusline extra"); err == nil {
@@ -33,7 +24,7 @@ func TestStatusLineCommandArgsValidation(t *testing.T) {
 	}
 
 	store.ClearSlot()
-	defer store.ClearSlot()
+	t.Cleanup(store.ClearSlot)
 	if err := reg.Execute("/statusline"); err != nil {
 		t.Fatalf("unexpected error running /statusline: %v", err)
 	}
@@ -48,45 +39,78 @@ func TestStatusLineCommandArgsValidation(t *testing.T) {
 	}
 }
 
-func TestStatusLineEditorView(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
-	resetStatusLine(t)
+func openStatusLineEditor(t *testing.T, rows [][]store.StatusLineSegmentID) *testutils.App {
+	t.Helper()
+	t.Cleanup(xdg.ClearCache)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith")
+	xdg.ClearCache()
+
+	original := store.GetStatusLine()
+	t.Cleanup(func() {
+		if _, err := store.ApplyStatusLine(original); err != nil {
+			t.Errorf("restore status line: %v", err)
+		}
+	})
+	if _, err := store.ApplyStatusLine(store.StatusLineConfig{Rows: rows}); err != nil {
+		t.Fatalf("set initial status line: %v", err)
+	}
 
 	store.ClearSlot()
-	defer store.ClearSlot()
+	t.Cleanup(store.ClearSlot)
+	if err := NewRegistry().Execute("/statusline"); err != nil {
+		t.Fatalf("open statusline editor: %v", err)
+	}
+	return testutils.NewApp(t, components.Slot(), 100, 30)
+}
 
-	app := testutils.NewApp(t, StatusLineEditor("slot-statusline"), 100, 30)
+func assertStatusLineRows(t *testing.T, got, want [][]store.StatusLineSegmentID) {
+	t.Helper()
+	if !slices.EqualFunc(got, want, slices.Equal[[]store.StatusLineSegmentID]) {
+		t.Fatalf("statusline rows = %v, want %v", got, want)
+	}
+}
+
+func TestStatusLineEditorShowsIgnoredEntries(t *testing.T) {
+	app := openStatusLineEditor(t, [][]store.StatusLineSegmentID{{store.StatusLineHint, "nope"}, {store.StatusLineHint}})
+	out := app.Text()
+	if !strings.Contains(out, `Ignored entries: nope, duplicate segment "hint"`) {
+		t.Fatalf("expected validation details in the editor:\n%s", out)
+	}
+}
+
+func TestStatusLineEditorViewAndSave(t *testing.T) {
+	app := openStatusLineEditor(t, [][]store.StatusLineSegmentID{
+		{store.StatusLineHint, store.StatusLineMode},
+		{store.StatusLineContext, store.StatusLineCost},
+	})
 
 	text := app.Text()
-	if !strings.Contains(text, "Status line configuration") {
-		t.Fatalf("expected editor title, got:\n%s", text)
-	}
-	for _, want := range []string{"hint", "mode", "context", "usage", "model", "Save", "compact: off"} {
+	for _, want := range []string{"Status line configuration", "Row 1", "Row 2", "Disabled", "hint", "mode", "model", "effort", "warnings", "context", "cost", "tokens", "r Move to other row", "Save", "compact: off"} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("expected row %q in:\n%s", want, text)
+			t.Fatalf("expected %q in:\n%s", want, text)
 		}
 	}
 
-	// Space toggles the row under the cursor (first row: hint) off live.
-	app.Press(key.Key{Code: ' ', Text: " "})
-	if segments := store.GetStatusLine().Segments; len(segments) != 4 || slices.Contains(segments, store.StatusLineHint) {
-		t.Fatalf("expected hint toggled off, got %v", segments)
-	}
-	if !strings.Contains(app.Text(), "hint shortcut hint / cancel prompt (disabled)") {
-		t.Fatalf("expected hint row marked disabled after toggle:\n%s", app.Text())
-	}
-
-	// 'c' toggles compact mode.
-	app.Press(key.Key{Code: 'c', Text: "c"})
-	if !store.GetStatusLine().Compact {
-		t.Fatal("expected compact enabled after 'c'")
-	}
-	if !strings.Contains(app.Text(), "compact: on") {
-		t.Fatalf("expected compact row to report on:\n%s", app.Text())
+	text = app.Press(key.Key{Code: ' ', Text: " "})
+	assertStatusLineRows(t, store.GetStatusLine().Rows, [][]store.StatusLineSegmentID{
+		{store.StatusLineMode}, {store.StatusLineContext, store.StatusLineCost},
+	})
+	_, disabled, ok := strings.Cut(text, "Disabled")
+	if !ok || !strings.Contains(disabled, "❯ hint") {
+		t.Fatalf("expected hint selected under Disabled after toggle:\n%s", text)
 	}
 
-	// 's' persists the draft and dismisses the editor.
+	app.Press(key.Key{Code: key.KeyUp})
+	app.Press(key.Key{Code: 'r', Text: "r"})
+	want := [][]store.StatusLineSegmentID{{store.StatusLineMode, store.StatusLineCost}, {store.StatusLineContext}}
+	assertStatusLineRows(t, store.GetStatusLine().Rows, want)
+
+	text = app.Press(key.Key{Code: 'c', Text: "c"})
+	if !store.GetStatusLine().Compact || !strings.Contains(text, "compact: on") {
+		t.Fatalf("expected compact mode on after c:\n%s", text)
+	}
+
 	app.Press(key.Key{Code: 's', Text: "s"})
 	path, err := xdg.SubConfigDir("statusline.json")
 	if err != nil {
@@ -96,12 +120,13 @@ func TestStatusLineEditorView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read saved config: %v", err)
 	}
-	saved := string(data)
-	if !strings.Contains(saved, `"mode"`) || strings.Contains(saved, `"hint"`) {
-		t.Fatalf("unexpected saved config:\n%s", saved)
+	var saved store.StatusLineConfig
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("decode saved config: %v", err)
 	}
-	if !strings.Contains(saved, `"compact": true`) {
-		t.Fatalf("expected compact persisted:\n%s", saved)
+	assertStatusLineRows(t, saved.Rows, want)
+	if !saved.Compact {
+		t.Fatalf("expected compact persisted:\n%s", data)
 	}
 	if store.GetSlot().Active != nil {
 		t.Fatalf("expected slot dismissed after save, got %+v", store.GetSlot().Active)
@@ -109,37 +134,28 @@ func TestStatusLineEditorView(t *testing.T) {
 }
 
 func TestStatusLineEditorEscapeRestores(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
-	resetStatusLine(t)
-
-	store.ClearSlot()
-	defer store.ClearSlot()
-
-	original := joinSegments(store.GetStatusLine().Segments)
-
-	app := testutils.NewApp(t, StatusLineEditor("slot-statusline"), 100, 30)
-	// Toggle first segment (hint)
-	app.Press(key.Key{Code: ' ', Text: " "})
-	// Move cursor down to second segment (triggers re-render)
-	app.Press(key.Key{Code: 'j', Text: "j"})
-	// Toggle second segment
-	app.Press(key.Key{Code: ' ', Text: " "})
-	if joinSegments(store.GetStatusLine().Segments) == original {
-		t.Fatal("expected draft toggle to change the live config")
+	original := [][]store.StatusLineSegmentID{{store.StatusLineHint}, {store.StatusLineContext}}
+	app := openStatusLineEditor(t, original)
+	app.Press(key.Key{Code: 'r', Text: "r"})
+	app.Press(key.Key{Code: 'c', Text: "c"})
+	assertStatusLineRows(t, store.GetStatusLine().Rows, [][]store.StatusLineSegmentID{
+		nil, {store.StatusLineContext, store.StatusLineHint},
+	})
+	if !store.GetStatusLine().Compact {
+		t.Fatal("expected live preview to enable compact mode before discarding")
 	}
 
 	app.Press(key.Key{Code: key.KeyEscape})
-
-	if got := joinSegments(store.GetStatusLine().Segments); got != original {
-		t.Fatalf("escape should restore original config, got %q want %q", got, original)
+	assertStatusLineRows(t, store.GetStatusLine().Rows, original)
+	if store.GetStatusLine().Compact {
+		t.Fatal("escape should restore original compact mode")
 	}
 	path, err := xdg.SubConfigDir("statusline.json")
 	if err != nil {
 		t.Fatalf("resolve config path: %v", err)
 	}
-	if _, err := os.Stat(path); err == nil {
-		t.Fatal("escape must not persist the draft")
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("escape must not persist the draft, stat error: %v", err)
 	}
 	if store.GetSlot().Active != nil {
 		t.Fatalf("expected slot dismissed after escape, got %+v", store.GetSlot().Active)
@@ -147,32 +163,60 @@ func TestStatusLineEditorEscapeRestores(t *testing.T) {
 }
 
 func TestStatusLineEditorReorder(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
-	resetStatusLine(t)
-
-	store.ClearSlot()
-	defer store.ClearSlot()
-
-	app := testutils.NewApp(t, StatusLineEditor("slot-statusline"), 100, 30)
-
-	// Cursor starts on the first enabled segment (hint); right swaps it with mode.
-	app.Press(key.Key{Code: 'l', Text: "l"})
-	segments := store.GetStatusLine().Segments
-	if len(segments) < 2 || segments[0] != store.StatusLineMode || segments[1] != store.StatusLineHint {
-		t.Fatalf("expected hint/mode swapped, got %v", segments)
+	original := [][]store.StatusLineSegmentID{
+		{store.StatusLineHint, store.StatusLineMode}, {store.StatusLineContext, store.StatusLineTokens},
 	}
-	// Left moves the cursor back and swaps them again.
+	app := openStatusLineEditor(t, original)
+	app.Press(key.Key{Code: key.KeyRight})
+	swapped := [][]store.StatusLineSegmentID{
+		{store.StatusLineMode, store.StatusLineHint}, {store.StatusLineContext, store.StatusLineTokens},
+	}
+	assertStatusLineRows(t, store.GetStatusLine().Rows, swapped)
+
+	app.Press(key.Key{Code: key.KeyRight})
+	assertStatusLineRows(t, store.GetStatusLine().Rows, swapped)
+	app.Press(key.Key{Code: key.KeyDown})
+	app.Press(key.Key{Code: key.KeyLeft})
+	assertStatusLineRows(t, store.GetStatusLine().Rows, swapped)
+	app.Press(key.Key{Code: key.KeyUp})
 	app.Press(key.Key{Code: 'h', Text: "h"})
-	if got := store.GetStatusLine().Segments; got[0] != store.StatusLineHint {
-		t.Fatalf("expected hint restored to first position, got %v", got)
+	assertStatusLineRows(t, store.GetStatusLine().Rows, original)
+}
+
+func TestStatusLineEditorReenableUsesDefaultRow(t *testing.T) {
+	for row, defaults := range store.DefaultStatusLineRows {
+		t.Run(fmt.Sprintf("row_%d", row+1), func(t *testing.T) {
+			id := defaults[0]
+			other := 1 - row
+			anchor := store.DefaultStatusLineRows[other][0]
+			initial := make([][]store.StatusLineSegmentID, 2)
+			initial[other] = []store.StatusLineSegmentID{id, anchor}
+			app := openStatusLineEditor(t, initial)
+
+			app.Press(key.Key{Code: 't', Text: "t"})
+			want := make([][]store.StatusLineSegmentID, 2)
+			want[other] = []store.StatusLineSegmentID{anchor}
+			assertStatusLineRows(t, store.GetStatusLine().Rows, want)
+			app.Press(key.Key{Code: 'r', Text: "r"})
+			assertStatusLineRows(t, store.GetStatusLine().Rows, want)
+			app.Press(key.Key{Code: key.KeyEnter})
+			want[row] = []store.StatusLineSegmentID{id}
+			assertStatusLineRows(t, store.GetStatusLine().Rows, want)
+		})
 	}
 }
 
-func joinSegments(segments []store.StatusLineSegmentID) string {
-	parts := make([]string, len(segments))
-	for i, seg := range segments {
-		parts[i] = string(seg)
+func TestStatusLineEditorRetainsLastEnabledSegment(t *testing.T) {
+	original := [][]store.StatusLineSegmentID{nil, {store.StatusLineMode}}
+	app := openStatusLineEditor(t, original)
+	app.Press(key.Key{Code: ' ', Text: " "})
+	assertStatusLineRows(t, store.GetStatusLine().Rows, original)
+
+	text := app.Press(key.Key{Code: 'r', Text: "r"})
+	assertStatusLineRows(t, store.GetStatusLine().Rows, [][]store.StatusLineSegmentID{{store.StatusLineMode}, nil})
+	if !strings.Contains(text, "❯ mode") {
+		t.Fatalf("expected mode to stay selected after moving to an empty row:\n%s", text)
 	}
-	return strings.Join(parts, ",")
+	app.Press(key.Key{Code: 'r', Text: "r"})
+	assertStatusLineRows(t, store.GetStatusLine().Rows, original)
 }

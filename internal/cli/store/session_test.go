@@ -275,9 +275,10 @@ func TestInitSessionWithWorkspaceWarnings(t *testing.T) {
 		handler: func(req *http.Request) (*http.Response, error) {
 			if req.Method == http.MethodGet && req.URL.Path == "/v1/workspace" {
 				ws := api.Workspace{
-					Name:     "test-ws",
-					RootDir:  "/workspace",
-					Warnings: []string{"warning 1", "warning 2"},
+					Name:            "test-ws",
+					RootDir:         "/workspace",
+					Warnings:        []string{"provider warning", "sandbox fallback"},
+					SandboxWarnings: []string{"sandbox fallback"},
 				}
 				data, _ := json.Marshal(ws)
 				resp := &http.Response{
@@ -307,10 +308,14 @@ func TestInitSessionWithWorkspaceWarnings(t *testing.T) {
 		Model: "test-model",
 	})
 
-	hd := CurrentHeaderData()
-	if len(hd.Warnings) != 2 || hd.Warnings[0] != "warning 1" || hd.Warnings[1] != "warning 2" {
-		t.Fatalf("unexpected Warnings in CurrentHeaderData after InitSession: %v", hd.Warnings)
+	if got := CurrentHeaderData().Warnings; len(got) != 1 || got[0] != "sandbox fallback" {
+		t.Fatalf("expected only sandbox warning in header: %v", got)
 	}
+	state := GetApp()
+	if warnings := (warningSources{workspace: state.Warnings}).warnings(); len(warnings) != 2 || warnings[0].Message != "provider warning" || warnings[1].Message != "sandbox fallback" {
+		t.Fatalf("expected both warnings in warning view: %v", warnings)
+	}
+	t.Cleanup(func() { SetWorkspaceWarnings(nil) })
 }
 
 func TestInitSessionDraftSandboxBadge(t *testing.T) {
@@ -993,10 +998,7 @@ func sessionJSONResponse(payload any) (*http.Response, error) {
 	return resp, nil
 }
 
-// TestInitSessionAnnouncesMCPServerWarnings checks that servers the daemon reports
-// as needing authentication or failing to connect are announced in the timeline
-// immediately, while the header keeps only the workspace's own durable warnings.
-func TestInitSessionAnnouncesMCPServerWarnings(t *testing.T) {
+func TestInitSessionCollectsMCPServerWarnings(t *testing.T) {
 	ResetApp()
 	defer ResetApp()
 	ResetSession()
@@ -1021,24 +1023,20 @@ func TestInitSessionAnnouncesMCPServerWarnings(t *testing.T) {
 
 	InitSession(context.Background(), c, InitSessionOptions{Agent: "test-agent", Model: "test-model"})
 
-	if warnings := CurrentHeaderData().Warnings; len(warnings) != 1 || warnings[0] != "provider warning" {
-		t.Fatalf("expected the header to carry only the workspace warning, got %v", warnings)
+	if warnings := CurrentHeaderData().Warnings; len(warnings) != 0 {
+		t.Fatalf("routine warnings must not reach the header: %v", warnings)
 	}
-
-	warnings := transcriptWarnings(t)
-	if len(warnings) != 2 {
-		t.Fatalf("expected one timeline warning per unhealthy server, got %v", warnings)
+	if warnings := transcriptWarnings(t); len(warnings) != 0 {
+		t.Fatalf("passive health must not reach the transcript: %v", warnings)
 	}
-	if !strings.Contains(warnings[0], "github") || !strings.Contains(warnings[1], "search") {
-		t.Errorf("unexpected MCP warnings: %v", warnings)
+	state := GetApp()
+	warnings := (warningSources{workspace: state.Warnings, mcp: state.MCPServers}).warnings()
+	if len(warnings) != 3 || warnings[0].Message != "provider warning" || !strings.Contains(warnings[1].Message, "github") || !strings.Contains(warnings[2].Message, "search") {
+		t.Fatalf("expected workspace and MCP warnings in the view, got %v", warnings)
 	}
 }
 
-// TestInitSessionAnnouncesAfterServersSettle covers the ordering problem: MCP
-// servers connect in the background, so they are still reported as connecting when
-// the session initializes. The timeline must gain the announcement once they settle
-// rather than never saying anything at all.
-func TestInitSessionAnnouncesAfterServersSettle(t *testing.T) {
+func TestInitSessionCollectsWarningsAfterMCPServersSettle(t *testing.T) {
 	ResetApp()
 	defer ResetApp()
 	ResetSession()
@@ -1049,8 +1047,6 @@ func TestInitSessionAnnouncesAfterServersSettle(t *testing.T) {
 	defer SetWorkspaceMCPServers(nil)
 
 	origInterval, origTimeout := mcpSettleInterval, mcpSettleTimeout
-	// The interval stays longer than the synchronous part of InitSession so the
-	// test can assert nothing is announced while a server is still connecting.
 	mcpSettleInterval = 50 * time.Millisecond
 	mcpSettleTimeout = 2 * time.Second
 	t.Cleanup(func() {
@@ -1069,26 +1065,25 @@ func TestInitSessionAnnouncesAfterServersSettle(t *testing.T) {
 		t.Fatalf("client.New: %v", err)
 	}
 
-	InitSession(context.Background(), c, InitSessionOptions{Agent: "test-agent", Model: "test-model"})
-
-	if warnings := transcriptWarnings(t); len(warnings) != 0 {
-		t.Fatalf("a connecting server must not be announced yet, got %v", warnings)
-	}
+	InitSession(t.Context(), c, InitSessionOptions{Agent: "test-agent", Model: "test-model"})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if warnings := transcriptWarnings(t); len(warnings) == 1 {
-			if !strings.Contains(warnings[0], "linear") || !strings.Contains(warnings[0], "requires authentication") {
-				t.Fatalf("unexpected announcement after settling: %q", warnings[0])
+		if warnings := (warningSources{mcp: GetApp().MCPServers}).warnings(); len(warnings) == 1 {
+			if !strings.Contains(warnings[0].Message, "linear") || !strings.Contains(warnings[0].Message, "requires authentication") {
+				t.Fatalf("unexpected warning after settling: %v", warnings)
 			}
 			if header := CurrentHeaderData().Warnings; len(header) != 0 {
 				t.Fatalf("MCP health must never reach the header, got %v", header)
+			}
+			if notices := transcriptWarnings(t); len(notices) != 0 {
+				t.Fatalf("passive MCP health must not reach the transcript: %v", notices)
 			}
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("announcement never appeared after the server settled: %+v", transcriptWarnings(t))
+	t.Fatal("warning never became available after the server settled")
 }
 
 func TestActiveModelIDPrefersResolvedModel(t *testing.T) {

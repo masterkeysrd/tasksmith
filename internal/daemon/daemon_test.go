@@ -2327,21 +2327,61 @@ func TestGetWorkspaceSurfacesWarnings(t *testing.T) {
 		t.Fatalf("client.New: %v", err)
 	}
 
-	ws, err := cli.GetWorkspace(ctx)
-	if err != nil {
-		t.Fatalf("cli.GetWorkspace: %v", err)
+	getWorkspace := func() *api.Workspace {
+		t.Helper()
+		ws, err := cli.GetWorkspace(ctx)
+		if err != nil {
+			t.Fatalf("cli.GetWorkspace: %v", err)
+		}
+		return ws
+	}
+	initial := getWorkspace()
+
+	if _, err := cli.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope:    api.ScopeGlobal,
+		Settings: api.SandboxSettings{Mode: api.SandboxLocal},
+	}); err != nil {
+		t.Fatalf("cli.UpdateSandbox: %v", err)
+	}
+	local := getWorkspace()
+	if local.SandboxMode != api.SandboxLocal || len(local.SandboxWarnings) != 0 {
+		t.Errorf("explicit local mode: got mode %q, sandbox warnings %v", local.SandboxMode, local.SandboxWarnings)
+	}
+	if want := pool.gw.providers[0].Warning; !slices.Contains(local.Warnings, want) {
+		t.Errorf("Warnings = %q, want provider warning %q", local.Warnings, want)
 	}
 
-	var foundAnthropicWarning bool
-	for _, w := range ws.Warnings {
-		if strings.Contains(w, "ANTHROPIC_API_KEY") {
-			foundAnthropicWarning = true
-			break
+	checkWarnings := func(ws *api.Workspace, wantSandboxPrefix string) {
+		t.Helper()
+		if wantSandboxPrefix == "" {
+			if len(ws.SandboxWarnings) != 0 {
+				t.Errorf("SandboxWarnings = %q, want none", ws.SandboxWarnings)
+			}
+		} else if len(ws.SandboxWarnings) != 1 || !strings.HasPrefix(ws.SandboxWarnings[0], wantSandboxPrefix) {
+			t.Errorf("SandboxWarnings = %q, want one warning starting with %q", ws.SandboxWarnings, wantSandboxPrefix)
+		}
+		if want := slices.Concat(ws.SandboxWarnings, local.Warnings); !slices.Equal(ws.Warnings, want) {
+			t.Errorf("Warnings = %q, want %q", ws.Warnings, want)
 		}
 	}
-	if !foundAnthropicWarning {
-		t.Errorf("expected provider warning in ws.Warnings, got: %v", ws.Warnings)
+	if sandbox.NativeAvailable() != nil {
+		checkWarnings(initial, "Kernel sandboxing is unavailable on this host (")
+	} else {
+		checkWarnings(initial, "")
 	}
+
+	sandboxPath, err := xdg.SubConfigDir("sandbox.json")
+	if err != nil {
+		t.Fatalf("resolve sandbox config path: %v", err)
+	}
+	if err := os.WriteFile(sandboxPath, []byte("{"), 0o600); err != nil {
+		t.Fatalf("write malformed sandbox config: %v", err)
+	}
+	invalid := getWorkspace()
+	if want := sandbox.DefaultMode(); invalid.SandboxMode != want {
+		t.Errorf("malformed config fallback mode = %q, want %q", invalid.SandboxMode, want)
+	}
+	checkWarnings(invalid, "sandbox.json could not be read (")
 }
 
 func TestWorkspaceCommandsAndSkillsEndpointsAndExecution(t *testing.T) {

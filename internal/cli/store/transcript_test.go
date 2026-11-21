@@ -260,13 +260,13 @@ func TestHeaderMetaAndCurrentHeaderData(t *testing.T) {
 
 	SetHeaderMeta("v1.2.3", "/workspace/test")
 	SetModelInfo("test-model", "high")
-	SetWorkspaceWarnings([]string{"warning 1", "warning 2"})
+	SetWorkspaceWarnings([]string{"routine diagnostic", "sandbox warning 1", "sandbox warning 2"}, "sandbox warning 1", "sandbox warning 2")
 
 	hd := CurrentHeaderData()
 	if hd.Version != "v1.2.3" || hd.Workspace != "/workspace/test" || hd.Model != "test-model" || hd.Thinking != "high" {
 		t.Fatalf("unexpected CurrentHeaderData: %+v", hd)
 	}
-	if len(hd.Warnings) != 2 || hd.Warnings[0] != "warning 1" || hd.Warnings[1] != "warning 2" {
+	if len(hd.Warnings) != 2 || hd.Warnings[0] != "sandbox warning 1" || hd.Warnings[1] != "sandbox warning 2" {
 		t.Fatalf("unexpected Warnings in CurrentHeaderData: %v", hd.Warnings)
 	}
 
@@ -276,7 +276,7 @@ func TestHeaderMetaAndCurrentHeaderData(t *testing.T) {
 	if hd.Version != "v1.2.3" || hd.Workspace != "/workspace/test" {
 		t.Fatalf("expected Version and Workspace to be preserved, got %+v", hd)
 	}
-	if len(hd.Warnings) != 2 || hd.Warnings[0] != "warning 1" || hd.Warnings[1] != "warning 2" {
+	if len(hd.Warnings) != 2 || hd.Warnings[0] != "sandbox warning 1" || hd.Warnings[1] != "sandbox warning 2" {
 		t.Fatalf("expected Warnings to be preserved after ResetApp, got: %v", hd.Warnings)
 	}
 
@@ -314,7 +314,13 @@ func TestUseHeaderData(t *testing.T) {
 
 	// Update warnings reactively: publishing store state marks the component
 	// dirty, and the next flushed frame re-renders it.
-	SetWorkspaceWarnings([]string{"dyn warning"})
+	SetWorkspaceWarnings([]string{"routine diagnostic"})
+	env.Flush()
+	if len(lastHeader.Warnings) != 0 {
+		t.Fatalf("routine diagnostic appeared in live header: %v", lastHeader.Warnings)
+	}
+	SetWorkspaceWarnings([]string{"routine diagnostic", "dyn warning"}, "dyn warning")
+	t.Cleanup(func() { SetWorkspaceWarnings(nil) })
 	env.Flush()
 
 	if len(lastHeader.Warnings) != 1 || lastHeader.Warnings[0] != "dyn warning" {

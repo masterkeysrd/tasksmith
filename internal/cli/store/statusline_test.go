@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -11,43 +12,25 @@ import (
 )
 
 func TestValidateStatusLineConfig(t *testing.T) {
-	tests := []struct {
-		name        string
-		in          StatusLineConfig
-		wantSegs    []StatusLineSegmentID
-		wantDropped []string
-		wantCompact bool
+	for _, tt := range []struct {
+		name       string
+		rows, want [][]StatusLineSegmentID
+		dropped    []string
 	}{
+		{name: "defaults", want: DefaultStatusLineRows},
+		{name: "one row", rows: [][]StatusLineSegmentID{{"model", "hint"}}, want: [][]StatusLineSegmentID{{"model", "hint"}, {}}},
+		{name: "second row only", rows: [][]StatusLineSegmentID{nil, {"tokens"}}, want: [][]StatusLineSegmentID{{}, {"tokens"}}},
 		{
-			name:     "valid order kept",
-			in:       StatusLineConfig{Segments: []StatusLineSegmentID{StatusLineModel, StatusLineHint}},
-			wantSegs: []StatusLineSegmentID{"model", "hint"},
+			name:    "invalid entries and extra row",
+			rows:    [][]StatusLineSegmentID{{" MODE ", "usage"}, {"mode", "warnings", "effort"}, {"hint"}},
+			want:    [][]StatusLineSegmentID{{"mode"}, {"warnings", "effort"}},
+			dropped: []string{"usage", `duplicate segment "mode"`, "row 3 exceeds the two-row limit"},
 		},
-		{
-			name:        "unknown dropped, case normalized",
-			in:          StatusLineConfig{Segments: []StatusLineSegmentID{"MODE", "bogus", "usage"}},
-			wantSegs:    []StatusLineSegmentID{"mode", "usage"},
-			wantDropped: []string{"bogus"},
-		},
-		{
-			name:     "duplicates removed",
-			in:       StatusLineConfig{Segments: []StatusLineSegmentID{"hint", "hint", "mode"}},
-			wantSegs: []StatusLineSegmentID{"hint", "mode"},
-		},
-		{
-			name:     "empty falls back to defaults",
-			in:       StatusLineConfig{Compact: true},
-			wantSegs: DefaultStatusLineSegments,
-		},
-	}
-	for _, tt := range tests {
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, dropped := ValidateStatusLineConfig(tt.in)
-			if !slices.Equal(got.Segments, tt.wantSegs) {
-				t.Errorf("segments = %v, want %v", got.Segments, tt.wantSegs)
-			}
-			if !slices.Equal(dropped, tt.wantDropped) {
-				t.Errorf("dropped = %v, want %v", dropped, tt.wantDropped)
+			got, dropped := ValidateStatusLineConfig(StatusLineConfig{Rows: tt.rows, Compact: true})
+			if !reflect.DeepEqual(got.Rows, tt.want) || !got.Compact || !slices.Equal(dropped, tt.dropped) {
+				t.Fatalf("got %+v, dropped %v; want %v compact, dropped %v", got, dropped, tt.want, tt.dropped)
 			}
 		})
 	}
@@ -55,46 +38,41 @@ func TestValidateStatusLineConfig(t *testing.T) {
 
 func TestSaveAndLoadStatusLine(t *testing.T) {
 	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	t.Cleanup(xdg.ClearCache)
+	before := GetStatusLine()
+	t.Cleanup(func() { _, _ = ApplyStatusLine(before) })
 
-	cfg := StatusLineConfig{Segments: []StatusLineSegmentID{StatusLineModel, StatusLineMode}, Compact: true}
+	cfg := StatusLineConfig{Rows: [][]StatusLineSegmentID{{StatusLineMode, StatusLineModel}, {StatusLineTokens}}, Compact: true}
 	if _, err := SaveStatusLine(cfg); err != nil {
-		t.Fatalf("SaveStatusLine: %v", err)
+		t.Fatal(err)
 	}
-
 	path, err := xdg.SubConfigDir("statusline.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("config not persisted: %v", err)
+		t.Fatal(err)
 	}
-	var raw struct {
-		Segments []string `json:"segments"`
-		Compact  bool     `json:"compact"`
-	}
+	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("persisted JSON invalid: %v", err)
+		t.Fatal(err)
 	}
-	if !slices.Equal(raw.Segments, []string{"model", "mode"}) || !raw.Compact {
-		t.Fatalf("persisted = %+v", raw)
+	if len(raw) != 2 || raw["rows"] == nil || raw["compact"] == nil {
+		t.Fatalf("unexpected persisted schema: %s", data)
 	}
-
-	// Reset live state, then reload from disk.
-	if _, err := ApplyStatusLine(StatusLineConfig{Segments: slices.Clone(DefaultStatusLineSegments)}); err != nil {
-		t.Fatalf("reset live config: %v", err)
-	}
+	_, _ = ApplyStatusLine(StatusLineConfig{})
 	LoadStatusLine()
-	got := GetStatusLine()
-	if !slices.Equal(got.Segments, cfg.Segments) || !got.Compact {
+	if got := GetStatusLine(); !reflect.DeepEqual(got, cfg) {
 		t.Fatalf("after reload = %+v, want %+v", got, cfg)
 	}
 }
 
 func TestLoadStatusLineMalformedKeepsCurrent(t *testing.T) {
 	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	t.Cleanup(xdg.ClearCache)
+	before := GetStatusLine()
+	t.Cleanup(func() { _, _ = ApplyStatusLine(before) })
 
 	path, err := xdg.SubConfigDir("statusline.json")
 	if err != nil {
@@ -106,13 +84,8 @@ func TestLoadStatusLineMalformedKeepsCurrent(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	before := GetStatusLine()
 	LoadStatusLine()
-	if got := GetStatusLine(); !slices.Equal(got.Segments, before.Segments) {
-		t.Fatalf("malformed file changed config: %v -> %v", before.Segments, got.Segments)
-	}
-	if len(GetStatusLineDropped()) == 0 {
-		t.Fatal("expected parse error surfaced in dropped list")
+	if got := GetStatusLine(); !reflect.DeepEqual(got, before) || len(GetStatusLineDropped()) == 0 {
+		t.Fatalf("after malformed load = %+v, reported %v", got, GetStatusLineDropped())
 	}
 }

@@ -101,7 +101,7 @@ The TaskSmith terminal interface is organized into a clean vertical flow:
 │  ▜████████▛    TaskSmith v0.2.0                                        │
 │     █▜▛█       anthropic/claude-sonnet-4-5 with auto effort            │
 │    ▟▛▀▀▜▙      ~/projects/acme-service                                 │
-│  ⚠ Provider "anthropic" has no API key set in .env                     │
+│  ⚠ Kernel sandboxing unavailable; using local isolation                │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
 │  User: Add structured JSON logging to the HTTP server                  │
@@ -124,7 +124,7 @@ The top banner displays:
 - **Mascot & Version**: The live banner’s T turns into the mascot next to the TaskSmith version. It blinks and looks side to side while you’re idle. Input returns it to its resting pose, and the header in scrollback stays still.
 - **Active Model & Reasoning Effort**: The daemon-resolved model and current reasoning effort tier (e.g., `anthropic/claude-sonnet-4-5 with auto effort`). Draft selections are resolved by the daemon; context usage is available after the session is created.
 - **Workspace Path**: The normalized workspace path (shortening the user home directory to `~`).
-- **Status & Warning Indicators**: If a provider lacks an API key or a configuration file contains an issue, a yellow warning banner (`⚠`) highlights the problem with troubleshooting instructions. Only problems that stay true until the workspace is re-read appear here; MCP server health is reported in the transcript instead, because it changes while you work.
+- **Sandbox Warnings**: Sandbox-specific warnings, such as falling back to local isolation when native sandboxing is unavailable, still appear in the banner (`⚠`). For routine workspace, provider, model alias, and MCP health warnings, use [`/warnings`](#4-status-line) or check the status-line warning count.
 
 ### 2. Streaming Transcript
 
@@ -135,7 +135,7 @@ As the agent works, the transcript streams live updates directly into your termi
   - **Action Verb & Target**: Clearly labeled operations such as `Read internal/config.go`, `Write src/util.ts`, `Bash go test ./...`, or `Fetch api.github.com`.
   - **Metrics & Timing**: Execution duration in milliseconds or seconds, bytes transferred, and unified line change statistics (`+14/-2`).
   - **Diff Previews**: Inline unified diffs for `edit` and `write` tools showing exact additions and deletions in color.
-- **Warnings**: Model configuration warnings and MCP server health — a server that needs `/mcp auth <name>` or failed to connect — appear in the transcript with a colored left border. Use `/clear` to dismiss them.
+- **Warnings**: Operation-specific failures and security notices still appear inline. Explicit `/mcp` actions still report their outcomes, but background MCP refresh no longer adds transcript announcements. Previously printed scrollback is not rewritten.
 - **Markdown Rendering**: Agent responses render GitHub-flavored Markdown with bold text, lists, syntax-highlighted code blocks, and formatted tables.
 
 ### 3. Multi-Line Composer
@@ -151,10 +151,14 @@ The bottom composer is your command center:
 
 ### 4. Status Line
 
-The status line under the composer shows configurable segments: the shortcut hint, the permission mode badge, context window usage, session cost/tokens, and the model with its thinking effort. The first enabled segment sits on the left, the rest on the right.
+By default, the status line under the composer has two rows:
 
-- **Configure it**: Run `/statusline` to open an editor with a live preview — toggle segments (`Space`), reorder them (`←`/`→`), switch compact mode (`c`), then save (`s`) or discard (`Esc`). The composition persists to `~/.config/tasksmith/statusline.json`, which you (or the agent) can also edit directly; file edits apply on the next REPL start.
-- **Narrow terminals**: When the window is too narrow, segments shrink or hide in a fixed order (model, then usage, then hint, then context). The permission mode badge is never hidden, because it is safety-relevant.
+- **Top row**: The shortcut hint sits on the left. The permission mode, model, thinking effort, and active warning count (`⚠ N warnings`) sit on the right. The warning indicator is hidden when there are no active warnings.
+- **Bottom row**: Context sits on the left. Cost (or Quota for subscription-billed models) and Tokens stay together on the right, separated by `·`.
+
+Run `/statusline` to customize the layout with a live preview. Use `↑`/`↓` to select a segment, `Space` to toggle it, `←`/`→` to reorder it within its row, and `r` to move an enabled segment to the other row. Press `c` for shorter text, `s` to save, or `Esc` to discard. Rows with nothing visible are omitted. Changes are saved to `~/.config/tasksmith/statusline.json`; direct edits take effect the next time the REPL starts. See [Status Line Fields](../reference/cli.md#status-line-fields) for the file format.
+
+To see what needs attention, type `/warnings` in the composer and press `Enter`. If your terminal supports mouse input, you can also click the warning count when no other interactive view is open. The view lists active workspace warnings (including sandbox warnings) and MCP health warnings, not past transcript notices. Use `↑`/`↓`, `k`/`j`, or `Ctrl+P`/`Ctrl+N` to select a warning or scroll its details. The list shows each warning’s explanation and a fix when available. Press `Enter` for the full text and `Esc` to go back.
 
 ### 5. Terminal Window Status
 
@@ -196,6 +200,8 @@ Some built-in commands:
 | `/rules` | `/rules` | Open the workspace rules browser to inspect rule status and triggers, or reload rules from disk. |
 | `/tools` | `/tools` | Open the workspace tools browser to inspect each tool's status for the active agent, its safety annotations and schemas, or reload tools from disk. |
 | `/mcp` | `/mcp` (or `/mcps`), `/mcp auth <name>`, `/mcp restart <name>` | Open the MCP browser to inspect servers and everything they offer, authorize or restart one, and run prompts or attach resources. |
+| `/warnings` | `/warnings` | Review active workspace and MCP warnings and how to address them. |
+| `/statusline` | `/statusline` (or `/status`) | Customize the two-row status line with a live preview. |
 | `/theme` | `/theme [name]` | Switch the terminal color theme. |
 | `/clear` | `/clear` | Start a fresh session draft. |
 | `/compact` | `/compact [focus]` | Compact conversation history to free context window space, with optional focus instructions. |

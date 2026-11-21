@@ -6,56 +6,53 @@ File: `$XDG_CONFIG_HOME/tasksmith/statusline.json` (created by `/statusline` sav
 
 ```json
 {
-  "segments": ["hint", "mode", "context", "usage", "model"],
+  "rows": [
+    ["hint", "mode", "model", "effort", "warnings"],
+    ["context", "cost", "tokens"]
+  ],
   "compact": false
 }
 ```
 
+This is the default layout. The top row places the shortcut hint on the left and the other segments on the right. The bottom row places Context on the left and groups Cost or Quota with Tokens on the right, separated by `·`. Each row places its first configured segment on the left, and rows with no visible segments are omitted.
+
 ### Schema
 
-| Field | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `segments` | ordered array of segment IDs | all five, in the order above | Enabled segments. The first renders on the left of the status line, the remaining ones on the right, separated by ` · `. |
-| `compact` | boolean | `false` | Shorter renderings for `context` (percentage only) and `model` (model name only). |
-
-### Segment IDs
-
-| ID | Renders | Example |
+| Field | Type | Meaning |
 | --- | --- | --- |
-| `hint` | keyboard hint or the Ctrl+C cancel prompt | `shift+tab cycle mode • /help commands` |
-| `mode` | permission mode badge | `plan` |
-| `context` | context window usage | `109.5k/400.0k (27%)`, compact: `27%` |
-| `usage` | session cost with input/output tokens; for subscription-billed (quota) models, remaining capacity with a reset countdown instead of a cost | `$0.42 · ↑128.4k ↓8.3k` or `94% (↻ 3h40m) · ↑2.0M ↓4.9k` |
-| `model` | model and thinking effort | `gpt-5 · high`, compact: `gpt-5` |
+| `rows` | array of up to two ordered arrays of segment IDs | Each inner array lists the enabled segments for that row. |
+| `compact` | boolean (default: `false`) | Uses shorter text where available without changing row assignments. |
 
-IDs are matched case-insensitively after trimming.
+| ID | Default text | Compact text |
+| --- | --- | --- |
+| `hint` | `Shift+Tab mode · /help`, or the Ctrl+C cancel prompt. | Unchanged. |
+| `mode` | Permission mode badge. Do not remove unless the user explicitly asks. | `[edits]` for accept edits; other modes are unchanged. |
+| `model` | Active model. | Unchanged. |
+| `effort` | Thinking effort. | Unchanged. |
+| `warnings` | Active workspace and MCP warning count (`⚠ N warnings`); hidden at zero. | `⚠ N` |
+| `context` | Context window usage, e.g. `Context 109.5k/400.0k (27%)`. | `27%` |
+| `cost` | Session cost, or remaining quota with its reset countdown for subscription-billed models, when available. Do not invent a dollar cost or reset time for a subscription. | Amount or remaining quota, without the label or countdown. |
+| `tokens` | Session token totals, with `↑` for input (including cached tokens) and `↓` for output. | Same totals without the `Tokens` label. |
 
-### Quota-billed models
-
-When the active model is billed against a provider quota window rather than per token, the `usage`
-segment shows remaining capacity instead of a dollar figure: `94% (↻ 3h40m)` (or `∞` when unlimited).
-The countdown ticks locally between daemon pushes, and the badge is colored amber under 20%
-remaining and red at empty. Until the first reading arrives, only the token counters render.
-
-### Validation & responsive hiding ladder
-
-- Unknown IDs are dropped and reported; known IDs keep their given order; duplicates collapse to their first occurrence.
-- An empty or invalid `segments` list falls back to the built-in default order; malformed JSON leaves the running configuration untouched and surfaces a parse error.
-- When the terminal is too narrow, segments shrink or hide in a fixed priority regardless of their position in `segments`:
-  1. `model` switches to compact text, then hides.
-  2. `usage` switches to compact text, then hides.
-  3. `hint` is ellipsized to available width, then hides.
-  4. `context` switches to compact text, then hides.
-- The `mode` badge is safety-relevant and is **never** hidden by responsive shrinking — only removing `"mode"` from `segments` hides it, and only the user should choose that.
+IDs are trimmed and matched case-insensitively. Unknown IDs, duplicate occurrences after the first, and extra rows are dropped and reported. If no valid segments remain, the default rows are used. The old `segments` field and `usage` ID are not supported; configure `cost` and `tokens` separately in `rows`. Malformed JSON surfaces a parse error without replacing the current configuration.
 
 ### Interactive `/statusline` keys
 
-- `↑` / `↓` (`j` / `k`): select segment.
-- `Space` / `Enter` / `t`: toggle segment on or off (at least one segment must remain enabled).
-- `←` / `→` (`h` / `l`): reorder enabled segments left or right with live preview.
-- `c`: toggle `compact` mode live.
-- `s`: save to `statusline.json`; `Esc`: revert live preview and exit without saving.
-- Direct edits to `statusline.json` on disk take effect the next time the REPL starts.
+- `↑` / `↓` (`k` / `j`): select a segment.
+- `Space` / `Enter` / `t`: toggle the selected segment (at least one must remain enabled).
+- `←` / `→` (`h` / `l`): reorder the selected enabled segment within its row.
+- `r`: move the selected enabled segment to the other row.
+- `c`: toggle `compact` mode in the live preview.
+- `s`: save to `statusline.json`; `Esc`: revert the preview and exit without saving.
+- Direct edits to `statusline.json` take effect the next time the REPL starts.
+
+### Inspecting active warnings (`/warnings`)
+
+Type `/warnings` in the composer and press `Enter`, or click the warning count if the terminal supports mouse input and no other interactive view is open. Use `↑` / `↓`, `k` / `j`, or `Ctrl+P` / `Ctrl+N` to select a warning or scroll its details. The list shows an explanation and a `Fix:` line when guidance is available (for example, `/mcp auth <name>` for a server that needs authorization). `Enter` opens the full warning. `Esc` goes back to the list or closes it.
+
+- Routine workspace, provider, model alias, and MCP health warnings appear in this view and its status-line count instead of the banner or transcript. Passive MCP refresh adds no transcript announcements.
+- Sandbox-specific workspace warnings still appear in the header and are also included in the view and count. Operation-specific failures, security notices, and explicit `/mcp` outcomes still appear inline as before.
+- Previously printed scrollback is not rewritten; the view shows what is active now, not historical notices.
 
 ---
 

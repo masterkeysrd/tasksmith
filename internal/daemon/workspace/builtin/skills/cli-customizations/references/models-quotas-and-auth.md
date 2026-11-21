@@ -39,7 +39,7 @@ One checklist card shared by both commands, persisting directly to the owning `*
 
 For subscription-billed (`QuotaBilled`) models:
 
-- **Status line `usage` segment**: switches from dollar cost to a quota badge for the bottleneck bucket (`94% (↻ 3h12m) · ↑2.0M ↓4.9k`, or `∞` when unlimited — see `references/appearance.md`).
+- **Status line `cost` segment**: switches from dollar cost to the bottleneck quota bucket (`Quota 94% (↻ 3h12m)`, or `Quota ∞` when unlimited). Input and output totals appear separately in `tokens` — see [Status line & theme appearance](./appearance.md).
 - **Turn & exit summaries**: omit dollar cost automatically.
 - **`/usage` `4 Quotas` tab** (also reachable via `/usage quotas`): lists each provider's multi-bucket quota snapshots with one bar per bucket showing percent remaining, optional `used/limit unit`, reset countdown, or `unlimited`. Gauges color-code remaining capacity:
   - `< 20%`: red

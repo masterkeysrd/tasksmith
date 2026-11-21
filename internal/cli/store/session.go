@@ -166,7 +166,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	var ws *api.Workspace
 	if loaded, err := c.GetWorkspace(subCtx); err == nil {
 		ws = loaded
-		SetWorkspaceWarnings(ws.Warnings)
+		SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
 		sessMu.Lock()
 		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
 		sessMu.Unlock()
@@ -1468,7 +1468,7 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 		return
 	}
 	if ws, err := c.GetWorkspace(ctx); err == nil && ws != nil {
-		SetWorkspaceWarnings(ws.Warnings)
+		SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
 		sessMu.Lock()
 		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
 		sessMu.Unlock()
@@ -1555,10 +1555,7 @@ var (
 )
 
 // watchMCPSettlement refreshes the cached MCP listing in the background until no
-// server is still connecting, the wait expires, or the session context ends. A
-// server that settles into auth_required or error is announced in the timeline
-// only once its status is known, so this is what makes the announcement appear
-// for servers that were still connecting when the CLI started.
+// server is still connecting, the wait expires, or the session context ends.
 func watchMCPSettlement(ctx context.Context, c *client.Client, servers []api.MCPServer) {
 	if !hasConnectingMCP(servers) {
 		return
@@ -2214,7 +2211,7 @@ func ReloadWorkspace(ctx context.Context) error {
 		SetWorkspaceCommands(cmds)
 	}
 	if ws, err := c.GetWorkspace(ctx); err == nil {
-		SetWorkspaceWarnings(ws.Warnings)
+		SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
 		sessMu.Lock()
 		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
 		sessMu.Unlock()

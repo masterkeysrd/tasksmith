@@ -19,7 +19,7 @@ func (r *Registry) registerStatusLineCommands() {
 		Name:        "statusline",
 		Aliases:     []string{"status"},
 		Usage:       "/statusline",
-		Description: "Configure the REPL status line segments, order, and compact mode",
+		Description: "Configure the REPL status line segments, rows, and compact mode",
 		Handler:     handleStatusLine,
 	})
 }
@@ -35,17 +35,43 @@ func handleStatusLine(args []string) error {
 	return nil
 }
 
-// statusLineSegmentLabels describes every known segment for the editor view.
-var statusLineSegmentLabels = []struct {
+type statusLineSegmentLabel struct {
 	id          store.StatusLineSegmentID
-	label       string
 	description string
-}{
-	{store.StatusLineHint, "hint", "shortcut hint / cancel prompt"},
-	{store.StatusLineMode, "mode", "permission mode badge"},
-	{store.StatusLineContext, "context", "context window usage"},
-	{store.StatusLineUsage, "usage", "session cost and tokens"},
-	{store.StatusLineModel, "model", "model and thinking effort"},
+}
+
+// statusLineSegmentLabels describes every known segment for the editor view.
+var statusLineSegmentLabels = []statusLineSegmentLabel{
+	{store.StatusLineHint, "shortcut hint / cancel prompt"},
+	{store.StatusLineMode, "permission mode badge"},
+	{store.StatusLineModel, "active model"},
+	{store.StatusLineEffort, "thinking effort"},
+	{store.StatusLineWarnings, "status warnings"},
+	{store.StatusLineContext, "context window usage"},
+	{store.StatusLineCost, "session cost or remaining quota"},
+	{store.StatusLineTokens, "session input and output tokens"},
+}
+
+func statusLineEditorSegments(rows [][]store.StatusLineSegmentID) []store.StatusLineSegmentID {
+	segments := make([]store.StatusLineSegmentID, 0, len(statusLineSegmentLabels))
+	for _, row := range rows {
+		segments = append(segments, row...)
+	}
+	for _, segment := range statusLineSegmentLabels {
+		if !slices.Contains(segments, segment.id) {
+			segments = append(segments, segment.id)
+		}
+	}
+	return segments
+}
+
+func statusLineSegmentPosition(rows [][]store.StatusLineSegmentID, id store.StatusLineSegmentID) (row, index int) {
+	for r, segments := range rows {
+		if i := slices.Index(segments, id); i >= 0 {
+			return r, i
+		}
+	}
+	return -1, -1
 }
 
 // StatusLineEditor renders an interactive status line configuration view
@@ -55,149 +81,134 @@ var StatusLineEditor = trail.FC("StatusLineEditor", func(slotID string) trail.No
 	scheme := theme.UseTheme()
 
 	original := kitex.UseRef(store.GetStatusLine())
+	issues := kitex.UseRef(store.GetStatusLineDropped())
 	draft, setDraft := kitex.UseState(original.Current)
-
-	// Apply the draft live so the real status line previews the edits.
-	kitex.UseEffect(func() {
-		_, _ = store.ApplyStatusLine(draft())
-	}, []any{draft()})
-
-	// rows lists enabled segments in order followed by disabled ones.
-	rows := func() []store.StatusLineSegmentID {
-		enabled := draft().Segments
-		var disabled []store.StatusLineSegmentID
-		for _, seg := range statusLineSegmentLabels {
-			if !slices.Contains(enabled, seg.id) {
-				disabled = append(disabled, seg.id)
-			}
-		}
-		return append(slices.Clone(enabled), disabled...)
-	}
-
-	all := rows()
+	all := statusLineEditorSegments(draft().Rows)
 	cursor := uicomponents.UseCursor(len(all), 0)
-	cur := cursor.Index
-
-	labelFor := func(id store.StatusLineSegmentID) (string, string) {
-		for _, seg := range statusLineSegmentLabels {
-			if seg.id == id {
-				return seg.label, seg.description
-			}
-		}
-		return string(id), ""
-	}
 
 	trail.UseInput(func(_ string, k event.KeyEvent) {
 		if cursor.HandleKey(k) {
 			return
 		}
+		id := all[cursor.Index]
+		cfg := draft()
+		cfg.Rows = slices.Clone(cfg.Rows)
+		row, index := statusLineSegmentPosition(cfg.Rows, id)
 		switch {
 		case k.MatchString("esc", "escape"):
-			_, _ = store.ApplyStatusLine(original.Current)
+			if _, err := store.ApplyStatusLine(original.Current); err != nil {
+				store.AppendError("/statusline", "Failed to restore status line: "+err.Error())
+				return
+			}
 			store.RemoveSlot(slotID)
 			store.AppendCommandOutput("/statusline", "Exited /statusline without saving.")
+			return
 		case k.MatchString("space", "enter", "t"):
-			id := all[cur]
-			cfg := draft()
-			if i := slices.Index(cfg.Segments, id); i >= 0 {
-				cfg.Segments = slices.Delete(slices.Clone(cfg.Segments), i, i+1)
+			if row < 0 {
+				defaultRow, _ := statusLineSegmentPosition(store.DefaultStatusLineRows, id)
+				cfg.Rows[defaultRow] = append(slices.Clone(cfg.Rows[defaultRow]), id)
 			} else {
-				cfg.Segments = append(slices.Clone(cfg.Segments), id)
+				if len(cfg.Rows[0])+len(cfg.Rows[1]) == 1 {
+					return
+				}
+				cfg.Rows[row] = slices.Delete(slices.Clone(cfg.Rows[row]), index, index+1)
 			}
-			if len(cfg.Segments) == 0 {
-				break
+		case k.MatchString("left", "h", "right", "l"):
+			if row < 0 {
+				return
 			}
-			setDraft(cfg)
-			cursor.Set(min(cur, len(statusLineSegmentLabels)-1))
-		case k.MatchString("left", "h"):
-			cfg := draft()
-			if i := slices.Index(cfg.Segments, all[cur]); i > 0 {
-				cfg.Segments = slices.Clone(cfg.Segments)
-				cfg.Segments[i-1], cfg.Segments[i] = cfg.Segments[i], cfg.Segments[i-1]
-				setDraft(cfg)
-				cursor.Move(-1)
+			target := index + 1
+			if k.MatchString("left", "h") {
+				target = index - 1
 			}
-		case k.MatchString("right", "l"):
-			cfg := draft()
-			if i := slices.Index(cfg.Segments, all[cur]); i >= 0 && i < len(cfg.Segments)-1 {
-				cfg.Segments = slices.Clone(cfg.Segments)
-				cfg.Segments[i], cfg.Segments[i+1] = cfg.Segments[i+1], cfg.Segments[i]
-				setDraft(cfg)
-				cursor.Move(1)
+			if target < 0 || target >= len(cfg.Rows[row]) {
+				return
 			}
+			segments := slices.Clone(cfg.Rows[row])
+			segments[index], segments[target] = segments[target], segments[index]
+			cfg.Rows[row] = segments
+		case k.MatchString("r"):
+			if row < 0 {
+				return
+			}
+			other := 1 - row
+			cfg.Rows[row] = slices.Delete(slices.Clone(cfg.Rows[row]), index, index+1)
+			cfg.Rows[other] = append(slices.Clone(cfg.Rows[other]), id)
 		case k.MatchString("c"):
-			cfg := draft()
 			cfg.Compact = !cfg.Compact
-			_, _ = store.ApplyStatusLine(cfg)
-			setDraft(cfg)
 		case k.MatchString("s"):
-			dropped, err := store.SaveStatusLine(draft())
+			dropped, err := store.SaveStatusLine(cfg)
 			if err != nil {
 				store.AppendError("/statusline", "Failed to save statusline.json: "+err.Error())
 				return
 			}
 			msg := "Status line saved to statusline.json."
 			if len(dropped) > 0 {
-				msg += " Ignored unknown segments: " + strings.Join(dropped, ", ") + "."
+				msg += " Ignored entries: " + strings.Join(dropped, ", ") + "."
 			}
 			store.RemoveSlot(slotID)
 			store.AppendCommandOutput("/statusline", msg)
+			return
+		default:
+			return
 		}
+		if _, err := store.ApplyStatusLine(cfg); err != nil {
+			store.AppendError("/statusline", "Failed to preview status line: "+err.Error())
+			return
+		}
+		setDraft(cfg)
+		cursor.Set(slices.Index(statusLineEditorSegments(cfg.Rows), id))
 	})
 
-	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
-	enabledStyle := style.S().Foreground(scheme.Color.Text.Primary)
-	disabledStyle := style.S().Foreground(scheme.Color.Text.Muted)
-	cursorStyle := style.S().Foreground(scheme.Color.Icon.Primary)
-	compactStyle := style.S().Foreground(scheme.Color.Mode.Plan)
-
-	var nodes []trail.Node
-	nodes = append(nodes, trail.Box(trail.BoxProps{Style: titleStyle},
-		trail.Text("Status line configuration"),
-	))
-	for i, id := range all {
-		label, desc := labelFor(id)
-		enabled := slices.Contains(draft().Segments, id)
-		rowStyle := disabledStyle
-		if enabled {
-			rowStyle = enabledStyle
-		}
-		marker := "  "
-		if i == cur {
-			marker = "> "
-		}
-		prefix := "   "
-		if enabled {
-			prefix = fmt.Sprintf("%d. ", slices.Index(draft().Segments, id)+1)
-		}
-		suffix := ""
-		if !enabled {
-			suffix = " (disabled)"
-		}
-		nodes = append(nodes, trail.Box(trail.BoxProps{},
-			trail.Span(trail.SpanProps{Style: cursorStyle}, trail.Text(marker)),
-			trail.Span(trail.SpanProps{Style: style.S().Foreground(scheme.Color.Text.Muted)}, trail.Text(prefix)),
-			trail.Span(trail.SpanProps{Style: rowStyle},
-				trail.Text(fmt.Sprintf("%-8s %s%s", label, desc, suffix))),
-		))
+	options := make([]uicomponents.Option, 0, len(all))
+	for _, id := range all {
+		i := slices.IndexFunc(statusLineSegmentLabels, func(segment statusLineSegmentLabel) bool {
+			return segment.id == id
+		})
+		options = append(options, uicomponents.Option{
+			Value: string(id),
+			Cells: []string{string(id), statusLineSegmentLabels[i].description},
+		})
 	}
-	nodes = append(nodes, trail.Box(trail.BoxProps{Style: compactStyle},
-		trail.Text(fmt.Sprintf("compact: %s (c to toggle)", onOff(draft().Compact))),
-	))
-	nodes = append(nodes, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-		Bindings: []uicomponents.KeyBinding{
-			{Key: "↑/↓", Label: "Move"},
-			{Key: "Space", Label: "Toggle segment"},
-			{Key: "←/→", Label: "Reorder"},
-			{Key: "C", Label: "Compact"},
-			{Key: "S", Label: "Save"},
-			{Key: "Esc", Label: "Discard & exit"},
-		},
-	}))
 
+	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
+	compactStyle := style.S().Foreground(scheme.Color.Mode.Plan)
+	var diagnostics trail.Node
+	if len(issues.Current) > 0 {
+		diagnostics = trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(scheme.Color.Text.Warning).OverflowWrap(style.OverflowWrapAnywhere),
+		}, trail.Text("Ignored entries: "+strings.Join(issues.Current, ", "))))
+	}
 	return trail.Box(trail.BoxProps{
 		Style: style.S().FlexDirection(style.FlexColumn).Width(style.Percent(100)),
-	}, nodes...)
+	},
+		trail.Box(trail.BoxProps{Style: titleStyle}, trail.Text("Status line configuration")),
+		diagnostics,
+		uicomponents.OptionList(uicomponents.OptionListProps{
+			Options:  options,
+			Selected: cursor.Index,
+			Columns:  []uicomponents.Column{{Width: 12}, {}},
+			GroupLabel: func(opt uicomponents.Option) string {
+				row, _ := statusLineSegmentPosition(draft().Rows, store.StatusLineSegmentID(opt.Value))
+				if row < 0 {
+					return "Disabled"
+				}
+				return fmt.Sprintf("Row %d", row+1)
+			},
+		}),
+		trail.Box(trail.BoxProps{Style: compactStyle}, trail.Text(fmt.Sprintf("compact: %s (c to toggle)", onOff(draft().Compact)))),
+		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
+			Bindings: []uicomponents.KeyBinding{
+				{Key: "↑/↓", Label: "Select"},
+				{Key: "Space", Label: "Toggle segment"},
+				{Key: "←/→", Label: "Reorder in row"},
+				{Key: "r", Label: "Move to other row"},
+				{Key: "C", Label: "Compact"},
+				{Key: "S", Label: "Save"},
+				{Key: "Esc", Label: "Discard & exit"},
+			},
+		}),
+	)
 })
 
 func onOff(v bool) string {

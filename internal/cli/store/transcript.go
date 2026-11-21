@@ -78,9 +78,9 @@ func CurrentHeaderData() HeaderData {
 	appState := GetApp()
 	sess := GetSession()
 	var warnings []string
-	if appState.Warnings != nil {
-		warnings = make([]string, len(*appState.Warnings))
-		copy(warnings, *appState.Warnings)
+	if appState.SandboxWarnings != nil {
+		warnings = make([]string, len(*appState.SandboxWarnings))
+		copy(warnings, *appState.SandboxWarnings)
 	}
 	return HeaderData{
 		Version:     appState.Version,
@@ -111,7 +111,7 @@ func UseHeaderData() HeaderData {
 		return headerAppMeta{
 			version:   s.Version,
 			workspace: s.Workspace,
-			warnings:  s.Warnings,
+			warnings:  s.SandboxWarnings,
 		}
 	})
 	sessionInfo := UseSession(func(s SessionState) headerSessionMeta {

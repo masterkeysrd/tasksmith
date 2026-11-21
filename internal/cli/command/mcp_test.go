@@ -2446,42 +2446,27 @@ func TestMCPRestartCommandReportsFailure(t *testing.T) {
 	}
 }
 
-// TestMCPBrowserAnnouncesUnhealthyServersInTimeline pins where an unhealthy server
-// is reported: the conversation timeline, never the startup banner. The banner is
-// frozen once the conversation starts, so a server that authenticates or breaks
-// later would either never be seen or leave a stale warning behind.
-func TestMCPBrowserAnnouncesUnhealthyServersInTimeline(t *testing.T) {
-	newMCPFixture(t, mcpTestServers())
+func TestMCPBrowserRefreshesRosterWithoutTimelineNotices(t *testing.T) {
+	fixture := newMCPFixture(t, mcpTestServers())
 	store.ClearSlot()
-	defer store.ClearSlot()
-	store.SetWorkspaceWarnings(nil)
-	defer store.SetWorkspaceWarnings(nil)
 	store.ClearTranscript()
-	store.ClearMCPWarningAnnouncements()
+	store.SetWorkspaceMCPServers(nil)
 
 	if err := handleMCP(nil); err != nil {
 		t.Fatalf("handleMCP: %v", err)
 	}
-	// The listing is read when the browser renders, so mounting it is part of
-	// running the command the way the app does.
-	mcpMountActiveSlot(t)
-
-	warning := "MCP server \"sentry\" requires authentication"
-	if !waitFor(t, func() bool { return strings.Contains(transcriptText(), warning) }) {
-		t.Fatalf("expected the auth requirement in the timeline, got:\n%s", transcriptText())
+	env := mcpMountActiveSlot(t)
+	if out, ok := waitForRender(t, env, "notes", "sentry", "needs authentication"); !ok {
+		t.Fatalf("expected the fetched roster to display the unhealthy server:\n%s", out)
 	}
-
-	var announced []store.NoticeData
-	for _, item := range *store.GetTranscript().Items {
-		if notice, ok := item.Data.(store.NoticeData); ok && strings.Contains(notice.Text, "MCP server") {
-			announced = append(announced, notice)
-		}
+	if len(fixture.pathCalls("/v1/workspace/mcps")) == 0 {
+		t.Fatal("expected the browser to fetch the roster")
 	}
-	if len(announced) != 1 || announced[0].Severity != store.NoticeSeverityWarning {
-		t.Fatalf("expected one warning-severity announcement, got %+v", announced)
+	if servers := store.GetApp().MCPServers; servers == nil || !reflect.DeepEqual(*servers, mcpTestServers()) {
+		t.Fatalf("expected the fetched roster in the workspace cache: %+v", servers)
 	}
-	if warnings := store.CurrentHeaderData().Warnings; len(warnings) != 0 {
-		t.Fatalf("MCP health must never reach the header, got %v", warnings)
+	if text := transcriptText(); text != "" {
+		t.Fatalf("passive roster refresh wrote to the transcript:\n%s", text)
 	}
 }
 

@@ -129,14 +129,14 @@ func restartMCPServer(ctx context.Context, name string, notice func(string)) (st
 	if err != nil {
 		failure := "Failed to restart " + name + ": " + api.CleanMCPError(err.Error())
 		notice(failure)
-		_, _ = refreshMCPServersSilent(ctx)
+		_, _ = refreshMCPServers(ctx)
 		return failure, false
 	}
 	// The status wording matches the list row, so a completion message and
 	// the row the user just watched agree on what state the server is in.
 	done := fmt.Sprintf("Restarted %s — %s.", name, mcpStatusLabel(server.Status))
 	notice(done)
-	_, _ = refreshMCPServersSilent(ctx)
+	_, _ = refreshMCPServers(ctx)
 	return done, true
 }
 
@@ -187,7 +187,7 @@ func mcpStartAuth(ctx context.Context, name string) mcpAuthOutcome {
 	}
 	auth, err := c.AuthenticateMCP(ctx, name)
 	if err != nil {
-		_, _ = refreshMCPServersSilent(ctx)
+		_, _ = refreshMCPServers(ctx)
 		// A server with static credentials has no browser flow, so the daemon
 		// answers with the credential to supply instead of a generic failure.
 		if instruction := mcpStaticAuthInstruction(err); instruction != "" {
@@ -200,7 +200,7 @@ func mcpStartAuth(ctx context.Context, name string) mcpAuthOutcome {
 		}
 	}
 	if auth.AuthURL == "" {
-		_, _ = refreshMCPServersSilent(ctx)
+		_, _ = refreshMCPServers(ctx)
 		return mcpAuthOutcome{
 			Message:       fmt.Sprintf("%s needs no interactive authorization — %s.", name, mcpStatusLabel(auth.Status)),
 			Settled:       true,
@@ -224,7 +224,7 @@ func mcpStartAuth(ctx context.Context, name string) mcpAuthOutcome {
 // callback lands and the token exchange finishes, which is what makes polling a
 // sound way to detect completion.
 func mcpCheckAuth(ctx context.Context, name string) mcpAuthOutcome {
-	updated, err := refreshMCPServersSilent(ctx)
+	updated, err := refreshMCPServers(ctx)
 	if err != nil {
 		return mcpAuthOutcome{Message: "Still waiting for " + name + " authorization: " + err.Error()}
 	}
@@ -886,16 +886,6 @@ func publishMCPServers(ctx context.Context, servers []api.MCPServer) error {
 	return nil
 }
 
-func publishMCPServersSilent(ctx context.Context, servers []api.MCPServer) error {
-	refreshMu.Lock()
-	defer refreshMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	store.SetWorkspaceMCPServersSilent(servers)
-	return nil
-}
-
 // refreshMCPServers always re-reads the daemon, because a connection state or
 // discovery result may have changed since the last listing.
 func refreshMCPServers(ctx context.Context) ([]api.MCPServer, error) {
@@ -911,27 +901,6 @@ func refreshMCPServers(ctx context.Context) ([]api.MCPServer, error) {
 		return nil, err
 	}
 	if err := publishMCPServers(ctx, servers); err != nil {
-		return nil, err
-	}
-	return servers, nil
-}
-
-// refreshMCPServersSilent re-reads the daemon and updates the cached listing
-// without emitting automatic timeline warnings, for callers that already report
-// their own action outcome in the timeline.
-func refreshMCPServersSilent(ctx context.Context) ([]api.MCPServer, error) {
-	c := store.Client()
-	if c == nil {
-		return nil, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	servers, err := c.ListMCPs(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := publishMCPServersSilent(ctx, servers); err != nil {
 		return nil, err
 	}
 	return servers, nil

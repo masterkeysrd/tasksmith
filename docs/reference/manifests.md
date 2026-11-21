@@ -295,7 +295,7 @@ spec:
 | `triggers.tools` | array of strings | `nil` | Tool names or glob patterns (`*`, `github__*`); matched case-insensitively, also against short names of qualified tools. |
 | `triggers.keywords` | array of strings | `nil` | Case-insensitive word-boundary keywords or phrases that produce a suggestion, never an automatic load. |
 | `triggers.useWhen` | string | `""` | Natural-language condition shown to the agent in `<available_rules>`. |
-| `triggers.decision` | string | `""` | **Unsupported.** Decision triggers are not evaluated for rules; setting this emits a startup warning that the reference is ignored. |
+| `triggers.decision` | string | `""` | **Unsupported.** Decision triggers are not evaluated for rules; setting this adds a workspace warning in [`/warnings`](./cli.md#warnings-view-warnings) that the reference is ignored. |
 
 *The Markdown body below the frontmatter contains the rule instructions. Unlike skills, rules declare no `spec.arguments`; the body renders only against resource-level template globals such as `{{.WorkspaceDir}}`, `{{.ProjectDir}}`, and `{{.Agent}}`.*
 

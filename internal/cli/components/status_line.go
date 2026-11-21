@@ -7,38 +7,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
-	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
-
-// StatusLineProps defines the properties for the StatusLine layout.
-type StatusLineProps struct {
-	Children []trail.Node
-}
-
-// SegmentProps defines the properties shared by status segments.
-type SegmentProps struct {
-	// Separator is rendered after the segment, only when the segment itself renders.
-	Separator string
-	// Text overrides the segment content. When empty, segments that derive
-	// their text from stores compute it themselves.
-	Text string
-}
-
-// statusSeparator joins adjacent segments on the default status line.
-const statusSeparator = " · "
-
-// statusEllipsis marks hint text shortened to fit the terminal width.
-const statusEllipsis = "…"
-
-// hintEllipsisBudget keeps at least this many cells of the hint visible when
-// truncating, so a squeezed hint still conveys its first word.
-const hintEllipsisBudget = 8
 
 func modeColor(scheme *theme.Scheme, mode api.PermissionMode) color.Color {
 	switch mode {
@@ -55,483 +32,275 @@ func modeColor(scheme *theme.Scheme, mode api.PermissionMode) color.Color {
 	}
 }
 
-// statusText renders text in the given color.
-func statusText(text string, col color.Color, bold bool) trail.Node {
-	spanStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(col)
-	if bold {
-		spanStyle = spanStyle.Bold(true)
-	}
-	return trail.Span(trail.SpanProps{Style: spanStyle}, trail.Text(text))
+type statusField struct {
+	full    string
+	compact string
+	color   color.Color
+	bold    bool
 }
 
-// segment appends the separator to a rendered segment and hides empty ones.
-func segment(props SegmentProps, content trail.Node, text string, sepColor color.Color) trail.Node {
-	if text == "" {
-		return nil
-	}
-	if props.Separator == "" {
-		return content
-	}
-	return trail.Box(trail.BoxProps{},
-		content,
-		statusText(props.Separator, sepColor, false),
-	)
+type statusPart struct {
+	id store.StatusLineSegmentID
+	statusField
+	text string
 }
 
-// contextText renders full context usage (e.g. "109.5k/400.0k (27%)").
-func contextText(ctx api.ContextState) string {
-	if ctx.MaxTokens == 0 {
-		return ""
-	}
-	pct := min(int(float64(ctx.UsedTokens)/float64(ctx.MaxTokens)*100), 100)
-	return fmt.Sprintf("%s/%s (%d%%)", format.Tokens(ctx.UsedTokens), format.Tokens(ctx.MaxTokens), pct)
-}
-
-// contextTextCompact renders only the usage percentage (e.g. "27%").
-func contextTextCompact(ctx api.ContextState) string {
-	if ctx.MaxTokens == 0 {
-		return ""
-	}
-	pct := min(int(float64(ctx.UsedTokens)/float64(ctx.MaxTokens)*100), 100)
-	return fmt.Sprintf("%d%%", pct)
-}
-
-// usageText renders the session cost with input and output tokens
-// (e.g. "$0.42 · ↑128.4k ↓8.3k"). A leading "≥" marks costs that are a lower
-// bound because some calls had no pricing.
-func usageText(usage store.UsageTotals) string {
-	if usage.Calls == 0 {
-		return ""
-	}
-	return fmt.Sprintf("%s · ↑%s ↓%s", format.FormatCostNano(usage.CostNano, usage.UnpricedCalls > 0),
-		format.Tokens(int(usage.InputTokens)), format.Tokens(int(usage.OutputTokens)))
-}
-
-// quotaUsageText renders usage for a subscription-billed model as remaining
-// capacity with a reset countdown (e.g. "94% (↻ 3h40m) · ↑2.0M ↓4.9k"). The
-// countdown is omitted when the provider did not report a reset time.
-func quotaUsageText(quota store.QuotaState, usage store.UsageTotals, now time.Time) string {
-	if quota.Known {
-		var badge string
-		if quota.Unlimited {
-			badge = "∞"
-		} else {
-			badge = fmt.Sprintf("%d%%", quota.RemainingPct)
-			if !quota.ResetAt.IsZero() {
-				if until := quota.ResetAt.Sub(now); until > 0 {
-					badge = fmt.Sprintf("%d%% (↻ %s)", quota.RemainingPct, format.Duration(until, format.Compact()))
-				}
-			}
-		}
-		if usage.Calls == 0 {
-			return badge
-		}
-		return fmt.Sprintf("%s · ↑%s ↓%s", badge,
-			format.Tokens(int(usage.InputTokens)), format.Tokens(int(usage.OutputTokens)))
-	}
-	// Subscription-billed but no reading yet: tokens only, never a dollar
-	// figure that would be false for this billing mode.
-	if usage.Calls == 0 {
-		return ""
-	}
-	return fmt.Sprintf("↑%s ↓%s", format.Tokens(int(usage.InputTokens)), format.Tokens(int(usage.OutputTokens)))
-}
-
-// quotaUsageColor picks the emphasis for a quota badge: error at empty,
-// warning when under a fifth of the window remains.
-func quotaUsageColor(scheme *theme.Scheme, quota store.QuotaState) color.Color {
-	if quota.Unlimited {
-		return scheme.Color.Text.Secondary
-	}
-	switch {
-	case quota.RemainingPct <= 0:
-		return scheme.Color.Text.Error
-	case quota.RemainingPct < 20:
-		return scheme.Color.Text.Warning
-	default:
-		return scheme.Color.Text.Secondary
-	}
-}
-
-// modelText renders "<model> · <thinking>".
-func modelText(modelLabel, thinking string) string {
-	model := cmp.Or(strings.TrimSpace(modelLabel), "default")
-	effort := cmp.Or(strings.TrimSpace(thinking), store.ThinkingProviderDefault)
-	return fmt.Sprintf("%s · %s", model, effort)
-}
-
-// modelTextCompact renders only the model name.
-func modelTextCompact(modelLabel string) string {
-	return cmp.Or(strings.TrimSpace(modelLabel), "default")
-}
-
-// statusPlan holds the visible text of every configured segment after the
-// responsive planner applied its fixed hiding ladder for the current width.
-// A segment absent from the configuration never appears here.
-type statusPlan struct {
-	Texts map[store.StatusLineSegmentID]string
-}
-
-// statusSegment is one configured segment with its full and compact text
-// variants as measured for the current state.
-type statusSegment struct {
-	id       store.StatusLineSegmentID
-	full     string
-	compact  string
-	resolved string
-}
-
-// planStatusLine decides the visible text of each configured segment so the
-// line fits width cells. Segments outside the configuration are excluded;
-// within it, the fixed ladder compacts the model, drops usage, ellipsizes
-// then drops the hint, and compacts then drops context. The permission mode
-// is never hidden. A non-positive width keeps everything visible, matching
-// unknown-width terminals. When compact is true, every segment starts from
-// its compact variant.
-func planStatusLine(width int, compact bool, segments []store.StatusLineSegmentID, hint, mode, ctxFull, ctxCompact, usage, modelFull, modelCompact string) statusPlan {
-	textFor := func(id store.StatusLineSegmentID) (string, string) {
-		switch id {
-		case store.StatusLineHint:
-			return hint, ""
-		case store.StatusLineMode:
-			return mode, mode
-		case store.StatusLineContext:
-			return ctxFull, ctxCompact
-		case store.StatusLineUsage:
-			return usage, usage
-		case store.StatusLineModel:
-			return modelFull, modelCompact
-		}
-		return "", ""
-	}
-
-	planSegs := make([]statusSegment, 0, len(segments))
-	for _, id := range segments {
-		full, comp := textFor(id)
-		resolved := full
-		if compact && comp != "" {
-			resolved = comp
-		}
-		planSegs = append(planSegs, statusSegment{id: id, full: full, compact: comp, resolved: resolved})
-	}
-
-	out := func() statusPlan {
-		texts := make(map[store.StatusLineSegmentID]string, len(planSegs))
-		for _, s := range planSegs {
-			texts[s.id] = s.resolved
-		}
-		return statusPlan{Texts: texts}
-	}
-
-	if width <= 0 {
-		return out()
-	}
-	total := func() int {
-		sum := 0
-		parts := 0
-		for _, s := range planSegs {
-			if s.resolved == "" {
-				continue
-			}
-			if parts > 0 {
-				sum += len([]rune(statusSeparator))
-			}
-			sum += len([]rune(s.resolved))
-			parts++
-		}
-		return sum
-	}
-	if total() <= width {
-		return out()
-	}
-
-	// Fixed ladder, cheapest information first. Only the permission mode is
-	// protected: it must stay visible because it is safety-relevant.
-	steps := []store.StatusLineSegmentID{
-		store.StatusLineModel,
-		store.StatusLineUsage,
-		store.StatusLineHint,
-		store.StatusLineContext,
-	}
-	for _, id := range steps {
-		for i := range planSegs {
-			if planSegs[i].id != id {
-				continue
-			}
-			seg := &planSegs[i]
-			if seg.resolved == "" {
-				break
-			}
-			if id == store.StatusLineHint {
-				room := width - (total() - len([]rune(seg.resolved)))
-				if room >= hintEllipsisBudget {
-					if trunc, did := strutils.TruncateLine(seg.resolved, room-1, statusEllipsis); did {
-						seg.resolved = trunc
-					}
-					if total() <= width {
-						return out()
-					}
-				}
-			} else if len([]rune(seg.compact)) < len([]rune(seg.resolved)) {
-				seg.resolved = seg.compact
-				if total() <= width {
-					return out()
-				}
-			}
-			seg.resolved = ""
-			if total() <= width {
-				return out()
-			}
-		}
-	}
-	return out()
-}
-
-// HintSegment shows the shortcut hint or Ctrl+C exit confirmation from store.App.
-var HintSegment = trail.FC("HintSegment", func(props SegmentProps) trail.Node {
-	scheme := theme.UseTheme()
-	ctrlCPending := store.UseApp(func(s store.AppState) bool {
-		return s.CtrlCPending
-	})
-	hint := store.UseApp(func(s store.AppState) string {
-		return s.Hint
-	})
-	hasSlot := store.UseHasActiveSlot()
-
-	text := props.Text
-	if text == "" {
-		text = hint
-	}
-	if ctrlCPending {
-		text = store.CtrlCHint
-	}
-	if !ctrlCPending && hasSlot {
-		return nil
-	}
-	return segment(props, statusText(text, scheme.Color.Text.Secondary, false), text, scheme.Color.Text.Secondary)
-})
-
-// ModeSegment shows a colored badge for non-default permission modes.
-var ModeSegment = trail.FC("ModeSegment", func(props SegmentProps) trail.Node {
-	scheme := theme.UseTheme()
-	mode := store.UseMode()
-	text := props.Text
-	if text == "" {
-		if mode == "" || mode == api.ModeDefault {
-			return nil
-		}
-		text = string(mode)
-	}
-	return segment(props, statusText(text, modeColor(scheme, mode), true), text, scheme.Color.Text.Secondary)
-})
-
-// ContextSegment shows compact context usage (e.g. "109.5k/400.0k (27%)") once session context is known.
-var ContextSegment = trail.FC("ContextSegment", func(props SegmentProps) trail.Node {
-	scheme := theme.UseTheme()
-	ctx := store.UseContext()
-	text := props.Text
-	if text == "" {
-		text = contextText(ctx)
-	}
-	if text == "" {
-		return nil
-	}
-
+func statusContext(ctx api.ContextState, scheme *theme.Scheme) statusField {
 	col := scheme.Color.Text.Secondary
-	if ctx.MaxTokens > 0 && ctx.TriggerTokens > 0 {
-		if ctx.UsedTokens >= ctx.TriggerTokens {
+	if ctx.MaxTokens == 0 {
+		return statusField{}
+	}
+	if ctx.TriggerTokens > 0 {
+		switch {
+		case ctx.UsedTokens >= ctx.TriggerTokens:
 			col = scheme.Color.Text.Error
-		} else if ctx.UsedTokens >= (ctx.TriggerTokens*3)/4 {
+		case ctx.UsedTokens >= (ctx.TriggerTokens*3)/4:
 			col = scheme.Color.Text.Warning
 		}
 	}
+	pct := fmt.Sprintf("%d%%", min(int(float64(ctx.UsedTokens)/float64(ctx.MaxTokens)*100), 100))
+	return statusField{
+		full:    fmt.Sprintf("Context %s/%s (%s)", format.Tokens(ctx.UsedTokens), format.Tokens(ctx.MaxTokens), pct),
+		compact: pct,
+		color:   col,
+	}
+}
 
-	return segment(props, statusText(text, col, false), text, scheme.Color.Text.Secondary)
-})
-
-// UsageSegment shows the session cost with input and output tokens (e.g. "$0.42 · ↑128.4k ↓8.3k")
-// once the session has recorded LLM calls. A leading "≥" marks costs that are
-// a lower bound because some calls had no pricing. For subscription-billed
-// models it shows remaining quota with a reset countdown instead of a cost.
-var UsageSegment = trail.FC("UsageSegment", func(props SegmentProps) trail.Node {
-	scheme := theme.UseTheme()
-	usage := store.UseUsageTotals()
-	quota := store.UseQuota()
-	billed := store.UseSession(func(s store.SessionState) bool {
-		return s.ModelQuotaBilled
-	})
-	now := useQuotaClock()
-	text := props.Text
+func statusCost(usage store.UsageTotals, quota store.QuotaState, billed bool, now time.Time, scheme *theme.Scheme) statusField {
 	col := scheme.Color.Text.Secondary
-	if billed {
-		col = quotaUsageColor(scheme, quota)
-		if text == "" {
-			text = quotaUsageText(quota, usage, now)
+	if !billed {
+		if usage.Calls == 0 {
+			return statusField{}
 		}
-	} else if text == "" {
-		text = usageText(usage)
+		cost := format.FormatCostNano(usage.CostNano, usage.UnpricedCalls > 0)
+		return statusField{full: "Cost " + cost, compact: cost, color: col}
 	}
-	if text == "" {
+	if !quota.Known {
+		return statusField{}
+	}
+	if quota.Unlimited {
+		return statusField{full: "Quota ∞", compact: "∞", color: col}
+	}
+	switch {
+	case quota.RemainingPct <= 0:
+		col = scheme.Color.Text.Error
+	case quota.RemainingPct < 20:
+		col = scheme.Color.Text.Warning
+	}
+	pct := fmt.Sprintf("%d%%", quota.RemainingPct)
+	full := "Quota " + pct
+	if until := quota.ResetAt.Sub(now); until > 0 {
+		full += " (↻ " + format.Duration(until, format.Compact()) + ")"
+	}
+	return statusField{full: full, compact: pct, color: col}
+}
+
+func statusWarningCount(count int, scheme *theme.Scheme) statusField {
+	if count == 0 {
+		return statusField{}
+	}
+	short := fmt.Sprintf("⚠ %d", count)
+	label := " warnings"
+	if count == 1 {
+		label = " warning"
+	}
+	return statusField{full: short + label, compact: short, color: scheme.Color.Text.Warning}
+}
+
+func planStatusRow(width int, compact bool, row []store.StatusLineSegmentID, fields map[store.StatusLineSegmentID]statusField, rightSeparator string) ([]statusPart, int) {
+	parts := make([]statusPart, 0, len(row))
+	for _, id := range row {
+		field := fields[id]
+		if field.full == "" {
+			continue
+		}
+		text := field.full
+		if compact && field.compact != "" {
+			text = field.compact
+		}
+		parts = append(parts, statusPart{id: id, statusField: field, text: text})
+	}
+	gap := 2
+	total := func() int {
+		cells, visible := 0, 0
+		for _, part := range parts {
+			if part.text != "" {
+				cells += ansi.StringWidth(part.text)
+				visible++
+			}
+		}
+		if rightSeparator != "" && visible > 1 {
+			if parts[0].id == row[0] && parts[0].text != "" {
+				return cells + gap + (visible-2)*ansi.StringWidth(rightSeparator)
+			}
+			return cells + (visible-1)*ansi.StringWidth(rightSeparator)
+		}
+		return cells + max(visible-1, 0)*gap
+	}
+	if width > 0 && total() > width {
+		gap = 1
+		for _, id := range []store.StatusLineSegmentID{
+			store.StatusLineWarnings, store.StatusLineContext, store.StatusLineCost, store.StatusLineTokens, store.StatusLineMode,
+		} {
+			for i := range parts {
+				if total() <= width {
+					break
+				}
+				if p := &parts[i]; p.id == id && p.compact != "" && ansi.StringWidth(p.compact) < ansi.StringWidth(p.text) {
+					p.text = p.compact
+				}
+			}
+		}
+		for _, id := range []store.StatusLineSegmentID{
+			store.StatusLineEffort, store.StatusLineHint, store.StatusLineModel,
+			store.StatusLineTokens, store.StatusLineCost, store.StatusLineContext,
+		} {
+			for i := range parts {
+				if total() <= width {
+					break
+				}
+				p := &parts[i]
+				if p.id != id {
+					continue
+				}
+				room := width - (total() - ansi.StringWidth(p.text))
+				if (id == store.StatusLineHint || id == store.StatusLineModel) && room >= 8 {
+					p.text = ansi.Truncate(p.text, room, "…")
+				} else {
+					p.text = ""
+				}
+			}
+		}
+		if total() > width {
+			for i := range parts {
+				p := &parts[i]
+				if p.id == store.StatusLineMode {
+					room := width - (total() - ansi.StringWidth(p.text))
+					p.text = ansi.Truncate(p.text, min(width, max(room, 1)), "…")
+					break
+				}
+			}
+			if total() > width {
+				for i := range parts {
+					p := &parts[i]
+					if p.id == store.StatusLineWarnings {
+						room := width - (total() - ansi.StringWidth(p.text))
+						if room < ansi.StringWidth(p.text) {
+							p.text = ""
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+	visible := parts[:0]
+	for _, p := range parts {
+		if p.text != "" {
+			visible = append(visible, p)
+		}
+	}
+	return visible, gap
+}
+
+func renderStatusRow(width, index int, compact bool, row []store.StatusLineSegmentID, fields map[store.StatusLineSegmentID]statusField, canOpenWarnings bool) trail.Node {
+	rightSeparator := ""
+	if index > 0 {
+		rightSeparator = " · "
+	}
+	parts, gap := planStatusRow(width, compact, row, fields, rightSeparator)
+	if len(parts) == 0 {
 		return nil
 	}
-	return segment(props, statusText(text, col, false), text, scheme.Color.Text.Secondary)
-})
-
-// ModelSegment shows "<model> · <thinking>" once session model info is ready.
-var ModelSegment = trail.FC("ModelSegment", func(props SegmentProps) trail.Node {
-	scheme := theme.UseTheme()
-	ready := store.UseSession(func(s store.SessionState) bool {
-		return s.Ready
-	})
-	modelLabel := store.UseSession(func(s store.SessionState) string {
-		return s.ModelLabel
-	})
-	thinking := store.UseSession(func(s store.SessionState) string {
-		return s.Thinking
-	})
-	text := props.Text
-	if text == "" {
-		if !ready {
-			return nil
+	rightFrom := 0
+	if parts[0].id == row[0] {
+		rightFrom = 1
+	}
+	rowStyle := style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(gap)
+	rightStyle := rowStyle
+	if rightSeparator != "" {
+		rightStyle = rightStyle.Gap(0)
+	}
+	children := make([]trail.Node, 0, len(parts))
+	for i, part := range parts {
+		if i > rightFrom && rightSeparator != "" {
+			children = append(children, trail.Span(trail.SpanProps{
+				Style: style.S().WhiteSpace(style.WhiteSpacePre),
+			}, trail.Text(rightSeparator)))
 		}
-		text = modelText(modelLabel, thinking)
+		props := trail.SpanProps{Style: style.S().WhiteSpace(style.WhiteSpacePre).Foreground(part.color).Bold(part.bold)}
+		if part.id == store.StatusLineWarnings && canOpenWarnings {
+			props.OnClick = func(event.Event) { OpenWarnings() }
+		}
+		children = append(children, trail.Span(props, trail.Text(part.text)))
 	}
-	if text == "" {
-		return nil
+	fullWidth := rowStyle.Width(style.Percent(100)).JustifyContent(style.JustifyBetween)
+	if rightFrom == 0 {
+		return trail.Box(trail.BoxProps{Style: rightStyle.Width(style.Percent(100)).JustifyContent(style.JustifyEnd)}, children...)
 	}
-	return segment(props, statusText(text, scheme.Color.Text.Secondary, false), text, scheme.Color.Text.Secondary)
-})
+	if len(children) == 1 {
+		return trail.Box(trail.BoxProps{Style: fullWidth}, children[0])
+	}
+	right := trail.Box(trail.BoxProps{Style: rightStyle}, children[rightFrom:]...)
+	return trail.Box(trail.BoxProps{Style: fullWidth}, children[0], right)
+}
 
-// StatusLine lays its children out horizontally across the full width.
-var StatusLine = trail.FCC("StatusLine", func(props StatusLineProps) trail.Node {
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexRow).
-			AlignItems(style.AlignCenter).
-			Width(style.Percent(100)),
-	}, props.Children...)
-})
-
-// DefaultStatusLine renders the configured REPL status line. The first
-// configured segment sits on the far left, the rest are right-aligned after a
-// spacer. On narrow terminals planStatusLine compacts or hides low-priority
-// segments so nothing collides or clips.
 var DefaultStatusLine = trail.SimpleFC("DefaultStatusLine", func() trail.Node {
-	winSize := trail.UseWindowSize()
+	scheme := theme.UseTheme()
+	width := trail.UseWindowSize().Width
 	cfg := store.UseStatusLine()
-
-	ctrlCPending := store.UseApp(func(s store.AppState) bool {
-		return s.CtrlCPending
-	})
-	hint := store.UseApp(func(s store.AppState) string {
-		return s.Hint
-	})
+	ctrlCPending := store.UseApp(func(s store.AppState) bool { return s.CtrlCPending })
+	hint := store.UseApp(func(s store.AppState) string { return s.Hint })
 	hasSlot := store.UseHasActiveSlot()
 	mode := store.UseMode()
 	ctx := store.UseContext()
 	usage := store.UseUsageTotals()
 	quota := store.UseQuota()
-	quotaBilled := store.UseSession(func(s store.SessionState) bool {
-		return s.ModelQuotaBilled
-	})
+	billed := store.UseSession(func(s store.SessionState) bool { return s.ModelQuotaBilled })
 	quotaNow := useQuotaClock()
-	ready := store.UseSession(func(s store.SessionState) bool {
-		return s.Ready
-	})
-	modelLabel := store.UseSession(func(s store.SessionState) string {
-		return s.ModelLabel
-	})
-	thinking := store.UseSession(func(s store.SessionState) string {
-		return s.Thinking
-	})
+	ready := store.UseSession(func(s store.SessionState) bool { return s.Ready })
+	model := store.UseSession(func(s store.SessionState) string { return s.ModelLabel })
+	effort := store.UseSession(func(s store.SessionState) string { return s.Thinking })
+	warningCount := len(store.UseWarnings())
 
-	hintText := hint
-	if ctrlCPending {
-		hintText = store.CtrlCHint
+	switch {
+	case ctrlCPending:
+		hint = store.CtrlCHint
+	case hasSlot:
+		hint = ""
 	}
-	if hasSlot && !ctrlCPending {
-		hintText = ""
+	secondary := scheme.Color.Text.Secondary
+	fields := map[store.StatusLineSegmentID]statusField{
+		store.StatusLineHint:     {full: hint, color: secondary},
+		store.StatusLineCost:     statusCost(usage, quota, billed, quotaNow, scheme),
+		store.StatusLineWarnings: statusWarningCount(warningCount, scheme),
 	}
-
-	modeStr := ""
-	if mode != "" && mode != api.ModeDefault {
-		modeStr = string(mode)
+	if mode != "" {
+		text := "[" + strings.ReplaceAll(string(mode), "_", " ") + "]"
+		short := text
+		if mode == api.ModeAcceptEdits {
+			short = "[edits]"
+		}
+		fields[store.StatusLineMode] = statusField{full: text, compact: short, color: modeColor(scheme, mode), bold: true}
 	}
-
-	var ctxFull, ctxCompact, modelFull, modelCompact string
 	if ready {
-		ctxFull = contextText(ctx)
-		ctxCompact = contextTextCompact(ctx)
-		modelFull = modelText(modelLabel, thinking)
-		modelCompact = modelTextCompact(modelLabel)
+		fields[store.StatusLineContext] = statusContext(ctx, scheme)
+		fields[store.StatusLineModel] = statusField{full: cmp.Or(strings.Join(strings.Fields(model), " "), "default"), color: secondary}
+		fields[store.StatusLineEffort] = statusField{full: cmp.Or(strings.Join(strings.Fields(effort), " "), store.ThinkingProviderDefault), color: secondary}
+	}
+	if usage.Calls > 0 {
+		text := fmt.Sprintf("↑%s ↓%s", format.Tokens(int(usage.InputTokens)), format.Tokens(int(usage.OutputTokens)))
+		fields[store.StatusLineTokens] = statusField{full: "Tokens " + text, compact: text, color: secondary}
 	}
 
-	usageStr := usageText(usage)
-	if quotaBilled {
-		usageStr = quotaUsageText(quota, usage, quotaNow)
+	rows := make([]trail.Node, 0, len(cfg.Rows))
+	for i, row := range cfg.Rows {
+		if node := renderStatusRow(width, i, cfg.Compact, row, fields, !hasSlot); node != nil {
+			rows = append(rows, node)
+		}
 	}
-
-	plan := planStatusLine(winSize.Width, cfg.Compact, cfg.Segments, hintText, modeStr, ctxFull, ctxCompact, usageStr, modelFull, modelCompact)
-
-	if len(cfg.Segments) == 0 {
-		return StatusLine(StatusLineProps{})
-	}
-
-	renderSegment := func(id store.StatusLineSegmentID, sep string) trail.Node {
-		text := plan.Texts[id]
-		if text == "" {
-			return nil
-		}
-		props := SegmentProps{
-			Text:      text,
-			Separator: sep,
-		}
-		switch id {
-		case store.StatusLineHint:
-			return HintSegment(props)
-		case store.StatusLineMode:
-			return ModeSegment(props)
-		case store.StatusLineContext:
-			return ContextSegment(props)
-		case store.StatusLineUsage:
-			return UsageSegment(props)
-		case store.StatusLineModel:
-			return ModelSegment(props)
-		}
+	if len(rows) == 0 {
 		return nil
 	}
-
-	var leftNode trail.Node
-	if len(cfg.Segments) > 0 {
-		leftNode = renderSegment(cfg.Segments[0], "")
-	}
-
-	var rightVisible []store.StatusLineSegmentID
-	if len(cfg.Segments) > 1 {
-		for _, id := range cfg.Segments[1:] {
-			if plan.Texts[id] != "" {
-				rightVisible = append(rightVisible, id)
-			}
-		}
-	}
-
-	children := make([]trail.Node, 0, len(cfg.Segments)+1)
-	if leftNode != nil {
-		children = append(children, leftNode)
-	}
-
-	if len(rightVisible) > 0 {
-		children = append(children, trail.Spacer())
-		for i, id := range rightVisible {
-			sep := ""
-			if i < len(rightVisible)-1 {
-				sep = statusSeparator
-			}
-			if n := renderSegment(id, sep); n != nil {
-				children = append(children, n)
-			}
-		}
-	}
-	return StatusLine(StatusLineProps{}, children...)
+	return trail.Box(trail.BoxProps{Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Width(style.Percent(100))}, rows...)
 })
