@@ -14,6 +14,7 @@ type SlotComponent func(slotID string) trail.Node
 // Slot is the host component that renders the currently active slot item.
 var Slot = trail.SimpleFC("Slot", func() trail.Node {
 	active := store.UseActiveSlot()
+	mode := store.UseMode()
 	if active == nil {
 		return nil
 	}
@@ -24,10 +25,15 @@ var Slot = trail.SimpleFC("Slot", func() trail.Node {
 		if p, ok := active.Data.(PermissionPromptProps); ok {
 			child = PermissionPrompt(p)
 		} else if req, ok := active.Data.(api.PermissionRequest); ok {
-			child = PermissionPrompt(PermissionPromptProps{
+			props := PermissionPromptProps{
 				Request:    req,
 				OnDecision: store.DecidePermission,
-			})
+			}
+			if req.Action == api.ActionWrite && req.Safety != api.SafetyUnsafe && !req.BypassSandbox &&
+				mode != api.ModeAcceptEdits && mode != api.ModeAuto {
+				props.OnAcceptEdits = store.ApprovePermissionAndAcceptEdits
+			}
+			child = PermissionPrompt(props)
 		}
 	case store.SlotKindQuestion:
 		if props, ok := active.Data.(QuestionPromptProps); ok {

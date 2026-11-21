@@ -17,8 +17,9 @@ import (
 
 // PermissionPromptProps defines the properties for the interactive PermissionPrompt component.
 type PermissionPromptProps struct {
-	Request    api.PermissionRequest
-	OnDecision func(req api.PermissionRequest, dec api.PermissionDecision)
+	Request       api.PermissionRequest
+	OnDecision    func(req api.PermissionRequest, dec api.PermissionDecision)
+	OnAcceptEdits func(req api.PermissionRequest)
 }
 
 func compactSingleLine(s string, maxRunes int) string {
@@ -48,7 +49,10 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 		}
 	}
 
-	totalRows := 1 + len(patterns) + 1
+	totalRows := len(patterns) + 2
+	if props.OnAcceptEdits != nil {
+		totalRows++
+	}
 	cursor := components.UseCursor(totalRows, 0)
 
 	submitDecision := func(dec api.PermissionDecision) {
@@ -113,6 +117,13 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 			Label:      "Always allow " + compactSingleLine(pat, 60),
 			Badge:      scopeTag,
 			BadgeStyle: &scopeStyle,
+		})
+	}
+	if props.OnAcceptEdits != nil {
+		menuItems = append(menuItems, components.ActionMenuItem{
+			ID:       "accept_edits",
+			Label:    "Yes, and switch to accept_edits",
+			Shortcut: "e",
 		})
 	}
 	menuItems = append(menuItems, components.ActionMenuItem{
@@ -182,18 +193,20 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 		Disabled:        feedbackMode(),
 		UnselectedStyle: &unselectedStyle,
 		OnChange:        cursor.Set,
-		OnSelect: func(index int, _ components.ActionMenuItem) {
-			switch {
-			case index == 0:
+		OnSelect: func(index int, item components.ActionMenuItem) {
+			switch item.ID {
+			case "allow_once":
 				submitDecision(api.PermissionDecision{Kind: api.DecisionAllowOnce})
-			case index >= 1 && index <= len(patterns):
+			case "accept_edits":
+				props.OnAcceptEdits(props.Request)
+			case "deny":
+				submitDecision(api.PermissionDecision{Kind: api.DecisionReject})
+			default:
 				submitDecision(api.PermissionDecision{
 					Kind:         api.DecisionAllowSession,
 					GrantPattern: patterns[index-1],
 					Scope:        scope(),
 				})
-			default:
-				submitDecision(api.PermissionDecision{Kind: api.DecisionReject})
 			}
 		},
 	}))
@@ -245,14 +258,16 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 
 	// Inline KeyboardHint at bottom
 	if !feedbackMode() {
-		boxChildren = append(boxChildren, components.KeyboardHint(components.KeyboardHintProps{
-			Bindings: []components.KeyBinding{
-				{Key: "↑/↓", Label: "Navigate"},
-				{Key: "tab", Label: "Scope"},
-				{Key: "enter", Label: "Confirm"},
-				{Key: "r", Label: "Feedback"},
-			},
-		}))
+		bindings := []components.KeyBinding{
+			{Key: "↑/↓", Label: "Navigate"},
+			{Key: "tab", Label: "Scope"},
+			{Key: "enter", Label: "Confirm"},
+			{Key: "r", Label: "Feedback"},
+		}
+		if props.OnAcceptEdits != nil {
+			bindings = append(bindings, components.KeyBinding{Key: "e", Label: "Accept edits"})
+		}
+		boxChildren = append(boxChildren, components.KeyboardHint(components.KeyboardHintProps{Bindings: bindings}))
 	} else {
 		boxChildren = append(boxChildren, components.KeyboardHint(components.KeyboardHintProps{
 			Bindings: []components.KeyBinding{

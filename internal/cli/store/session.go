@@ -801,6 +801,43 @@ func DecidePermission(req api.PermissionRequest, dec api.PermissionDecision) {
 	}()
 }
 
+func ApprovePermissionAndAcceptEdits(req api.PermissionRequest) {
+	sessMu.Lock()
+	c, ctx, sess := activeClient, activeCtx, GetSession().Session
+	cancelModeDebounceLocked()
+	sessMu.Unlock()
+
+	if c == nil || sess == nil || sess.ID == "" {
+		AppendError("Could not switch to accept_edits", "No active session connection")
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go approvePermissionAndAcceptEdits(ctx, c, sess.ID, req.ID)
+}
+
+func approvePermissionAndAcceptEdits(ctx context.Context, c *client.Client, sessionID, requestID string) {
+	updated, err := c.UpdateSession(ctx, sessionID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Mode: api.ModeAcceptEdits},
+	})
+	if err != nil {
+		AppendError("Could not switch to accept_edits", err.Error())
+		return
+	}
+
+	for _, pending := range updated.PendingPermissions {
+		if pending.ID != requestID {
+			continue
+		}
+		dec := api.PermissionDecision{RequestID: pending.ID, ToolCallID: pending.ToolCallID, Kind: api.DecisionAllowOnce}
+		if err := c.Send(ctx, sessionID, api.SendRequest{Decision: &dec}); err != nil {
+			AppendError("Could not approve permission", err.Error())
+		}
+		return
+	}
+}
+
 // UseSession subscribes a component to a comparable slice of SessionState.
 func UseSession[U comparable](selector func(SessionState) U) U {
 	return kites.Use(session, selector)

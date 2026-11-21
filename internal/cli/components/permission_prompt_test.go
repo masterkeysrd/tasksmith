@@ -207,6 +207,50 @@ func TestPermissionPromptKeyShortcuts(t *testing.T) {
 	inst3.Unmount()
 }
 
+func TestPermissionPromptAcceptEditsKeys(t *testing.T) {
+	req := api.PermissionRequest{ID: "write", ToolName: "write", Action: api.ActionWrite, Safety: api.SafetySafe}
+	e := key.Key{Code: 'e', Text: "e"}
+	down := key.Key{Code: key.KeyDown}
+	enter := key.Key{Code: key.KeyEnter}
+	for _, tt := range []struct {
+		name    string
+		enabled bool
+		keys    []key.Key
+		want    int
+	}{
+		{"shortcut", true, []key.Key{e}, 1},
+		{"navigate and confirm", true, []key.Key{down, down, enter}, 1},
+		{"shared prompt without callback", false, []key.Key{e}, 0},
+		{"feedback input", true, []key.Key{{Code: 'r', Text: "r"}, e, {Code: key.KeyEscape}}, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var accepted, decisions int
+			props := PermissionPromptProps{
+				Request:    req,
+				OnDecision: func(api.PermissionRequest, api.PermissionDecision) { decisions++ },
+			}
+			if tt.enabled {
+				props.OnAcceptEdits = func(got api.PermissionRequest) {
+					if got.ID != req.ID {
+						t.Errorf("requested approval for %q, want %q", got.ID, req.ID)
+					}
+					accepted++
+				}
+			}
+			app := testutils.NewApp(t, PermissionPrompt(props), 100, 24)
+			if out := app.Text(); strings.Contains(out, "Yes, and switch to accept_edits") != tt.enabled {
+				t.Errorf("want accept edits option present=%t, got:\n%s", tt.enabled, out)
+			}
+			for _, k := range tt.keys {
+				app.Press(k)
+			}
+			if accepted != tt.want || decisions != 0 {
+				t.Errorf("accept edits called %d times (want %d), regular decision called %d times", accepted, tt.want, decisions)
+			}
+		})
+	}
+}
+
 func TestPermissionPromptNavigationAndEnter(t *testing.T) {
 	store.ResetApp()
 	defer store.ResetApp()

@@ -379,7 +379,9 @@ type Session struct {
 	bgCtx      context.Context        `json:"-"`
 	wg         *sync.WaitGroup        `json:"-"`
 
-	onUpdate func(ctx context.Context, s *Session) error
+	interactionMu sync.Mutex
+	modeUpdateMu  sync.Mutex
+	onUpdate      func(ctx context.Context, s *Session) error
 }
 
 // Clone returns a deep copy of the session and its exported execution state,
@@ -882,10 +884,20 @@ func (s *Session) refreshSandboxPolicy(_ context.Context) {
 	s.pushRuntimePolicy()
 }
 
+func (s *Session) modeOwner() *Session {
+	for parent := s.Parent(); parent != nil; parent = s.Parent() {
+		s = parent
+	}
+	return s
+}
+
 // Update updates the session title or configuration, persisting changes and reconfiguring runtime harnesses.
 func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) error {
 	s.reloadLock.RLock()
 	defer s.reloadLock.RUnlock()
+	owner := s.modeOwner()
+	owner.modeUpdateMu.Lock()
+	defer owner.modeUpdateMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -914,6 +926,7 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 		}
 	}
 	oldConfig := s.Config
+	oldMode := s.PermManager.Mode()
 	newConfig := s.Config
 	newTitle := s.Title
 	thinkingCleared := false
@@ -1020,7 +1033,7 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 		s.Diagnostics = prevDiagnostics
 		s.UpdatedAt = prevUpdatedAt
 		if oldConfig.Mode != newConfig.Mode {
-			s.PermManager.SetMode(oldConfig.Mode)
+			s.PermManager.SetMode(oldMode)
 		}
 		s.Unlock()
 		return err
@@ -1060,12 +1073,22 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 		})
 	}
 
+	var approvalErr error
+	if oldConfig.Mode != newConfig.Mode && oldMode != newConfig.Mode {
+		widened := newConfig.Mode == api.ModeAuto ||
+			(newConfig.Mode == api.ModeAcceptEdits && oldMode != api.ModeAuto) ||
+			(newConfig.Mode == api.ModeDefault && (oldMode == api.ModePlan || oldMode == api.ModeAsk))
+		if widened {
+			approvalErr = owner.reevaluatePermissionTree(ctx, newConfig.Mode)
+		}
+	}
+
 	s.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
 		Workspace: s.workspace.RootDir(),
 		Session:   ToAPISession(s),
 	})
 
-	return nil
+	return approvalErr
 }
 
 // IsCommandDelegated reports whether this child session was spawned for a

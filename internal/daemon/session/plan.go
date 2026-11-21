@@ -28,6 +28,9 @@ func (s *Session) CurrentMode() api.PermissionMode {
 // mode entry and session update if the mode changed.
 func (s *Session) EnterPlanMode(ctx context.Context) (bool, string, error) {
 	plansDir := s.plansDir()
+	owner := s.modeOwner()
+	owner.modeUpdateMu.Lock()
+	defer owner.modeUpdateMu.Unlock()
 
 	s.Lock()
 	oldMode := cmp.Or(s.Config.Mode, api.ModeDefault)
@@ -70,6 +73,10 @@ func (s *Session) ExitPlanMode(ctx context.Context, _ string, nextMode api.Permi
 	default:
 		nextMode = api.ModeDefault
 	}
+
+	owner := s.modeOwner()
+	owner.modeUpdateMu.Lock()
+	defer owner.modeUpdateMu.Unlock()
 
 	s.Lock()
 	oldMode := cmp.Or(s.Config.Mode, api.ModeDefault)

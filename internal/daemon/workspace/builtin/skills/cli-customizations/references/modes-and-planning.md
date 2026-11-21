@@ -25,7 +25,16 @@ read-only), keeping `<session-dir>/plans/` writable until the workspace is trust
 - **`/plan [prompt]`**: switches to `plan` mode immediately; when `<prompt>` is provided, also
   submits `<prompt>` as a planning turn in `plan` mode. (Supported in both the REPL and
   `tasksmith exec`.)
+- **`e`** (**Yes, and switch to accept_edits**): approves the selected write and switches the current
+  session to `accept_edits` without creating a rule. Available in the main session's permission
+  prompt for writes not classified as unsafe, excluding explicit sandbox-bypass retries. Hidden in
+  `accept_edits` and `auto` and in subagent prompts.
 - **`/permissions`** (`/perm`, `/perms`): manage persistent project and global allow/deny rules.
+
+Widening the mode rechecks pending approvals in the session and active subagents. Only pending requests
+that the new mode allows and that are not classified as unsafe are approved once; no requests are
+rejected automatically and no rules are created. Pending explicit sandbox-bypass retries and
+unlisted proxy hosts still need approval.
 
 ## Plan storage & `exit_plan_mode` review
 

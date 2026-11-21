@@ -664,6 +664,7 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 		updated = append(updated, s.Messages[insertIdx:]...)
 		s.Messages = updated
 		s.PendingPermissions = nil
+		s.PendingToolPlans = nil
 		s.PermissionDecisions = nil
 		s.PendingQuestions = nil
 		s.QuestionResponses = nil
@@ -678,6 +679,17 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.ToolCall, loadedTools []string) (graph.Command[State], error) {
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
 	var pending []api.PermissionRequest
+	var pendingPlans map[string]tools.Plan
+	addPending := func(req *api.PermissionRequest, plan *tools.Plan) {
+		pending = append(pending, *req)
+		if pendingPlans == nil {
+			pendingPlans = make(map[string]tools.Plan)
+		}
+		probe := *plan
+		probe.Diff = ""
+		probe.PlanReview = nil
+		pendingPlans[req.ID] = probe
+	}
 	var questions []api.QuestionRequest
 	var planReviews []api.PlanReviewRequest
 	var updatedTodos []api.TodoItem
@@ -700,7 +712,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 						if req == nil {
 							err = tools.ErrPermissionDenied
 						} else {
-							pending = append(pending, *req)
+							addPending(req, plan)
 							continue
 						}
 					case tools.AccessAllow:
@@ -740,7 +752,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 			return nil, err
 		}
 		if req != nil {
-			pending = append(pending, *req)
+			addPending(req, plans[tc.ID])
 			continue
 		}
 		deduped, msgNewTools := dedupState.DeduplicateToolBlocks(toolMsg)
@@ -761,6 +773,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 		return graph.InterruptUpdate[State](func(s State) State {
 			s.Messages = append(s.Messages, toolMsgs...)
 			s.PendingPermissions = clonePermissionRequests(pending)
+			s.PendingToolPlans = pendingPlans
 			s.PermissionDecisions = nil
 			s.PendingQuestions = cloneQuestionRequests(questions)
 			s.QuestionResponses = nil
@@ -1081,6 +1094,7 @@ func firstNonToolIndex(messages message.MessageList, start int) int {
 func clearPermissionsUpdate() graph.Update[State] {
 	return func(s State) State {
 		s.PendingPermissions = nil
+		s.PendingToolPlans = nil
 		s.PermissionDecisions = nil
 		s.PendingQuestions = nil
 		s.QuestionResponses = nil
@@ -1094,6 +1108,7 @@ func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs messa
 	return func(s State) State {
 		s = s.AppendMessages(toolMsgs, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		s.PendingPermissions = nil
+		s.PendingToolPlans = nil
 		s.PermissionDecisions = nil
 		s.PendingQuestions = nil
 		s.QuestionResponses = nil

@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 const (
@@ -103,6 +104,7 @@ type State struct {
 	Messages            message.MessageList               `json:"messages"`
 	PendingCompaction   *api.CompactRequest               `json:"pending_compaction,omitempty"`
 	PendingPermissions  []api.PermissionRequest           `json:"pending_permissions,omitempty"`
+	PendingToolPlans    map[string]tools.Plan             `json:"pending_tool_plans,omitempty"`
 	PermissionDecisions map[string]api.PermissionDecision `json:"permission_decisions,omitempty"`
 	PendingQuestions    []api.QuestionRequest             `json:"pending_questions,omitempty"`
 	QuestionResponses   map[string]api.QuestionResponse   `json:"question_responses,omitempty"`
@@ -129,6 +131,12 @@ func (s State) Copy() State {
 	var pending []api.PermissionRequest
 	if len(s.PendingPermissions) > 0 {
 		pending = clonePermissionRequests(s.PendingPermissions)
+	}
+
+	pendingToolPlans := maps.Clone(s.PendingToolPlans)
+	for id, plan := range pendingToolPlans {
+		plan.Paths = slices.Clone(plan.Paths)
+		pendingToolPlans[id] = plan
 	}
 
 	var decisions map[string]api.PermissionDecision
@@ -188,6 +196,7 @@ func (s State) Copy() State {
 		Messages:            msgs,
 		PendingCompaction:   pendingCompact,
 		PendingPermissions:  pending,
+		PendingToolPlans:    pendingToolPlans,
 		PermissionDecisions: decisions,
 		PendingQuestions:    questions,
 		QuestionResponses:   responses,

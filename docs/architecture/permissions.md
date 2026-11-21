@@ -61,6 +61,12 @@ When a tool invocation requires explicit user approval, the interactive prompt a
 - **`workspace`**: Persisted to the workspace's local state directory (`~/.local/share/tasksmith/workspaces/<hash>/permissions.json`), automatically allowing matching operations in future sessions for that project.
 - **`global`**: Configured globally in `~/.config/tasksmith/permissions.json` across all projects on the workstation.
 
+After a user widens the session mode, the daemon rechecks the original tool plans behind pending
+prompts in the session and its subagents. It records eligible approvals as `once`, without changing
+any rules, and resumes a paused turn only after all of its pending interactions are resolved. Unsafe
+requests, explicit sandbox bypasses, and proxy host approvals are not resolved by mode changes.
+Tightening the mode does not reject existing prompts.
+
 ### 5. Trust Gate & Restricted Mode Boundary
 Before any session initializes or executes agent instructions, the directory passes through the **Trust Gate**:
 - **Trust Verification (`trust.json`)**: Machine-wide trust records are evaluated from `~/.local/share/tasksmith/trust.json`. Trust can be granted with `folder` scope (exact directory) or `parent` scope (all subdirectories).

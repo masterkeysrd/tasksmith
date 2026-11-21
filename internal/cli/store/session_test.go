@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -529,6 +530,147 @@ type mockSessionRoundTripper struct {
 
 func (m *mockSessionRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return m.handler(req)
+}
+
+func TestApprovePermissionAndAcceptEdits(t *testing.T) {
+	selected := api.PermissionRequest{ID: "selected", ToolCallID: "selected-tool", Action: api.ActionWrite, Safety: api.SafetySafe}
+	other := api.PermissionRequest{ID: "other", ToolCallID: "other-tool", Action: api.ActionWrite, Safety: api.SafetySafe}
+	for _, tt := range []struct {
+		name       string
+		pending    []api.PermissionRequest
+		patchFails bool
+		sendFails  bool
+		wantSend   bool
+		wantError  string
+	}{
+		{name: "resolved by mode change", pending: []api.PermissionRequest{other}},
+		{name: "selected request remains", pending: []api.PermissionRequest{other, selected}, wantSend: true},
+		{name: "mode update fails", patchFails: true, wantError: "Could not switch to accept_edits"},
+		{name: "approval fails", pending: []api.PermissionRequest{selected}, sendFails: true, wantSend: true, wantError: "Could not approve permission"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ClearSlot()
+			ResetStream()
+			ClearTranscript()
+			t.Cleanup(ClearSlot)
+			t.Cleanup(ResetStream)
+			t.Cleanup(ClearTranscript)
+
+			acc := newConversationAccumulator()
+			acc.setSessionID("session")
+			acc.SeedPermissions([]api.PermissionRequest{selected, other})
+			var patches, sends int
+			rt := &mockSessionRoundTripper{handler: func(req *http.Request) (*http.Response, error) {
+				switch req.Method + " " + req.URL.Path {
+				case "PATCH /v1/sessions/session":
+					patches++
+					var update api.UpdateSessionRequest
+					if err := json.NewDecoder(req.Body).Decode(&update); err != nil || update.Config.Mode != api.ModeAcceptEdits {
+						t.Errorf("update = %+v, err = %v", update, err)
+					}
+					if tt.patchFails {
+						return nil, errors.New("mode update failed")
+					}
+					body, err := json.Marshal(api.Session{ID: "session", Config: update.Config, PendingPermissions: tt.pending})
+					if err != nil {
+						t.Fatal(err)
+					}
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+				case "POST /v1/sessions/session/send":
+					sends++
+					if patches != 1 {
+						t.Errorf("approval sent after %d mode updates, want 1", patches)
+					}
+					var send api.SendRequest
+					want := api.PermissionDecision{RequestID: selected.ID, ToolCallID: selected.ToolCallID, Kind: api.DecisionAllowOnce}
+					if err := json.NewDecoder(req.Body).Decode(&send); err != nil || send.Decision == nil || *send.Decision != want {
+						t.Errorf("decision = %+v, err = %v; want %+v", send.Decision, err, want)
+					}
+					if tt.sendFails {
+						return nil, errors.New("approval failed")
+					}
+					return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody}, nil
+				default:
+					t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+					return nil, nil
+				}
+			}}
+			c, err := client.New("daemon.sock", client.WithCWD(t.TempDir()), client.WithHTTPClient(&http.Client{Transport: rt}))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			approvePermissionAndAcceptEdits(t.Context(), c, "session", selected.ID)
+
+			if patches != 1 || sends > 1 || (sends == 1) != tt.wantSend {
+				t.Errorf("PATCH called %d times, POST called %d times (want POST=%t)", patches, sends, tt.wantSend)
+			}
+			items := GetTranscript().Items
+			if tt.wantError == "" {
+				if items != nil && len(*items) != 0 {
+					t.Errorf("unexpected transcript output: %+v", *items)
+				}
+			} else if items == nil || len(*items) != 1 {
+				t.Errorf("expected one error transcript item, got %+v", items)
+			} else if got, ok := (*items)[0].Data.(ErrorData); !ok || got.Title != tt.wantError {
+				t.Errorf("transcript error = %+v, want %q", (*items)[0].Data, tt.wantError)
+			}
+			if active := GetSlot().Active; active == nil || active.ID != permSlotID(selected.ID) {
+				t.Fatalf("selected slot dismissed before timeline event: %+v", active)
+			}
+			if tt.wantError == "" {
+				acc.applyEvent(api.Event{Type: api.EventEntryAdded, Payload: api.EntryAddedEvent{
+					SessionID: "session",
+					Entry: api.TimelineEntry{ID: "approval", Kind: api.TimelineKindPermission, Permission: &api.PermissionRecord{
+						Request: selected, Decision: api.PermissionDecision{RequestID: selected.ID, ToolCallID: selected.ToolCallID, Kind: api.DecisionAllowOnce},
+					}},
+				}})
+				if active := GetSlot().Active; active == nil || active.ID != permSlotID(other.ID) {
+					t.Errorf("selected slot not dismissed independently: %+v", active)
+				}
+			}
+		})
+	}
+}
+
+func TestAcceptEditsPermissionCancelsModeDebounce(t *testing.T) {
+	ResetSession()
+	t.Cleanup(ResetSession)
+	called := make(chan api.PermissionMode, 1)
+	rt := &mockSessionRoundTripper{handler: func(req *http.Request) (*http.Response, error) {
+		var update api.UpdateSessionRequest
+		if err := json.NewDecoder(req.Body).Decode(&update); err != nil {
+			return nil, err
+		}
+		called <- update.Config.Mode
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"id":"session","config":{"mode":"accept_edits"}}`))}, nil
+	}}
+	c, err := client.New("daemon.sock", client.WithCWD(t.TempDir()), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	SetSession(&api.Session{ID: "session", Config: api.SessionConfig{Mode: api.ModeDefault}})
+	sessMu.Lock()
+	activeClient, activeCtx = c, t.Context()
+	modeDebounceTimer = time.NewTimer(time.Hour)
+	sessMu.Unlock()
+
+	ApprovePermissionAndAcceptEdits(api.PermissionRequest{ID: "selected", Action: api.ActionWrite, Safety: api.SafetySafe})
+
+	sessMu.Lock()
+	debounced := modeDebounceTimer != nil
+	sessMu.Unlock()
+	if debounced {
+		t.Fatal("pending debounce not canceled synchronously")
+	}
+	select {
+	case mode := <-called:
+		if mode != api.ModeAcceptEdits {
+			t.Errorf("requested mode %q, want accept_edits", mode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no immediate mode update")
+	}
 }
 
 func TestCycleModeDebounce(t *testing.T) {

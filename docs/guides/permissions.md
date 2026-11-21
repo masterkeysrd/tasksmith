@@ -32,6 +32,8 @@ You can change permission modes at any time without restarting your session:
    ```
    Omitting the argument (`/mode`) opens an interactive mode picker with descriptions.
 
+When you widen the session mode, TaskSmith rechecks pending approvals in the session and its active subagents. It approves a pending request once only if the new mode allows it and the request is not classified as unsafe. Already-pending unsafe requests, explicit sandbox-bypass retries, and unlisted proxy hosts still require an explicit decision. Switching modes never automatically rejects a pending request or creates a permission rule.
+
 ---
 
 ## Interactive Tool Approvals
@@ -61,10 +63,13 @@ For example:
 
 | Option | Shortcut | Behavior |
 | :--- | :--- | :--- |
-| **Yes, allow once** | `y` or `Enter` on row 0 | Grants permission exclusively for this specific tool call. Future invocations of the same command or file will prompt again. |
+| **Yes, allow once** | `y` or `Enter` on the first row | Grants permission exclusively for this specific tool call. |
+| **Yes, and switch to accept_edits** | `e` or `Enter` on this row | Approves the selected write and switches the current session to `accept_edits`, which may also approve other eligible writes waiting in the same batch. Does not create a rule. |
 | **Always allow `<pattern>`** | `a` or `Enter` on pattern rows | Automatically approves this action and any future matching action according to the selected persistence scope. |
 | **No, deny** | `n` or `Enter` on last row | Rejects the tool call. The agent receives a permission-denied error and can attempt an alternative approach. |
 | **Reject with feedback** | `r` | Opens an inline text input to provide explanatory feedback to the agent (e.g., *"Do not delete this test; update it to match the new return type"*). |
+
+The `e` option appears only in the main session's permission prompt for a write that is not classified as unsafe and is not an explicit sandbox-bypass retry. It is not offered in subagent prompts or if the session is already in `accept_edits` or `auto`.
 
 ### Scoping Persistent Rules (`Tab`)
 

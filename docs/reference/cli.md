@@ -499,6 +499,12 @@ While browsing history, the composer's bottom border is replaced by a centered r
 | `Esc` | Modals & Pickers | Dismiss and close modal without applying changes. |
 | *Character keys* | Modals & Pickers | Dynamically filter list items with live search. |
 
+### Permission Prompt
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `e` | Main session permission prompt | **Yes, and switch to accept_edits**: approve the selected write and switch the session to `accept_edits` without creating a rule. Available for writes not classified as unsafe, except explicit sandbox-bypass retries or when already in `accept_edits` or `auto`. See [Interactive Tool Approvals](../guides/permissions.md#interactive-tool-approvals). |
+
 ### Plan Review Prompt (`exit_plan_mode`)
 
 | Keybinding | Scope | Action |

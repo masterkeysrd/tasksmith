@@ -94,6 +94,52 @@ func TestSlotRendersPermissionPrompt(t *testing.T) {
 	}
 }
 
+func TestSlotAcceptEditsOption(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		mode   api.PermissionMode
+		action api.ActionType
+		safety api.SafetyLevel
+		bypass bool
+		want   bool
+	}{
+		{"default", api.ModeDefault, api.ActionWrite, api.SafetySafe, false, true},
+		{"plan", api.ModePlan, api.ActionWrite, api.SafetySafe, false, true},
+		{"ask outside write", api.ModeAsk, api.ActionWrite, api.SafetyOutside, false, true},
+		{"accept edits", api.ModeAcceptEdits, api.ActionWrite, api.SafetySafe, false, false},
+		{"auto", api.ModeAuto, api.ActionWrite, api.SafetySafe, false, false},
+		{"command", api.ModeDefault, api.ActionExec, api.SafetySafe, false, false},
+		{"unsafe write", api.ModeDefault, api.ActionWrite, api.SafetyUnsafe, false, false},
+		{"sandbox bypass", api.ModeDefault, api.ActionWrite, api.SafetySafe, true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store.ResetSession()
+			store.ClearSlot()
+			t.Cleanup(store.ResetSession)
+			t.Cleanup(store.ClearSlot)
+			store.SetSessionMode(tt.mode)
+			store.EnqueueSlot(store.SlotItem{
+				ID:   "perm-write",
+				Kind: store.SlotKindPermission,
+				Data: api.PermissionRequest{
+					ID:            "write",
+					ToolName:      "write",
+					Action:        tt.action,
+					Safety:        tt.safety,
+					BypassSandbox: tt.bypass,
+				},
+			})
+
+			out := testutils.NewApp(t, Slot(), 100, 24).Text()
+			for _, text := range []string{"Yes, and switch to accept_edits", "e Accept edits"} {
+				if strings.Contains(out, text) != tt.want {
+					t.Errorf("want %q present=%t, got:\n%s", text, tt.want, out)
+				}
+			}
+		})
+	}
+}
+
 func TestSlotRendersPlanReviewPrompt(t *testing.T) {
 	store.ClearSlot()
 	defer store.ClearSlot()

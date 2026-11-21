@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2550,6 +2551,249 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 	}
 	if msgText(history[5]) != "Understood, canceled those writes and moving on." {
 		t.Errorf("history[5] = %q", msgText(history[5]))
+	}
+}
+
+const modePermissionFileContent = "mode permission test\n"
+
+func TestModePermissionApprovesWriteBatch(t *testing.T) {
+	ctx := t.Context()
+	sess, provider := newModePermissionTest(t, modePermissionWrite("first.txt"), modePermissionWrite("second.txt"))
+	modePermissionSend(t, sess)
+	pending := sess.Clone().PendingPermissions
+	if sess.Status != api.StatusWaitingPermission || len(pending) != 2 {
+		t.Fatalf("initial status = %s, pending = %+v; want two permission prompts", sess.Status, pending)
+	}
+	before := sess.PermManager.Permissions()
+	modePermissionAssertAbsent(t, sess, "first.txt")
+	modePermissionAssertAbsent(t, sess, "second.txt")
+
+	modePermissionUpdate(t, sess, api.ModeAcceptEdits)
+	modePermissionWait(t, sess)
+	if sess.Status != api.StatusIdle || len(sess.PendingPermissions) != 0 || len(provider.recordedTurns()) != 2 {
+		t.Fatalf("after update: status = %s, pending = %+v, provider calls = %d; want completed turn", sess.Status, sess.PendingPermissions, len(provider.recordedTurns()))
+	}
+	modePermissionAssertDecisions(t, ctx, sess, map[string]api.DecisionKind{
+		pending[0].ID: api.DecisionAllowOnce,
+		pending[1].ID: api.DecisionAllowOnce,
+	})
+	if after := sess.PermManager.Permissions(); !reflect.DeepEqual(before, after) {
+		t.Errorf("allow-once changed stored permission rules: before %+v, after %+v", before, after)
+	}
+	modePermissionAssertWritten(t, sess, "first.txt")
+	modePermissionAssertWritten(t, sess, "second.txt")
+}
+
+func TestModePermissionPreservesIneligibleWrite(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		mode api.PermissionMode
+		deny bool
+	}{
+		{name: "plan", mode: api.ModePlan},
+		{name: "explicit deny", mode: api.ModeAcceptEdits, deny: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sess, provider := newModePermissionTest(t, modePermissionWrite("pending.txt"))
+			modePermissionSend(t, sess)
+			pending := sess.Clone().PendingPermissions
+			if len(pending) != 1 {
+				t.Fatalf("initial pending permissions = %+v; want one write prompt", pending)
+			}
+			if tt.deny {
+				if err := sess.PermManager.AddDeny("write(pending.txt)"); err != nil {
+					t.Fatalf("AddDeny: %v", err)
+				}
+			}
+
+			modePermissionUpdate(t, sess, tt.mode)
+			modePermissionWait(t, sess)
+			if sess.Status != api.StatusWaitingPermission || !reflect.DeepEqual(sess.PendingPermissions, pending) || len(provider.recordedTurns()) != 1 {
+				t.Fatalf("after mode %s: status = %s, pending = %+v, provider calls = %d; want original prompt %+v", tt.mode, sess.Status, sess.PendingPermissions, len(provider.recordedTurns()), pending)
+			}
+			modePermissionAssertDecisions(t, t.Context(), sess, nil)
+			modePermissionAssertAbsent(t, sess, "pending.txt")
+		})
+	}
+}
+
+func TestModePermissionChildUnsafePromptSurvivesCycle(t *testing.T) {
+	ctx := t.Context()
+	parent, provider := newModePermissionTest(t, modePermissionWrite("child.txt"), &message.ToolCall{
+		ID:   "unsafe-shell",
+		Name: "bash",
+		Args: map[string]any{"command": "printf 'unterminated"},
+	})
+	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{Agent: "general", Title: "Child", Prompt: "Start"})
+	if err != nil {
+		t.Fatalf("InvokeSubagent: %v", err)
+	}
+	child, ok := parent.Child(out.SessionID)
+	if !ok {
+		t.Fatal("child not registered")
+	}
+	modePermissionWait(t, child)
+	pending := child.Clone().PendingPermissions
+	if child.Status != api.StatusWaitingPermission || len(pending) != 2 {
+		t.Fatalf("initial child status = %s, pending = %+v; want write and bash prompts", child.Status, pending)
+	}
+	write, unsafe := pending[0], pending[1]
+	if write.ToolName == "bash" {
+		write, unsafe = unsafe, write
+	}
+	if write.ToolName != "write" || write.Safety == api.SafetyUnsafe || unsafe.ToolName != "bash" || unsafe.Safety != api.SafetyUnsafe {
+		t.Fatalf("want eligible write and unsafe bash prompts; got %+v", pending)
+	}
+
+	for _, mode := range []api.PermissionMode{api.ModeAcceptEdits, api.ModePlan, api.ModeAsk, api.ModeAuto, api.ModeDefault} {
+		modePermissionUpdate(t, parent, mode)
+		modePermissionWait(t, child)
+		if child.PermManager.Mode() != mode {
+			t.Fatalf("child permission mode = %s, want %s", child.PermManager.Mode(), mode)
+		}
+		if child.Status != api.StatusWaitingPermission || !reflect.DeepEqual(child.PendingPermissions, []api.PermissionRequest{unsafe}) || len(provider.recordedTurns()) != 1 {
+			t.Fatalf("after mode %s: child status = %s, pending = %+v, provider calls = %d; want only original unsafe bash prompt", mode, child.Status, child.PendingPermissions, len(provider.recordedTurns()))
+		}
+		modePermissionAssertDecisions(t, ctx, child, map[string]api.DecisionKind{write.ID: api.DecisionAllowOnce})
+		modePermissionAssertAbsent(t, child, "child.txt")
+	}
+
+	if err := child.Send(ctx, api.SendRequest{Decision: &api.PermissionDecision{RequestID: unsafe.ID, Kind: api.DecisionReject}}); err != nil {
+		t.Fatalf("reject unsafe prompt: %v", err)
+	}
+	modePermissionWait(t, child)
+	modePermissionWait(t, parent)
+	if child.Status != api.StatusIdle || len(child.PendingPermissions) != 0 {
+		t.Fatalf("after explicit rejection: child status = %s, pending = %+v", child.Status, child.PendingPermissions)
+	}
+	modePermissionAssertWritten(t, child, "child.txt")
+}
+
+func TestModePermissionPreservesPendingQuestionCheckpoint(t *testing.T) {
+	ctx := t.Context()
+	sess, provider := newModePermissionTest(t, modePermissionWrite("mixed.txt"), &message.ToolCall{
+		ID:   "ask",
+		Name: "ask_question",
+		Args: map[string]any{"questions": []any{map[string]any{"type": "text", "question": "Why?", "description": "Explain."}}},
+	})
+	modePermissionSend(t, sess)
+	snapshot := sess.Clone()
+	if len(snapshot.PendingPermissions) != 1 || len(snapshot.PendingQuestions) != 1 {
+		t.Fatalf("initial permissions = %+v, questions = %+v; want one of each", snapshot.PendingPermissions, snapshot.PendingQuestions)
+	}
+	before, err := sess.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("load interrupted checkpoint: %v", err)
+	}
+
+	modePermissionUpdate(t, sess, api.ModeAcceptEdits)
+	modePermissionWait(t, sess)
+	if sess.Status != api.StatusWaitingQuestion || len(sess.PendingPermissions) != 0 || !reflect.DeepEqual(sess.PendingQuestions, snapshot.PendingQuestions) || len(provider.recordedTurns()) != 1 {
+		t.Fatalf("after accepting edits: status = %s, permissions = %+v, questions = %+v, provider calls = %d; want original question only", sess.Status, sess.PendingPermissions, sess.PendingQuestions, len(provider.recordedTurns()))
+	}
+	after, err := sess.Harness.LoadState(ctx)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("harness checkpoint changed while question was pending (load error: %v)", err)
+	}
+	modePermissionAssertDecisions(t, ctx, sess, map[string]api.DecisionKind{snapshot.PendingPermissions[0].ID: api.DecisionAllowOnce})
+	modePermissionAssertAbsent(t, sess, "mixed.txt")
+
+	if err := sess.Send(ctx, api.SendRequest{Question: &api.QuestionResponse{
+		RequestID: snapshot.PendingQuestions[0].ID,
+		Answers:   []api.QuestionAnswer{{Question: "Why?", Text: "Because"}},
+	}}); err != nil {
+		t.Fatalf("answer question: %v", err)
+	}
+	modePermissionWait(t, sess)
+	if sess.Status != api.StatusIdle || len(sess.PendingQuestions) != 0 || len(provider.recordedTurns()) != 2 {
+		t.Fatalf("after answering: status = %s, questions = %+v, provider calls = %d; want completed turn", sess.Status, sess.PendingQuestions, len(provider.recordedTurns()))
+	}
+	modePermissionAssertWritten(t, sess, "mixed.txt")
+}
+
+func newModePermissionTest(t *testing.T, calls ...message.Block) (*Session, *fakeProvider) {
+	t.Helper()
+	var step atomic.Int32
+	provider := &fakeProvider{chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+		blocks := []message.Block{&message.TextBlock{Text: "Completed."}}
+		if step.Add(1) == 1 {
+			blocks = calls
+		}
+		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: uuid.NewString()}, Model: req.Model, Content: blocks, Done: true}}, nil
+	}}
+	_, _, _, _, mgr := setupTestEnv(t, provider)
+	t.Cleanup(func() { _ = mgr.Close() })
+	sess, _, err := mgr.Create(t.Context(), api.CreateSessionRequest{Title: "Permission mode regression", Config: api.SessionConfig{Mode: api.ModeDefault}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return sess, provider
+}
+
+func modePermissionWrite(path string) *message.ToolCall {
+	return &message.ToolCall{ID: "write-" + path, Name: "write", Args: map[string]any{"path": path, "content": modePermissionFileContent}}
+}
+
+func modePermissionSend(t *testing.T, sess *Session) {
+	t.Helper()
+	if err := sess.Send(t.Context(), api.SendRequest{Content: "Start"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	modePermissionWait(t, sess)
+}
+
+func modePermissionWait(t *testing.T, sess *Session) {
+	t.Helper()
+	if err := sess.Wait(t.Context()); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+}
+
+func modePermissionUpdate(t *testing.T, sess *Session, mode api.PermissionMode) {
+	t.Helper()
+	if err := sess.Update(t.Context(), api.UpdateSessionRequest{Config: api.SessionConfig{Mode: mode}}); err != nil {
+		t.Fatalf("Update mode to %s: %v", mode, err)
+	}
+	if got := sess.Clone().Config.Mode; got != mode {
+		t.Fatalf("session mode = %s, want %s", got, mode)
+	}
+}
+
+func modePermissionAssertDecisions(t *testing.T, ctx context.Context, sess *Session, want map[string]api.DecisionKind) {
+	t.Helper()
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("list timeline: %v", err)
+	}
+	seen := make(map[string]bool, len(want))
+	for _, entry := range entries {
+		if entry.Kind != api.TimelineKindPermission {
+			continue
+		}
+		record := entry.Permission
+		id := record.Request.ID
+		if seen[id] || want[id] != record.Decision.Kind || record.Decision.RequestID != id || record.Decision.ToolCallID != record.Request.ToolCallID {
+			t.Fatalf("unexpected permission timeline record: %+v; want decisions %+v", record, want)
+		}
+		seen[id] = true
+	}
+	if len(seen) != len(want) {
+		t.Errorf("timeline contains decisions for %v, want %v", seen, want)
+	}
+}
+
+func modePermissionAssertAbsent(t *testing.T, sess *Session, path string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(sess.WorkDir, path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("%s should not exist yet: stat error = %v", path, err)
+	}
+}
+
+func modePermissionAssertWritten(t *testing.T, sess *Session, path string) {
+	t.Helper()
+	got, err := os.ReadFile(filepath.Join(sess.WorkDir, path))
+	if err != nil || string(got) != modePermissionFileContent {
+		t.Errorf("read %s = %q, %v; want %q", path, got, err, modePermissionFileContent)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 var _ harness.Queue = (*Session)(nil)
@@ -391,6 +392,12 @@ func (s *Session) waitingForInteractionLocked() bool {
 }
 
 func (s *Session) startTurn(hInput harness.Input) error {
+	s.interactionMu.Lock()
+	defer s.interactionMu.Unlock()
+	return s.startTurnLocked(hInput)
+}
+
+func (s *Session) startTurnLocked(hInput harness.Input) error {
 	s.Lock()
 	if s.Running {
 		s.Unlock()
@@ -504,7 +511,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 
 		for {
 			s.Lock()
-			hasMore := !s.waitingForInteractionLocked() && runCtx.Err() == nil && len(s.queue) > 0
+			hasMore := s.done == done && !s.waitingForInteractionLocked() && runCtx.Err() == nil && len(s.queue) > 0
 			s.Unlock()
 			if !hasMore {
 				break
@@ -522,10 +529,10 @@ func (s *Session) startTurn(hInput harness.Input) error {
 		}
 
 		s.Lock()
-		waiting := s.waitingForInteractionLocked()
+		settled := s.done == done && !s.waitingForInteractionLocked()
 		s.Unlock()
 
-		if !waiting && runCtx.Err() == nil {
+		if settled && runCtx.Err() == nil {
 			s.setStatus(api.StatusIdle)
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.CompletedEvent{
 				SessionID: s.ID,
@@ -598,6 +605,8 @@ func (s *Session) onTaskUpdate(snap api.Task) {
 }
 
 func (s *Session) resumeInteraction(ctx context.Context, record func(context.Context) (bool, error)) error {
+	s.interactionMu.Lock()
+	defer s.interactionMu.Unlock()
 	s.Lock()
 	if s.Running {
 		s.Unlock()
@@ -610,6 +619,10 @@ func (s *Session) resumeInteraction(ctx context.Context, record func(context.Con
 		return err
 	}
 
+	return s.resumeRecordedInteraction()
+}
+
+func (s *Session) resumeRecordedInteraction() error {
 	s.Lock()
 	fullDecisions := maps.Clone(s.decisions)
 	fullAnswers := maps.Clone(s.answers)
@@ -619,7 +632,75 @@ func (s *Session) resumeInteraction(ctx context.Context, record func(context.Con
 	clear(s.planReviews)
 	s.Unlock()
 
-	return s.startTurn(harness.Input{Decisions: fullDecisions, Answers: fullAnswers, PlanReviews: fullPlanReviews})
+	return s.startTurnLocked(harness.Input{Decisions: fullDecisions, Answers: fullAnswers, PlanReviews: fullPlanReviews})
+}
+
+func (s *Session) reevaluatePermissionTree(ctx context.Context, mode api.PermissionMode) error {
+	err := s.reevaluatePendingPermissions(ctx, mode)
+	for _, child := range s.Children() {
+		err = errors.Join(err, child.reevaluatePermissionTree(ctx, mode))
+	}
+	return err
+}
+
+func (s *Session) reevaluatePendingPermissions(ctx context.Context, mode api.PermissionMode) error {
+	s.interactionMu.Lock()
+	defer s.interactionMu.Unlock()
+
+	s.Lock()
+	if s.Running || s.closing || len(s.PendingPermissions) == 0 || len(s.hostApprovals) != 0 {
+		s.Unlock()
+		return nil
+	}
+	pending := slices.Clone(s.PendingPermissions)
+	previousStatus := s.Status
+	manager, h := s.PermManager, s.Harness
+	s.Unlock()
+	if manager.Mode() != mode {
+		return nil
+	}
+
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		return fmt.Errorf("session: load pending tool plans: %w", err)
+	}
+	var result error
+	var changed, ready bool
+	for _, req := range pending {
+		plan, ok := state.PendingToolPlans[req.ID]
+		if !ok || req.Safety == api.SafetyUnsafe || plan.Safety == api.SafetyUnsafe || plan.BypassSandbox ||
+			(plan.Action == api.ActionNet && plan.ToolName == "net") {
+			continue
+		}
+		access, _, err := manager.Evaluate(&plan)
+		if err != nil {
+			result = errors.Join(result, fmt.Errorf("session: reevaluate pending permission for %s: %w", req.ToolName, err))
+			continue
+		}
+		if access != tools.AccessAllow {
+			continue
+		}
+		ready, err = s.recordMatchedDecision(ctx, state.PendingPermissions, req, api.PermissionDecision{Kind: api.DecisionAllowOnce})
+		if err != nil {
+			result = errors.Join(result, err)
+			break
+		}
+		changed = true
+	}
+	if ready {
+		result = errors.Join(result, s.resumeRecordedInteraction())
+	} else if changed {
+		s.Lock()
+		status := s.Status
+		s.Unlock()
+		if status != previousStatus {
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{SessionID: s.ID, Status: status})
+		}
+	}
+	if changed {
+		s.notifyParentUpdate()
+	}
+	return result
 }
 
 func (s *Session) appendTimeline(ctx context.Context, entry *timeline.Entry) error {
@@ -661,17 +742,26 @@ func (s *Session) recordDecision(ctx context.Context, decision api.PermissionDec
 		return false, ErrPermissionNotFound
 	}
 
+	return s.recordMatchedDecision(ctx, state.PendingPermissions, *matched, decision)
+}
+
+func (s *Session) recordMatchedDecision(ctx context.Context, pending []api.PermissionRequest, matched api.PermissionRequest, decision api.PermissionDecision) (bool, error) {
 	decision.RequestID = matched.ID
 	decision.ToolCallID = matched.ToolCallID
 
 	s.Lock()
+	if _, recorded := s.decisions[matched.ID]; recorded {
+		s.Unlock()
+		return false, ErrPermissionNotFound
+	}
+	previousPending, previousStatus := s.PendingPermissions, s.Status
 	if s.decisions == nil {
-		s.decisions = make(map[string]api.PermissionDecision, len(state.PendingPermissions))
+		s.decisions = make(map[string]api.PermissionDecision, len(pending))
 	}
 	s.decisions[matched.ID] = decision
 
 	var remaining []api.PermissionRequest
-	for _, req := range state.PendingPermissions {
+	for _, req := range pending {
 		if _, ok := s.decisions[req.ID]; !ok {
 			req.GrantPatterns = slices.Clone(req.GrantPatterns)
 			remaining = append(remaining, req)
@@ -688,16 +778,15 @@ func (s *Session) recordDecision(ctx context.Context, decision api.PermissionDec
 	}
 	s.Unlock()
 
-	matchedReq := *matched
-	matchedReq.GrantPatterns = slices.Clone(matched.GrantPatterns)
-	fullDec := decision
+	matched.GrantPatterns = slices.Clone(matched.GrantPatterns)
 	entry := timeline.NewPermissionEntry(api.PermissionRecord{
-		Request:  matchedReq,
-		Decision: fullDec,
+		Request:  matched,
+		Decision: decision,
 	})
 	if err := s.appendTimeline(ctx, entry); err != nil {
 		s.Lock()
 		delete(s.decisions, matched.ID)
+		s.PendingPermissions, s.Status = previousPending, previousStatus
 		s.Unlock()
 		return false, err
 	}
@@ -997,6 +1086,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 			} else if len(planReviews) > 0 {
 				nextStatus = api.StatusWaitingPlanReview
 			}
+			s.interactionMu.Lock()
 			s.Lock()
 			s.Status = nextStatus
 			s.Running = false
@@ -1020,6 +1110,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.PlanReviewRequestedEvent{SessionID: s.ID, PlanReviews: planReviews})
 			}
 			s.notifyParentUpdate()
+			s.interactionMu.Unlock()
 
 		case api.TodosUpdatedEvent:
 			s.Lock()
