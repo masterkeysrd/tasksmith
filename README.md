@@ -192,6 +192,8 @@ docs/
     └── providers/                 # Upstream provider configuration guides
         ├── openai.md              # OpenAI (Responses API, ZDR, tools, compatible endpoints)
         ├── anthropic.md           # Anthropic (Claude 4.5/5, extended thinking, caching)
+        ├── claudecode.md          # Claude Code (subscription inference via claude)
+        ├── github-copilot.md      # GitHub Copilot (subscription inference via copilot)
         ├── ollama.md              # Ollama (local offline inference, triple roles)
         ├── google-genai.md        # Google GenAI (Gemini models, 1M+ context, embeddings)
         ├── typesafe.md            # TypeSafe (System 1 calibrated decision engine)

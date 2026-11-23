@@ -374,9 +374,18 @@ func TestBuiltinSandboxPermissionReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("synced cli-customizations models-quotas-and-auth reference missing: %v", err)
 	}
-	for _, want := range []string{"Quotas", "tasksmith auth", "/login", "--paste"} {
+	for _, want := range []string{"Quotas", "tasksmith auth", "/login", "--paste", "`claudecode`", "`github-copilot`"} {
 		if !strings.Contains(string(quotasAuthRef), want) {
 			t.Fatalf("models-quotas-and-auth reference lacks %q guidance", want)
+		}
+	}
+	providersRef, err := os.ReadFile(filepath.Join(builtinDir, "skills", "tasksmith-customizations", "references", "providers.md"))
+	if err != nil {
+		t.Fatalf("synced tasksmith-customizations providers reference missing: %v", err)
+	}
+	for _, want := range []string{"`claudecode`", "`github-copilot`"} {
+		if !strings.Contains(string(providersRef), want) {
+			t.Fatalf("providers reference lacks %q guidance", want)
 		}
 	}
 	sessionsMediaRef, err := os.ReadFile(filepath.Join(builtinDir, "skills", "cli-customizations", "references", "sessions-and-media.md"))
@@ -449,6 +458,9 @@ func TestBuiltinSandboxPermissionReferences(t *testing.T) {
 		})
 		if err != nil || !strings.Contains(fbText, "references/sandbox-and-permissions.md") {
 			t.Fatalf("fallback render for %s: %v", name, err)
+		}
+		if name == "tasksmith-customizations" && !strings.Contains(fbText, "references/providers.md") {
+			t.Fatalf("fallback render for %s lacks providers reference", name)
 		}
 		if name == "cli-customizations" {
 			for _, ref := range []string{

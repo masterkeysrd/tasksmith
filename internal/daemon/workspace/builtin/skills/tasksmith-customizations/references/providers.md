@@ -2,7 +2,9 @@
 
 A ModelProvider describes a gateway driver, its connection settings, available models, and defaults. Definitions are discovered through the system, user, workspace, and current-project hierarchy, commonly in `.agents/providers/<name>.provider.yaml`. The resource name identifies the configured provider; `spec.type` selects the driver.
 
-TaskSmith ships provider presets as templates. A preset being present does not itself make it an active provider. Gateway types include `openai`, `codex`, `anthropic`, `ollama`, `typesafe`, `antigravity`, and `google-genai` (also `genai` or `gemini`). Provider support for completion, decision, and embedding roles differs; a capability declaration cannot add a role the driver does not implement. Decision model support in the gateway does not imply TaskSmith can evaluate Decision resources.
+TaskSmith ships provider presets as templates. A preset being present does not itself make it an active provider. Gateway types include `openai`, `codex`, `anthropic`, `claudecode`, `github-copilot`, `ollama`, `typesafe`, `antigravity`, and `google-genai` (also `genai` or `gemini`). Provider support for completion, decision, and embedding roles differs; a capability declaration cannot add a role the driver does not implement. Decision model support in the gateway does not imply TaskSmith can evaluate Decision resources.
+
+For Claude Code and GitHub Copilot, set `metadata.name` and `spec.type` to the same canonical identifier (`claudecode` or `github-copilot`) and set `spec.auth.type: oauth2` with no additional auth fields. Leave `spec.endpoint`, `spec.headers`, and `spec.config` unset. These drivers implement completion through `claude` and `copilot`, respectively, installed on the daemon host. The Copilot runtime must speak protocol 4, as Copilot CLI `1.0.114` does. Model access is account-specific; bundled aliases are suggestions. Use subscription quota, not per-token dollars, and report quota windows only when the vendor exposes them.
 
 For ChatGPT plan inference, use `metadata.name: codex`, `spec.type: codex`, and `spec.auth.type: oauth2`. The driver manages the endpoint and credentials. Setup copies the preset models and aliases into the manifest. To browse models available to the signed-in account, use **Manage models** in `/providers`.
 
@@ -51,17 +53,17 @@ When `${env:<VAR>}` is used, the gateway reads the workspace environment and fal
 
 ### Managed OAuth sign-in
 
-`oauth2` providers authenticate through daemon-managed PKCE flows; clients drive them over the daemon HTTP API rather than handling tokens themselves:
+`oauth2` providers authenticate through the existing daemon HTTP API; clients do not handle tokens themselves. Antigravity supports a daemon-managed PKCE flow with pasted redirects. Claude Code and GitHub Copilot use vendor-owned sign-in, completed in the browser on the daemon host. TaskSmith uses a protected data directory for each vendor CLI's credentials and runtime state, not host environment credentials or shared user profiles. The vendor CLIs run without native tools and configuration; TaskSmith tools remain subject to its permissions and sandbox.
 
 | Method | Path | Daemon behavior |
 | --- | --- | --- |
 | `GET` | `/v1/providers` | Lists providers as `ProviderSummary` (`name`, `status`, `has_key`, `auth_type`, `account`, …). |
-| `POST` | `/v1/providers/{name}/auth` | Starts or resumes the PKCE flow and returns `ProviderAuthResponse` (`provider`, `auth_url`, `status`). |
+| `POST` | `/v1/providers/{name}/auth` | Starts or resumes the provider's sign-in and returns `ProviderAuthResponse` (`provider`, optional `auth_url`, `status`). |
 | `GET` | `/v1/providers/{name}/auth` | Current flow status: `idle`, `authorizing`, `authenticated`, `error`, or `signed-out`. |
-| `POST` | `/v1/providers/{name}/auth/callback` | Completes the waiting flow with a user-pasted redirect URL (`callbackUrl`: full URL, bare query string, or code alone). |
+| `POST` | `/v1/providers/{name}/auth/callback` | Completes a flow that accepts pasted redirects (Antigravity), with `callbackUrl` as the full URL, bare query string, or code. This is not supported for vendor CLI sign-in. |
 | `DELETE` | `/v1/providers/{name}/auth` | Cancels any in-flight flow and removes stored credentials (`status: signed-out`, or `idle` when not signed in). |
 
-A flow stays open for five minutes after starting or after a client leaves its screen. Tokens persist under `$XDG_DATA_HOME/tasksmith/credentials/<provider>.json` (normally `~/.local/share/tasksmith/credentials/<provider>.json`) with owner-only permissions in a multi-account registry; the daemon refreshes tokens in the background and reloads workspaces when credentials change. Agents never read, write, or print these token files — sign-in, status, and logout belong to the user-facing auth surfaces.
+For daemon-managed token flows, tokens persist under `$XDG_DATA_HOME/tasksmith/credentials/<provider>.json` (normally `~/.local/share/tasksmith/credentials/<provider>.json`) with owner-only permissions. The daemon refreshes these tokens in the background and reloads workspaces when credentials change. Claude Code and GitHub Copilot instead use isolated CLI profiles under `$XDG_DATA_HOME/tasksmith/credentials/<provider>/`. Agents never read, write, or print credential files or edit provider profiles — sign-in, status, and logout belong to the user-facing auth surfaces.
 
 TaskSmith builds its workspace environment from the process environment and `.env` files: user configuration first, applicable ancestor files from outer to inner, workspace root, then current directory. Later layers override earlier values. Reference secrets through environment variables or files instead of embedding them in manifests or headers.
 
@@ -80,7 +82,7 @@ TaskSmith builds its workspace environment from the process environment and `.en
 
 TaskSmith standardizes four completion-model tiers that the built-in provider presets declare on their models: `fast` (cheapest, responsive), `balanced` (everyday workhorse, usually also the preset's default completion model), `smart` (strong reasoning step above balanced), and `flagship` (most capable). Reference them as `@fast`, `@balanced`, `@smart`, and `@flagship` from agent `spec.models`, session models, or `WORKSPACE.md` `spec.modelAliases` (which can retarget a tier to another model without editing provider files). Agent `spec.models` may also use `@default` (the workspace/provider role-default hierarchy) or the TaskSmith-reserved `@inherit` (the delegating parent session's model during subagent delegation; never a provider target). A provider that declares no tier alias simply leaves that alias unresolvable; add your own `aliases` or `spec.modelAliases` entries to enable it.
 
-`limits.context` is the context token limit, `limits.output` the output token limit, and `limits.dimensions` the default or maximum embedding vector size. Supply values matching the actual provider; a manifest does not make an unsupported model available.
+`limits.context` is the context token limit, `limits.output` the output token limit, and `limits.dimensions` the default or maximum embedding vector size. The Claude Code and GitHub Copilot presets declare context and output limits. Nonzero manifest limits override the corresponding provider metadata; omit a limit to let provider metadata fill it when available. Match limits to the actual provider and account; a manifest does not make an unsupported model available.
 
 ### Capabilities
 

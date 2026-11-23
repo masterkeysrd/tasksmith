@@ -1,0 +1,39 @@
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: claudecode
+spec:
+  type: claudecode
+  defaultModels:
+    completion: claude-sonnet-5-5
+  auth:
+    type: oauth2
+  models:
+    - id: claude-haiku-5-5
+      name: claude-haiku-5-5
+      label: Claude Haiku 5.5
+      aliases: [fast]
+      limits:
+        context: 1000000
+        output: 128000
+    - id: claude-sonnet-5-5
+      name: claude-sonnet-5-5
+      label: Claude Sonnet 5.5
+      aliases: [balanced]
+      limits:
+        context: 1000000
+        output: 128000
+    - id: claude-opus-5-5
+      name: claude-opus-5-5
+      label: Claude Opus 5.5
+      aliases: [smart]
+      limits:
+        context: 1000000
+        output: 128000
+    - id: claude-fable-5-2
+      name: claude-fable-5-2
+      label: Claude Fable 5.2
+      aliases: [flagship]
+      limits:
+        context: 1000000
+        output: 128000

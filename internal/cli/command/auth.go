@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
@@ -40,7 +41,7 @@ func (r *Registry) registerAuthCommands() {
 		Name:        "login",
 		Aliases:     []string{"auth", "signin"},
 		Usage:       "/login [provider]",
-		Description: "Sign in to an OAuth provider (antigravity)",
+		Description: "Sign in to an OAuth provider through the daemon",
 		Handler:     handleLogin,
 		Complete:    completeOAuthProviders,
 	})
@@ -74,7 +75,7 @@ func completeOAuthProviders(ctx context.Context, _ autocomplete.Request) ([]auto
 		candidates = append(candidates, autocomplete.Candidate{
 			Value:       p.Name,
 			Label:       p.Name,
-			Description: "Sign in to " + p.Name,
+			Description: "Sign in to " + components.ProviderDisplayName(p.Name, p.DisplayName),
 		})
 	}
 	return candidates, nil

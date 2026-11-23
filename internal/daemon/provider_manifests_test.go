@@ -349,8 +349,55 @@ func TestProviderCatalogAPIPrefersGatewayCatalog(t *testing.T) {
 	}
 }
 
+func TestCreateProviderRejectsBrowserOAuthOverridesBeforeWriting(t *testing.T) {
+	_, cli, wsDir := setupDaemonTest(t, nil)
+	seedWorkspaceProvider(t, wsDir, "existing", daemonTestProviderSpec)
+	if _, err := cli.ListWorkspaceProviders(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	userDir, err := xdg.SubConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range []struct{ name, dir string }{{"workspace", wsDir}, {"user", userDir}} {
+		for _, name := range []string{"codex", "claudecode", "github-copilot"} {
+			for _, tc := range []struct {
+				label string
+				edit  func(*api.CreateProviderRequest)
+			}{
+				{"name", func(r *api.CreateProviderRequest) { r.Name = "renamed" }},
+				{"type", func(r *api.CreateProviderRequest) { r.Type = "openai" }},
+				{"endpoint", func(r *api.CreateProviderRequest) { r.Endpoint = "https://api.example.test/v1" }},
+				{"auth env", func(r *api.CreateProviderRequest) { r.AuthEnv = "CUSTOM_TOKEN" }},
+				{"api key", func(r *api.CreateProviderRequest) { r.APIKey = "test-key" }},
+				{"auth type", func(r *api.CreateProviderRequest) { r.AuthType = "none" }},
+			} {
+				t.Run(scope.name+"/"+name+"/"+tc.label, func(t *testing.T) {
+					req := api.CreateProviderRequest{Scope: scope.name, Name: name, Type: name}
+					tc.edit(&req)
+					_, err := cli.CreateProvider(t.Context(), req)
+					var apiErr *api.APIError
+					if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest || apiErr.Code != "bad_request" {
+						t.Errorf("CreateProvider error = %v, want 400 bad_request", err)
+					}
+					for _, path := range []string{
+						filepath.Join(scope.dir, ".env"),
+						filepath.Join(scope.dir, ".agents", "providers", req.Name+".provider.yaml"),
+						filepath.Join(scope.dir, "agents", "providers", req.Name+".provider.yaml"),
+					} {
+						if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+							t.Errorf("stat %s after rejected create = %v, want not exist", path, err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestCreateProviderCopiesOAuthPresetModels(t *testing.T) {
-	for _, name := range []string{"antigravity", "codex"} {
+	for _, name := range []string{"antigravity", "codex", "claudecode", "github-copilot"} {
 		t.Run(name, func(t *testing.T) {
 			_, cli, _ := setupDaemonTest(t, nil)
 			ctx := t.Context()

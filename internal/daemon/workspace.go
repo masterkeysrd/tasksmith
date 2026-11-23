@@ -172,13 +172,13 @@ func (r *workspaceRuntime) reloadLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	catalog, err := models.Build(nextWorkspace.Catalog(), next)
+	catalog, err := models.BuildContext(ctx, nextWorkspace.Catalog(), next)
 	if err != nil {
 		return fmt.Errorf("daemon: build model catalog: %w", err)
 	}
 	sessionCatalog := catalog
 	if r.sessionOwner != r {
-		sessionCatalog, err = models.Build(sessionWorkspace.Catalog(), next)
+		sessionCatalog, err = models.BuildContext(ctx, sessionWorkspace.Catalog(), next)
 		if err != nil {
 			return fmt.Errorf("daemon: build session model catalog: %w", err)
 		}
@@ -398,7 +398,15 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 			return nil, fmt.Errorf("daemon: acquire gateway for %q: %w", rootDir, err)
 		}
 		owner.gw.set(gw)
+	}
 
+	catalog, err := models.BuildContext(ctx, ws.Catalog(), owner.gw.get())
+	if err != nil {
+		d.wsMu.Unlock()
+		return nil, fmt.Errorf("daemon: build model catalog for %q: %w", rootDir, err)
+	}
+
+	if owner.sessionStore == nil {
 		wsDataDir, err := xdg.WorkspaceDir(rootDir)
 		if err != nil {
 			d.wsMu.Unlock()
@@ -496,12 +504,6 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		owner.mcpManager = mgr
 		ws.SetMCPService(mgr)
 		mgr.Sync(context.WithoutCancel(ctx))
-	}
-
-	catalog, err := models.Build(ws.Catalog(), owner.gw.get())
-	if err != nil {
-		d.wsMu.Unlock()
-		return nil, fmt.Errorf("daemon: build model catalog for %q: %w", rootDir, err)
 	}
 
 	rt := owner

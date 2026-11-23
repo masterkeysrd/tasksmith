@@ -32,7 +32,7 @@ git diff | tasksmith -p "review this diff"
 | **`daemon stop`** | `tasksmith daemon stop` | Gracefully terminates a running Brain daemon via SIGTERM / shutdown API. |
 | **`daemon status`** | `tasksmith daemon status` | Checks daemon process health, build version, IPC socket connectivity, and active workspace runtimes. |
 | **`version`** | `tasksmith version` | Prints the client build version and, when reachable without spawning, the running daemon's version. |
-| **`auth login`** | `tasksmith auth login [provider] [--no-browser] [--paste]` | Starts the provider's browser sign-in and waits for it to settle. Antigravity prints the URL and supports `--no-browser` and `--paste`. Codex opens a browser on the daemon host. Name the provider when multiple OAuth presets are available. |
+| **`auth login`** | `tasksmith auth login [provider] [--no-browser] [--paste]` | Starts the provider's browser sign-in and waits for it to settle. Antigravity prints the URL and supports `--no-browser` and `--paste`. Codex, Claude Code, and GitHub Copilot require browser sign-in on the daemon host and do not support those flags. Name the provider when multiple OAuth presets are available. |
 | **`auth status`** | `tasksmith auth status [provider]` | With a provider name, prints `<provider>: <status> (<account>)`; with none, prints a `PROVIDER / AUTH / STATUS` table over all configured providers. |
 | **`auth logout`** | `tasksmith auth logout [provider]` | Removes the daemon-stored OAuth credentials for one provider and reports `Signed out of <provider>` or `<provider> was not signed in`. |
 
@@ -412,16 +412,18 @@ New entries inherit available limits, capabilities, supported reasoning settings
 
 #### Adding a Provider
 
-`a` / `n` first lists the built-in presets (with each preset's auth variable and model count) plus `Custom provider…`; `Esc` returns to the browser. The second screen is a field form — `Scope` (toggles `Workspace (.agents/providers)` ↔ `User (~/.config/tasksmith/agents/providers)` on `Enter`), `Name`, `Type` (custom only), `Endpoint`, `Auth env var`, `API key`, and `Create provider`:
+`a` / `n` first lists the built-in presets (with auth and model count) plus `Custom provider…`; `Esc` returns to the browser. Regular providers show a field form — `Scope` (Workspace or User), `Name`, `Type` (custom only), `Endpoint`, `Auth env var`, `API key`, and `Create provider`:
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
 | `↑` / `↓` | Add Provider | Moves the highlighted field. |
-| `Enter` | Add Provider | Toggles `Scope`; writes the manifest on `Create provider`. Text fields are edited with `e` (the subtitle reads `enter toggles / submits · e edits the highlighted field`). |
-| `e` | Add Provider | Edits the highlighted text field through an inline input seeded with its current value. |
+| `Enter` | Add Provider | Toggles `Scope` between Workspace (`.agents/providers`) and User (`~/.config/tasksmith/agents/providers`), or writes the manifest on `Create provider`. |
+| `e` | Add Provider (regular providers only) | Edits the highlighted text field through an inline input seeded with its current value. |
 | `Esc` | Add Provider | Returns to the preset list, then to the browser. |
 
-The daemon writes the manifest, stores any supplied key **exclusively** in the scope's `.env` (`~/.config/tasksmith/.env` or `<workspace-root>/.env`, with `.env` added to `.gitignore` in Workspace scope), references it from the manifest as `${env:<NAME>_API_KEY}`, reloads the workspace, and reports a connectivity verdict through the catalog endpoint (`Added provider <name> (Active) · N catalog models visible`).
+For Codex, Claude Code, and GitHub Copilot, the form only shows `Scope` and `Create provider`. These browser-only presets use fixed names, types, and OAuth settings; endpoint, auth env var, and API key overrides are rejected. After creating the preset, [sign in](#provider-sign-in-login) if needed. Adding a browser-only preset does not check live connectivity.
+
+For regular providers, the daemon writes the manifest, stores any supplied key **exclusively** in the scope's `.env` (`~/.config/tasksmith/.env` or `<workspace-root>/.env`, with `.env` added to `.gitignore` in Workspace scope), references it from the manifest as `${env:<NAME>_API_KEY}`, and reloads the workspace. The CLI then reports catalog visibility (`Added provider <name> (Active) · N catalog models visible`).
 
 ### Model Alias Editor (`F2`)
 
@@ -442,15 +444,15 @@ Saving sends the exact set the model should own: each reassigned alias is stripp
 
 ### Provider Sign-In (`/login`)
 
-`/login [provider]` (aliases `/auth`, `/signin`) starts the daemon's browser sign-in. For Codex, finish in the browser on the daemon host. The Codex sign-in screen offers `Esc` to dismiss it while the flow continues. For Antigravity the screen also shows the authorization URL and a paste field.
+`/login [provider]` (aliases `/auth`, `/signin`) starts the daemon's browser sign-in. For Codex, [Claude Code](./providers/claudecode.md), and [GitHub Copilot](./providers/github-copilot.md), finish in the browser on the daemon host. Claude Code and Copilot require the corresponding `claude` or `copilot` CLI on that host. Neither uses callback paste, `--no-browser`, or a headless device-login flow. For Antigravity the screen also shows the authorization URL and a paste field.
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `c` | Provider Sign-In | Copies the authorization URL. |
-| `Enter` | Provider Sign-In | Submits whatever the paste field holds (full address-bar URL, bare query string, or authorization code alone) to the waiting flow. |
-| `Esc` | Provider Sign-In | Leaves the sign-in screen; the daemon keeps the flow open for five more minutes, so finishing in the browser still signs in. |
+| `c` | Antigravity Sign-In | Copies the authorization URL. |
+| `Enter` | Antigravity Sign-In | Submits whatever the paste field holds (full address-bar URL, bare query string, or authorization code alone) to the waiting flow. |
+| `Esc` | Provider Sign-In | Dismisses the screen while the daemon's flow continues. |
 
-With no `[provider]` argument, the command resolves automatically when exactly one OAuth preset is available. Use `/login antigravity` or `/login codex` with the built-in presets. When the flow settles, the screen closes and posts the outcome to the conversation timeline. See [Subcommands](#subcommands) for signing in, checking status, or signing out from a shell.
+With no `[provider]` argument, the command resolves automatically when exactly one OAuth preset is available. To select one explicitly, use `/login antigravity`, `/login codex`, `/login claudecode`, or `/login github-copilot`. When the flow settles, the screen closes and posts the outcome to the conversation timeline. See [Subcommands](#subcommands) for signing in, checking status, or signing out from a shell.
 
 ---
 
@@ -648,6 +650,8 @@ When TaskSmith is launched for the first time in an unconfigured directory, or w
 5. **Default Mode**: Choose the initial permission mode (`default`, `accept_edits`, `plan`, `ask`, `auto`).
 6. **Tools & MCPs**: Selectively enable or disable built-in tools and global MCP servers. Skipped when the chosen provider scope is `User`, since these choices are recorded as repository `WORKSPACE.md` policy exclusions.
 7. **Review & Write**: Review configured settings, write out manifests, and optionally offer `/init`.
+
+For the **Claude Code** and **GitHub Copilot** presets, install `claude` or `copilot` on the daemon host before setup and complete the vendor's sign-in in the browser there. See [Provider Sign-In](#provider-sign-in-login).
 
 Both `/setup` and [Add Provider](#adding-a-provider) install all preset models and keep unclaimed aliases. An alias assigned to another model, including through an inherited provider or a `WORKSPACE.md` override, is omitted from the new manifest. The result names each skipped alias and its owner. Use `F2` to move a provider alias intentionally, or edit `spec.modelAliases` for a workspace override.
 
@@ -849,12 +853,12 @@ is enriched with the fresh facts it can prove (e.g. `94% quota remaining · rese
 
 ## Provider Auth HTTP Endpoints
 
-These endpoints drive the daemon-managed OAuth PKCE sign-in flow behind `tasksmith auth` and `/login`. Providers are addressed by name.
+These existing endpoints drive provider sign-in behind `tasksmith auth` and `/login`. Providers are addressed by name. Claude Code and GitHub Copilot use vendor-owned browser sign-in on the daemon host without adding API endpoints.
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
 | `GET` | `/v1/providers` | Lists provider presets as `ProviderSummary` with `name`, `display_name`, `status`, `has_key`, `auth_type`, `auth_env`, `account`, `default_model`, `models`, and `scope`. The optional `browser_auth_label` is the sign-in label for providers that open the browser on the daemon host. |
-| `POST` | `/v1/providers/{name}/auth` | Starts an OAuth flow and returns `ProviderAuthResponse`. The optional `auth_url` is omitted when the daemon opens the browser, as it does for Codex. |
+| `POST` | `/v1/providers/{name}/auth` | Starts an OAuth flow and returns `ProviderAuthResponse`. The optional `auth_url` is omitted for browser-owned flows on the daemon host. |
 | `GET` | `/v1/providers/{name}/auth` | Returns the current `ProviderAuthResponse` for one provider; `status` is `idle`, `authorizing`, `authenticated`, `error`, or `signed-out`. |
 | `POST` | `/v1/providers/{name}/auth/callback` | Completes a flow that accepts pasted redirects. The body field `callbackUrl` accepts the full URL, a bare query string, or an authorization code. Returns the settled `ProviderAuthResponse`. Returns `400` `bad_request` when the paste is malformed, the flow is absent, or the provider requires a browser callback. |
 | `DELETE` | `/v1/providers/{name}/auth` | Removes stored OAuth credentials for one provider and cancels any in-flight flow. Returns `ProviderAuthResponse` with `status` `signed-out` when credentials were removed or `idle` when the provider was not signed in. |

@@ -12,9 +12,10 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.7-0.20261118073631-ce28699d019e
-	github.com/masterkeysrd/loom v0.0.11-0.20261120222403-41b415b077a6
+	github.com/masterkeysrd/loom v0.0.11-0.20261123163531-c16a26373267
 	github.com/masterkeysrd/warp v0.0.7-0.20261120020207-9b2980bf4ae4
 	github.com/mattn/go-isatty v0.0.24
+	github.com/microsoft/copilot-sdk/go/v2 v2.0.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/ollama/ollama v0.40.16
 	github.com/openai/openai-go/v3 v3.99.0
@@ -53,6 +54,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.18.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
+	github.com/ebitengine/purego v0.11.3 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect

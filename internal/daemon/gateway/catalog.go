@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -9,35 +10,77 @@ import (
 	"github.com/masterkeysrd/loom/profile"
 )
 
-const modelDiscoveryTimeout = 10 * time.Second
+const (
+	modelDiscoveryTimeout = 10 * time.Second
+	modelDiscoveryTTL     = time.Minute
+)
 
-// profileDiscovery loads the catalog for clients whose GetProfile method
-// only reads a cache. Delay retries after an error so resolving a manifest
-// with several models does not issue one failed request per model.
 type profileDiscovery struct {
-	lister llm.ModelLister
+	lister interface {
+		ListModels(context.Context) ([]profile.Profile, error)
+	}
 
 	mu      sync.Mutex
-	retryAt time.Time
+	refresh chan struct{}
+	models  []profile.Profile
+	err     error
+	expires time.Time
 }
 
-func (d *profileDiscovery) find(id string) (profile.Profile, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if time.Now().Before(d.retryAt) {
-		return profile.Profile{}, false
-	}
+func (d *profileDiscovery) load(ctx context.Context) ([]profile.Profile, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		d.mu.Lock()
+		if time.Now().Before(d.expires) {
+			models, err := d.models, d.err
+			d.mu.Unlock()
+			return models, err
+		}
+		if wait := d.refresh; wait != nil {
+			d.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		d.refresh = make(chan struct{})
+		d.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), modelDiscoveryTimeout)
-	defer cancel()
-	models, err := d.lister.ListModels(ctx)
-	if err != nil {
-		d.retryAt = time.Now().Add(modelDiscoveryTimeout)
-		return profile.Profile{}, false
+		probeCtx, cancel := context.WithTimeout(ctx, modelDiscoveryTimeout)
+		models, err := d.lister.ListModels(probeCtx)
+		if probeCtx.Err() != nil && err == nil {
+			err = probeCtx.Err()
+		}
+		cancel()
+
+		d.mu.Lock()
+		if callerErr := ctx.Err(); callerErr != nil {
+			err = callerErr
+		} else {
+			ttl := modelDiscoveryTTL
+			if err != nil {
+				ttl = modelDiscoveryTimeout
+			}
+			d.models, d.err, d.expires = models, err, time.Now().Add(ttl)
+		}
+		close(d.refresh)
+		d.refresh = nil
+		d.mu.Unlock()
+		return models, err
 	}
-	for _, p := range models {
-		if p.ID == id {
-			return p, true
+}
+
+func (d *profileDiscovery) find(ctx context.Context, id string) (profile.Profile, bool) {
+	models, err := d.load(ctx)
+	if err == nil {
+		for _, p := range models {
+			if p.ID == id {
+				return p, true
+			}
 		}
 	}
 	return profile.Profile{}, false
@@ -60,15 +103,25 @@ func (g *gatewayImpl) ListModels(ctx context.Context, provider string) ([]profil
 			ctx, cancel := context.WithTimeout(ctx, modelDiscoveryTimeout)
 			defer cancel()
 			models, err := lister.ListModels(ctx)
-			return models, true, err
+			return inst.catalogProfiles(models), true, err
 		}
 	}
 	for _, client := range clients {
 		if lister, ok := client.(interface{ ListProfiles() []profile.Profile }); ok {
 			if profiles := lister.ListProfiles(); len(profiles) > 0 {
-				return profiles, true, nil
+				return inst.catalogProfiles(profiles), true, nil
 			}
 		}
 	}
 	return nil, false, nil
+}
+
+func (inst *providerInstance) catalogProfiles(profiles []profile.Profile) []profile.Profile {
+	if inst.isSubscriptionCLI() {
+		profiles = slices.Clone(profiles)
+		for i := range profiles {
+			profiles[i] = inst.catalogProfile(profiles[i])
+		}
+	}
+	return profiles
 }

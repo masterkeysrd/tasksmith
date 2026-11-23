@@ -35,6 +35,7 @@ flowchart TD
         TypeSafe["TypeSafe"]
         GenAI["Google GenAI"]
         Antigravity["Antigravity"]
+        VendorCLIs["Vendor CLIs: Claude Code and GitHub Copilot"]
 
         Anthropic ~~~ TypeSafe
         OpenAI ~~~ GenAI
@@ -65,11 +66,29 @@ Rather than creating a gateway per session or keying gateways by a mutable works
 
 Provider model browsing uses the configured gateway client. Loom's `llm.ModelLister` supplies a live catalog when implemented. Clients with `ListProfiles` supply their known models as a fallback. The manifest browser uses the bundled preset when the gateway has no catalog.
 
+Automatic profile discovery caches successful catalogs, including misses, and backs off briefly after an error. Workspace loads and reloads pass their cancellation to discovery. Curated subscription models retain verified tool and input capabilities when live metadata is unavailable; explicit manifest settings and live profiles take precedence.
+
 The gateway stores browser registrations atomically and shares one refresh source per active registration. Sign-in changes the gateway fingerprint, token refresh keeps the fingerprint stable, and sign-out invalidates the source. Providers supply their registration type and Loom token source constructor.
 
 Codex uses Loom for ChatGPT sign-in and keeps the host ID across sign-outs. On a profile cache miss, the gateway asks Loom to look up the model in the account catalog. Loom resolves and caches the resulting profiles. Workspace setup copies the bundled preset.
 
-The gateway resolves authentication credentials without mutating process state or probing global files:
+#### Vendor CLI completion drivers
+
+[Claude Code](../reference/providers/claudecode.md) and [GitHub Copilot](../reference/providers/github-copilot.md) route completions through the installed vendor CLIs on the daemon host. They use the existing provider auth API for browser sign-in on that host, but the vendor CLI handles authentication. Their canonical provider identities and transport settings cannot be overridden by a workspace. Each registration has an isolated profile under TaskSmith's protected credential directory; the CLIs do not inherit vendor tokens or use the host user's normal CLI profiles.
+
+Copilot authentication and inference use the same Copilot SDK v2 `SpawnedStdioConnection` launch configuration. The SDK starts `copilot` directly with an explicit allowlist of child environment variables, without a shell wrapper or an executable launcher in the credential store. Copilot's OS keyring access is explicitly disabled for browser login, SDK compatibility checks, account verification, inference, and vendor logout.
+
+Loom's `SpawnedStdio` starts `claude` directly with an explicit allowlist of child environment variables instead of inheriting the daemon environment. No shell wrapper or temporary launcher is needed. With this explicit environment and no configured auth source directory, Loom does not sync auth files from the host user's `~/.claude` into the isolated profile.
+
+Each active registration has one driver-owned runtime, shared by all gateways using that registration even when their workspace configuration fingerprints differ. Closing a gateway marks only its own API closed (`ErrGatewayClosed`); it does not cancel in-flight API I/O or close the shared runtime. Closing a gateway pool shuts down only that pool's cached gateways. On registration replacement, sign-out, or daemon shutdown, the driver releases the runtime through Loom's native provider `Close` method. Daemon shutdown leaves saved registrations and credentials in place for the next start.
+
+Replacing the registration or signing out invalidates existing gateway clients for that registration. Local sign-out removes the active registration even if the vendor CLI is missing or incompatible. Removing the retired profile and cleaning up vendor credentials are best-effort operations; local sign-out does not guarantee vendor-side revocation.
+
+The vendor CLIs run with native tools and configuration disabled. TaskSmith remains responsible for its own tool execution through the permissions and sandbox layers. Requests are quota-billed, with remaining capacity and reset data surfaced only when the integration has vendor-reported values.
+
+#### HTTP credentials
+
+The gateway resolves HTTP authentication credentials without mutating process state or probing global files:
 - **Layered Resolution**: Credentials resolve from the workspace's injected environment map, falling back to process environment variables (`os.Getenv`), or reading from an explicit file path (`${file:...}`), which accepts `~` and paths relative to the declaring provider manifest.
 - **Scheme Handling**: The configured scheme (`bearer`, `api-key`, `basic`, `oauth2`, or `none`) decides the header and prefix. The gateway transport is the last layer before the wire, so the configured header always wins over whatever a provider SDK attached, and the SDK's own credential header is removed when it is not the configured one.
 - **Graceful Degradation & Lazy Validation**: Providers missing required credentials or encountering initialization failures in multi-provider environments do not abort gateway construction. Instead, the affected provider is flagged in provider listings and contributes a routine warning to the REPL's `/warnings` view and status-line count. An error is raised only when an operation explicitly targets a model on that disabled provider. Remaining healthy providers continue serving completions, decisions, and embeddings normally.

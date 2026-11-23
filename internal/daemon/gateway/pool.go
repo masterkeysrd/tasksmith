@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -13,7 +14,7 @@ type Pool interface {
 	// or initializes and caches a new one.
 	Acquire(ctx context.Context, cfg Config) (Gateway, error)
 
-	// Close shuts down all cached gateways and releases all client resources.
+	// Close shuts down this pool's cached gateways.
 	Close() error
 }
 
@@ -80,13 +81,13 @@ func (p *poolImpl) Close() error {
 	}
 	p.closed = true
 
-	var firstErr error
+	var errs []error
 	for key, gw := range p.gateways {
-		if err := gw.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := gw.Close(); err != nil {
+			errs = append(errs, err)
 		}
 		delete(p.gateways, key)
 	}
 
-	return firstErr
+	return errors.Join(errs...)
 }

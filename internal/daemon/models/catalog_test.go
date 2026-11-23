@@ -1,6 +1,8 @@
 package models
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -56,6 +58,80 @@ type quotaFakeBase struct {
 
 func (b *quotaFakeBase) QuotaCapable(m Model) bool {
 	return m.ID.Provider() == "pool"
+}
+
+type contextProfileLookup func(context.Context, string) (profile.Profile, bool)
+
+func (contextProfileLookup) GetProfile(string) (profile.Profile, bool) {
+	panic("expected context-aware lookup")
+}
+
+func (f contextProfileLookup) GetProfileContext(ctx context.Context, id string) (profile.Profile, bool) {
+	return f(ctx, id)
+}
+
+func TestCatalogLookupCancellation(t *testing.T) {
+	cat := testCatalogFromProviders(&warp.ModelProvider{
+		BaseResource: warp.BaseResource{Metadata: warp.Metadata{Name: "test"}},
+		Spec:         warp.ModelProviderSpec{Models: []warp.ProviderModel{{ID: "listed"}}},
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	p := contextProfileLookup(func(ctx context.Context, id string) (profile.Profile, bool) {
+		if id != "test/listed" {
+			t.Errorf("lookup id = %q", id)
+		}
+		cancel()
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Errorf("lookup context error = %v", ctx.Err())
+		}
+		return profile.Profile{}, false
+	})
+	if c, err := BuildContext(ctx, cat, p); c != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("BuildContext = %v, %v", c, err)
+	}
+
+	ctx, cancelLookup := context.WithCancel(t.Context())
+	defer cancelLookup()
+	calls := 0
+	c, err := BuildContext(t.Context(), testCatalogFromProviders(), contextProfileLookup(func(ctx context.Context, _ string) (profile.Profile, bool) {
+		calls++
+		if calls == 1 {
+			cancelLookup()
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				t.Errorf("lookup context error = %v", ctx.Err())
+			}
+			return profile.Profile{}, false
+		}
+		return profile.Profile{Name: "Recovered"}, true
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.ResolveContext(ctx, RoleCompletion, "test/unlisted"); ok {
+		t.Fatal("canceled lookup resolved a model")
+	}
+	if m, ok := c.GetContext(t.Context(), "test/unlisted"); !ok || m.Name != "Recovered" || calls != 2 {
+		t.Fatalf("uncanceled lookup = %+v, %v; calls = %d", m, ok, calls)
+	}
+}
+
+func TestCatalogUnlistedMissCanRecover(t *testing.T) {
+	id := ID("provider/model")
+	p := &fakeBase{profiles: make(map[ID]profile.Profile)}
+	c, err := Build(nil, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := c.Get(id); !ok || m.Name != id.Name() {
+		t.Fatalf("fallback = %+v, %v", m, ok)
+	}
+	p.profiles[id] = profile.Profile{Name: "Discovered"}
+	for range 2 {
+		if m, ok := c.Get(id); !ok || m.Name != "Discovered" || p.calls != 2 {
+			t.Fatalf("live model = %+v, %v; calls = %d", m, ok, p.calls)
+		}
+	}
 }
 
 func TestCatalogStampsQuotaBilled(t *testing.T) {

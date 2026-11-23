@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/masterkeysrd/loom/llm"
@@ -80,6 +82,98 @@ func TestListModelsUsesProfilesWhenProviderHasNoLiveListing(t *testing.T) {
 	if err != nil || !available || len(profiles) != 1 || profiles[0].ID != "known-model" {
 		t.Fatalf("ListModels() = %+v, %v, %v", profiles, available, err)
 	}
+}
+
+type discoveryLister func(context.Context) ([]profile.Profile, error)
+
+func (f discoveryLister) ListModels(ctx context.Context) ([]profile.Profile, error) {
+	return f(ctx)
+}
+
+func TestProfileDiscoveryCachesCatalog(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		d := &profileDiscovery{lister: discoveryLister(func(context.Context) ([]profile.Profile, error) {
+			calls++
+			if calls == 1 {
+				return []profile.Profile{{ID: "first"}}, nil
+			}
+			return nil, nil
+		})}
+		ctx := t.Context()
+		for _, id := range []string{"missing-a", "missing-b"} {
+			if _, ok := d.find(ctx, id); ok {
+				t.Fatalf("unexpected profile for %s", id)
+			}
+		}
+		if p, ok := d.find(ctx, "first"); !ok || p.ID != "first" || calls != 1 {
+			t.Fatalf("cached profile = %v, found = %v, calls = %d", p.ID, ok, calls)
+		}
+		time.Sleep(modelDiscoveryTTL)
+		for range 2 {
+			if _, ok := d.find(ctx, "first"); ok || calls != 2 {
+				t.Fatalf("empty refreshed catalog found profile = %v, calls = %d", ok, calls)
+			}
+		}
+	})
+}
+
+func TestProfileDiscoveryBacksOffAfterError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		errProbe := errors.New("catalog unavailable")
+		d := &profileDiscovery{lister: discoveryLister(func(context.Context) ([]profile.Profile, error) {
+			calls++
+			if calls == 1 {
+				return nil, errProbe
+			}
+			return []profile.Profile{{ID: "recovered"}}, nil
+		})}
+		ctx := t.Context()
+		for range 2 {
+			if _, err := d.load(ctx); !errors.Is(err, errProbe) || calls != 1 {
+				t.Fatalf("backoff error = %v, calls = %d", err, calls)
+			}
+		}
+		time.Sleep(modelDiscoveryTimeout)
+		if _, ok := d.find(ctx, "recovered"); !ok || calls != 2 {
+			t.Fatalf("discovery retry found profile = %v, calls = %d", ok, calls)
+		}
+	})
+}
+
+func TestProfileDiscoveryCancellationDoesNotPoisonCache(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		d := &profileDiscovery{lister: discoveryLister(func(ctx context.Context) ([]profile.Profile, error) {
+			calls++
+			if calls == 1 {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return []profile.Profile{{ID: "next"}}, nil
+		})}
+		leader, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			_, err := d.load(leader)
+			done <- err
+		}()
+		synctest.Wait()
+		waiter, stopWaiting := context.WithTimeout(t.Context(), time.Second)
+		defer stopWaiting()
+		if _, err := d.load(waiter); !errors.Is(err, context.DeadlineExceeded) || calls != 1 {
+			t.Fatalf("waiting caller error = %v, calls = %d", err, calls)
+		}
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("discovery caller error = %v", err)
+		}
+		if _, ok := d.find(t.Context(), "next"); !ok || calls != 2 {
+			t.Fatalf("discovery after cancellation found profile = %v, calls = %d", ok, calls)
+		}
+	})
 }
 
 type codexTestTransport func(*http.Request) (*http.Response, error)

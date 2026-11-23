@@ -8,6 +8,8 @@ For model provider configurations (`kind: ModelProvider`), including `spec.enabl
 
 For Codex, use the `codex` provider name and type with `spec.auth.type: oauth2`. See the [Codex provider guide](./providers/codex.md).
 
+For [Claude Code](./providers/claudecode.md) and [GitHub Copilot](./providers/github-copilot.md), set both `metadata.name` and `spec.type` to the canonical identifier (`claudecode` or `github-copilot`) and use `spec.auth.type: oauth2` without any other auth fields. Leave `spec.endpoint`, `spec.headers`, and `spec.config` unset. These manifests configure completion models, token limits, and aliases, not vendor CLI settings, credentials, or per-token prices.
+
 ---
 
 ## 1. Resource Hierarchy & Metadata

@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
+	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
 
 // authFixture serves the provider-auth endpoints over a fake transport so the
@@ -184,8 +185,32 @@ func TestLoginCommandRegistration(t *testing.T) {
 			t.Errorf("/%s alias is not registered", alias)
 		}
 	}
-	if cmd.Description == "" {
-		t.Error("/login needs a description for /help")
+	if !strings.Contains(cmd.Description, "OAuth provider") || strings.Contains(strings.ToLower(cmd.Description), "antigravity") {
+		t.Errorf("/login needs a provider-neutral description for /help, got %q", cmd.Description)
+	}
+}
+
+func TestLoginProviderCompletionDescriptions(t *testing.T) {
+	newAuthFixture(t, &authFixture{listBody: []api.ProviderSummary{
+		{Name: "claudecode", DisplayName: "claudecode", AuthType: "oauth2"},
+		{Name: "github-copilot", AuthType: "oauth2"},
+		{Name: "codex", AuthType: "oauth2"},
+		{Name: "openai", AuthType: "bearer"},
+	}})
+	candidates, err := completeOAuthProviders(t.Context(), autocomplete.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"claudecode": "Claude Code", "github-copilot": "GitHub Copilot", "codex": "Codex"}
+	for _, candidate := range candidates {
+		label, ok := want[candidate.Value]
+		if !ok || candidate.Label != candidate.Value || candidate.Description != "Sign in to "+label {
+			t.Errorf("unexpected completion: %+v", candidate)
+		}
+		delete(want, candidate.Value)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing provider completions: %v", want)
 	}
 }
 

@@ -38,22 +38,29 @@ func (d fakeOAuthDriver) OAuthConfig() *oauth2.Config {
 func (d fakeOAuthDriver) ExtractAccount(*oauth2.Token) string { return d.account }
 
 func TestBrowserProviderAuthDiscardsResultAfterLogout(t *testing.T) {
+	const provider = "stale-browser-flow"
 	d, cli, _ := setupDaemonTest(t, nil)
 	release := make(chan struct{})
 	committed := false
-	resp := d.beginBrowserAuthFlow(providers.CodexName, func(context.Context) (func() (string, error), error) {
-		<-release
-		return func() (string, error) {
-			committed = true
-			return "signed-in@example.test", nil
-		}, nil
+	auth.RegisterBrowserOAuthDriver(provider, fakeBrowserAuthDriver{
+		authorize: func(context.Context) (func() (string, error), error) {
+			<-release
+			return func() (string, error) {
+				committed = true
+				return "signed-in@example.test", nil
+			}, nil
+		},
+		logout: func() (bool, error) { return false, nil },
 	})
-	d.providerAuthMu.Lock()
-	flow := d.providerAuths[providers.CodexName]
-	d.providerAuthMu.Unlock()
-	done, err := cli.LogoutProviderAuth(t.Context(), providers.CodexName)
+	resp, err := cli.StartProviderAuth(t.Context(), provider)
+	if err != nil {
+		close(release)
+		t.Fatalf("start: %v", err)
+	}
+	flow := browserAuthTestFlow(d, provider)
+	done, err := cli.LogoutProviderAuth(t.Context(), provider)
 	close(release)
-	<-flow.settled
+	awaitBrowserAuth(t, flow.settled, "canceled flow settlement")
 	if resp.Status != "authorizing" || resp.AuthURL != "" {
 		t.Fatalf("start = %+v", resp)
 	}

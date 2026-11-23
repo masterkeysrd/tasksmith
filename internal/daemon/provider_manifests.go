@@ -19,6 +19,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	providerauth "github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -381,12 +382,6 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 	d.providerInstallMu.Lock()
 	defer d.providerInstallMu.Unlock()
 
-	rt, err := d.workspace(ctx, rawWS)
-	if err != nil {
-		return nil, err
-	}
-	ws := rt.Workspace()
-
 	name := strings.TrimSpace(req.Name)
 	provType := strings.TrimSpace(req.Type)
 	scope := strings.ToLower(strings.TrimSpace(req.Scope))
@@ -402,20 +397,41 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 	if !isValidProviderName(name) {
 		return nil, &api.APIError{StatusCode: http.StatusBadRequest, Code: "bad_request", Message: fmt.Sprintf("provider name %q must be a lowercase slug (letters, digits, '-' or '_')", name)}
 	}
-	if provType == "" {
-		if preset := findPreset(name); preset != nil {
-			provType = preset.Spec.Type
-		}
+	preset := findPreset(name)
+	if provType == "" && preset != nil {
+		provType = preset.Spec.Type
 	}
 	if provType == "" {
 		return nil, &api.APIError{StatusCode: http.StatusBadRequest, Code: "bad_request", Message: "provider type is required"}
 	}
+	endpoint := strings.TrimSpace(req.Endpoint)
+	authEnv := strings.TrimSpace(req.AuthEnv)
+	apiKey := strings.TrimSpace(req.APIKey)
+	authType := strings.TrimSpace(req.AuthType)
+	for _, kind := range []string{name, provType} {
+		if _, browserOnly := providerauth.GetBrowserOAuthDriver(kind); !browserOnly {
+			continue
+		}
+		if name != kind || provType != kind || endpoint != "" || authEnv != "" || apiKey != "" ||
+			(authType != "" && authType != warp.AuthTypeOAuth2) {
+			return nil, &api.APIError{
+				StatusCode: http.StatusBadRequest,
+				Code:       "bad_request",
+				Message:    fmt.Sprintf("%s requires the provider name and type %q and browser OAuth without endpoint, auth env var, or API key overrides", kind, kind),
+			}
+		}
+	}
+
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+	ws := rt.Workspace()
 	if _, exists := ws.ProviderRecord(name); exists {
 		return nil, &api.APIError{StatusCode: http.StatusConflict, Code: "already_exists", Message: fmt.Sprintf("provider %q is already configured for this workspace", name)}
 	}
 
-	spec := warp.ModelProviderSpec{Type: provType, Endpoint: strings.TrimSpace(req.Endpoint)}
-	preset := findPreset(name)
+	spec := warp.ModelProviderSpec{Type: provType, Endpoint: endpoint}
 	if preset == nil {
 		preset = findPreset(provType)
 	}
@@ -427,7 +443,7 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 	if isPreset {
 		spec = *preset.Spec.DeepCopy()
 		spec.Enabled = nil
-		if endpoint := strings.TrimSpace(req.Endpoint); endpoint != "" {
+		if endpoint != "" {
 			spec.Endpoint = endpoint
 		}
 	} else if preset != nil && spec.Endpoint == "" {
@@ -482,9 +498,6 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 		skipped = ws.FilterPresetAliases(name, scope, &spec, nil)
 	}
 
-	authEnv := strings.TrimSpace(req.AuthEnv)
-	apiKey := strings.TrimSpace(req.APIKey)
-	authType := strings.TrimSpace(req.AuthType)
 	if authType == warp.AuthTypeNone && apiKey == "" && authEnv == "" {
 		spec.Auth = &warp.ProviderAuth{Type: warp.AuthTypeNone}
 	} else if apiKey != "" || authEnv != "" {

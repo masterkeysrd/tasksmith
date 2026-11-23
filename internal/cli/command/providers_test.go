@@ -646,6 +646,83 @@ func TestModelPickerAliasEditorOpensOnF2(t *testing.T) {
 	}
 }
 
+func TestProvidersAddBrowserOAuthPreset(t *testing.T) {
+	for _, tc := range []struct{ name, label string }{
+		{"codex", "Codex"},
+		{"claudecode", "Claude Code"},
+		{"github-copilot", "GitHub Copilot"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newProviderFixture(t, nil)
+			f.mu.Lock()
+			f.presets = []api.ProviderSummary{{Name: tc.name, DisplayName: tc.name, AuthType: "oauth2", BrowserAuthLabel: "Continue in browser"}}
+			f.mu.Unlock()
+			verdicts := make(chan string, 1)
+			app := testutils.NewApp(t, providersAddPane(providersAddPaneProps{
+				client: store.Client(), onCreated: func(_ api.WorkspaceProvider, verdict string) { verdicts <- verdict },
+			}), 100, 30)
+			app.WaitFor(func(out string) bool { return strings.Contains(out, tc.label) })
+			app.Press(key.Key{Code: key.KeyEnter})
+			frame := app.WaitFor(func(out string) bool { return strings.Contains(out, "Fixed browser OAuth preset") })
+			for _, want := range []string{"Add provider · " + tc.label, "/login " + tc.name, "Workspace (.agents/providers)", "Create provider"} {
+				if !strings.Contains(frame, want) {
+					t.Errorf("missing %q in form:\n%s", want, frame)
+				}
+			}
+			frame = app.Press(key.Key{Code: 'e', Text: "e"})
+			for _, forbidden := range []string{"Name", "Endpoint", "Auth env var", "API key", "Edit field", "New value:"} {
+				if strings.Contains(frame, forbidden) {
+					t.Errorf("unexpected %q in fixed form:\n%s", forbidden, frame)
+				}
+			}
+			app.Press(key.Key{Code: key.KeyEscape})
+			app.WaitFor(func(out string) bool { return strings.Contains(out, "Pick a built-in preset") })
+			app.Press(key.Key{Code: key.KeyEnter})
+			app.WaitFor(func(out string) bool { return strings.Contains(out, "Fixed browser OAuth preset") })
+			app.Press(key.Key{Code: key.KeyEnter})
+			app.WaitFor(func(out string) bool { return strings.Contains(out, "User (~/.config/tasksmith/agents/providers)") })
+			app.Press(key.Key{Code: key.KeyDown})
+			app.Press(key.Key{Code: key.KeyEnter})
+			mcpBackground.Wait()
+			select {
+			case verdict := <-verdicts:
+				if verdict != " · sign in with /login "+tc.name {
+					t.Errorf("verdict = %q, want sign-in instructions", verdict)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("preset was not created:\n%s", app.Text())
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			want := api.CreateProviderRequest{Name: tc.name, Type: tc.name, Scope: "user"}
+			if len(f.created) != 1 {
+				t.Fatalf("create requests = %+v, want one", f.created)
+			}
+			got := f.created[0]
+			if got.Name != want.Name || got.Type != want.Type || got.Scope != want.Scope || got.Endpoint != "" ||
+				got.AuthEnv != "" || got.APIKey != "" || got.AuthType != "" || got.DefaultModel != "" || len(got.Models) != 0 {
+				t.Errorf("create request = %+v, want fixed request %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestProvidersAddRegularPresetKeepsEditing(t *testing.T) {
+	newProviderFixture(t, nil)
+	app := testutils.NewApp(t, providersAddPane(providersAddPaneProps{client: store.Client()}), 100, 30)
+	app.WaitFor(func(out string) bool { return strings.Contains(out, "OpenAI") })
+	app.Press(key.Key{Code: key.KeyEnter})
+	frame := app.WaitFor(func(out string) bool { return strings.Contains(out, "Edit field") })
+	for _, want := range []string{"Name", "Endpoint", "Auth env var", "API key"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("missing regular field %q:\n%s", want, frame)
+		}
+	}
+	app.Press(key.Key{Code: key.KeyDown})
+	app.Press(key.Key{Code: 'e', Text: "e"})
+	app.WaitFor(func(out string) bool { return strings.Contains(out, "New value:") })
+}
+
 // TestProviderRowStatusShadowSuffix proves "(shadow)" marks a mute only: a
 // disabled workspace override over an enabled inherited manifest earns the
 // suffix, while an enabled full workspace override renders as plain "Ready".

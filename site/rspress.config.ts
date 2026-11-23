@@ -160,6 +160,8 @@ export default defineConfig({
             { text: 'OpenAI', link: '/reference/providers/openai' },
             { text: 'Codex', link: '/reference/providers/codex' },
             { text: 'Anthropic', link: '/reference/providers/anthropic' },
+            { text: 'Claude Code', link: '/reference/providers/claudecode' },
+            { text: 'GitHub Copilot', link: '/reference/providers/github-copilot' },
             { text: 'Google GenAI', link: '/reference/providers/google-genai' },
             { text: 'Ollama', link: '/reference/providers/ollama' },
             { text: 'TypeSafe', link: '/reference/providers/typesafe' },

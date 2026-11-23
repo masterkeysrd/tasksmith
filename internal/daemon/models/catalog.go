@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"slices"
 	"strings"
 
@@ -55,6 +56,10 @@ type QuotaCapability interface {
 
 // Build constructs a Catalog using cat for manifest models and profiles for fallback definitions.
 func Build(cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
+	return BuildContext(context.Background(), cat, profiles)
+}
+
+func BuildContext(ctx context.Context, cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
 	c := &Catalog{
 		cat:       cat,
 		profiles:  profiles,
@@ -69,14 +74,11 @@ func Build(cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
 		for _, p := range cat.Providers() {
 			c.providers[p.Metadata.Name] = p.Spec.Type
 			for _, m := range p.Spec.Models {
-				id := Normalize(p.Metadata.Name, m.ID)
-				var base *profile.Profile
-				if profiles != nil {
-					if prof, ok := profiles.GetProfile(string(id)); ok {
-						base = &prof
-					}
+				if err := ctx.Err(); err != nil {
+					return nil, err
 				}
-				merged := Merge(id, p.Spec.Type, &m, base)
+				id := Normalize(p.Metadata.Name, m.ID)
+				merged := Merge(id, p.Spec.Type, &m, c.lookupProfile(ctx, id))
 				// A model with no price whose provider reports quota is
 				// subscription-billed: its usage has no dollar cost to show.
 				if quotaCapable != nil {
@@ -103,7 +105,26 @@ func Build(cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
 		c.listed.Replace(listedModels...)
 		c.built.Replace(listedModels...)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+func (c *Catalog) lookupProfile(ctx context.Context, id ID) *profile.Profile {
+	if c.profiles == nil {
+		return nil
+	}
+	lookup := c.profiles.GetProfile
+	if p, ok := c.profiles.(interface {
+		GetProfileContext(context.Context, string) (profile.Profile, bool)
+	}); ok {
+		lookup = func(id string) (profile.Profile, bool) { return p.GetProfileContext(ctx, id) }
+	}
+	if p, ok := lookup(string(id)); ok {
+		return &p
+	}
+	return nil
 }
 
 // applyWorkspaceAliases attaches workspace.spec.modelAliases to the models they
@@ -151,6 +172,13 @@ func (c *Catalog) applyWorkspaceAliases(models []Model) {
 // casing of either — always resolves to that declared model, so its limits,
 // capabilities, and pricing are never discarded.
 func (c *Catalog) Get(id ID) (Model, bool) {
+	return c.GetContext(context.Background(), id)
+}
+
+func (c *Catalog) GetContext(ctx context.Context, id ID) (Model, bool) {
+	if ctx.Err() != nil {
+		return Model{}, false
+	}
 	// Canonicalize aliases/shorthands through warp before the validity check and
 	// the built lookup so bare aliases (which are not valid IDs) still resolve.
 	if c.cat != nil && c.shouldResolveAlias(id) {
@@ -179,11 +207,9 @@ func (c *Catalog) Get(id ID) (Model, bool) {
 			return m.Clone(), true
 		}
 	}
-	var base *profile.Profile
-	if c.profiles != nil {
-		if p, ok := c.profiles.GetProfile(string(id)); ok {
-			base = &p
-		}
+	base := c.lookupProfile(ctx, id)
+	if ctx.Err() != nil {
+		return Model{}, false
 	}
 	m := Merge(id, c.providers[id.Provider()], nil, base)
 	// Unlisted models carry the same billing rule as listed ones: an alias
@@ -192,7 +218,9 @@ func (c *Catalog) Get(id ID) (Model, bool) {
 	if quotaCapable, ok := c.profiles.(QuotaCapability); ok && quotaCapable != nil {
 		m.QuotaBilled = m.Pricing == nil && quotaCapable.QuotaCapable(m)
 	}
-	c.built.Save(m)
+	if base != nil || c.profiles == nil {
+		c.built.Save(m)
+	}
 	return m.Clone(), true
 }
 
@@ -260,7 +288,11 @@ func hasUnresolvedAliasSegment(id ID) bool {
 
 // Resolve applies warp's role/priority rules and returns the selected model.
 func (c *Catalog) Resolve(role Role, explicit ...string) (Model, bool) {
-	if c.cat == nil {
+	return c.ResolveContext(context.Background(), role, explicit...)
+}
+
+func (c *Catalog) ResolveContext(ctx context.Context, role Role, explicit ...string) (Model, bool) {
+	if c.cat == nil || ctx.Err() != nil {
 		return Model{}, false
 	}
 	for _, candidate := range c.cat.ResolveModels(role.warp(), explicit...) {
@@ -273,7 +305,7 @@ func (c *Catalog) Resolve(role Role, explicit ...string) (Model, bool) {
 				continue
 			}
 		}
-		if m, ok := c.Get(id); ok {
+		if m, ok := c.GetContext(ctx, id); ok {
 			return m, true
 		}
 	}

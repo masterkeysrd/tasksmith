@@ -25,6 +25,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
@@ -120,9 +121,10 @@ type Daemon struct {
 	closeErr     error
 	serveErrCh   chan error
 
-	providerInstallMu sync.Mutex
-	providerAuthMu    sync.Mutex
-	providerAuths     map[string]*providerAuthFlow
+	providerInstallMu  sync.Mutex
+	providerAuthMu     sync.Mutex
+	providerAuths      map[string]*providerAuthFlow
+	browserAuthWriteMu map[string]*sync.Mutex
 }
 
 var _ server.Backend = (*Daemon)(nil)
@@ -168,19 +170,20 @@ func New(cfg Config) (*Daemon, error) {
 	})
 
 	d := &Daemon{
-		db:            db,
-		metricsStore:  store,
-		usage:         usage,
-		cfg:           cfg,
-		logger:        daemonLogger,
-		startedAt:     time.Now().UTC(),
-		broker:        b,
-		srv:           server.NewServer(serverLogger),
-		workspaces:    make(map[string]*workspaceRuntime),
-		dirToRoot:     make(map[string]string),
-		providerAuths: make(map[string]*providerAuthFlow),
-		shutdownCh:    make(chan struct{}),
-		serveErrCh:    make(chan error, 1),
+		db:                 db,
+		metricsStore:       store,
+		usage:              usage,
+		cfg:                cfg,
+		logger:             daemonLogger,
+		startedAt:          time.Now().UTC(),
+		broker:             b,
+		srv:                server.NewServer(serverLogger),
+		workspaces:         make(map[string]*workspaceRuntime),
+		dirToRoot:          make(map[string]string),
+		providerAuths:      make(map[string]*providerAuthFlow),
+		browserAuthWriteMu: make(map[string]*sync.Mutex),
+		shutdownCh:         make(chan struct{}),
+		serveErrCh:         make(chan error, 1),
 	}
 
 	mux := d.srv.CreateMux(
@@ -334,9 +337,9 @@ func (d *Daemon) signalShutdown() {
 }
 
 // Close gracefully shuts down the HTTP server, waits for any in-flight
-// background turns to abort, closes all workspace runtimes and the gateway pool,
-// removes the Unix socket, and releases the lockfile. Concurrent calls to Close
-// block until teardown completes and return the same result.
+// background turns to abort, closes all workspace runtimes, the gateway pool,
+// and browser OAuth drivers, removes the Unix socket, and releases the lockfile.
+// Concurrent calls to Close block until teardown completes and return the same result.
 func (d *Daemon) Close(ctx context.Context) error {
 	d.signalShutdown()
 	d.closeOnce.Do(func() {
@@ -364,6 +367,9 @@ func (d *Daemon) Close(ctx context.Context) error {
 		}
 
 		if err := d.cfg.GatewayPool.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		if err := auth.CloseBrowserOAuthDrivers(); err != nil {
 			errs = append(errs, err)
 		}
 
@@ -487,7 +493,7 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 	if resolvedAgent, err := cat.ResolveAgent(defaultAgent); err == nil && resolvedAgent != nil && resolvedAgent.Agent != nil {
 		candidates = resolvedAgent.Agent.Spec.Models
 	}
-	if model, ok := owner.Catalog().Resolve(models.RoleCompletion, candidates...); ok {
+	if model, ok := owner.Catalog().ResolveContext(ctx, models.RoleCompletion, candidates...); ok {
 		converted := model.ToAPI()
 		var agentThinking *api.ThinkingSetting
 		if ag, ok := cat.GetAgent(defaultAgent); ok {
@@ -495,6 +501,9 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		}
 		converted.ThinkingDefault = model.EffectiveThinking(nil, agentThinking)
 		resolvedDefault = &converted
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	cleanDir, _ := fsutils.CleanPath(rawWS)
@@ -819,9 +828,12 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 	var model models.Model
 	var ok bool
 	if models.ID(id).Valid() {
-		model, ok = rt.Catalog().Get(models.ID(id))
+		model, ok = rt.Catalog().GetContext(ctx, models.ID(id))
 	} else {
-		model, ok = rt.Catalog().Resolve(models.RoleCompletion, id)
+		model, ok = rt.Catalog().ResolveContext(ctx, models.RoleCompletion, id)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if !ok {
 		return &api.Model{ID: id, Name: id, Label: id}, nil
@@ -852,9 +864,12 @@ func (d *Daemon) GetModelQuota(ctx context.Context, rawWS, id string) (*api.Mode
 	var model models.Model
 	var ok bool
 	if models.ID(id).Valid() {
-		model, ok = rt.Catalog().Get(models.ID(id))
+		model, ok = rt.Catalog().GetContext(ctx, models.ID(id))
 	} else {
-		model, ok = rt.Catalog().Resolve(models.RoleCompletion, id)
+		model, ok = rt.Catalog().ResolveContext(ctx, models.RoleCompletion, id)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if !ok {
 		return nil, nil

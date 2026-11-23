@@ -22,6 +22,7 @@ A muted alias status line under the title shows where each standard tier resolve
 - **Catalog source**: The gateway uses a live list when supported, then the provider's known profiles when it offers profiles alone. The bundled preset supplies the catalog when the gateway has none.
 - **Model catalog** (`Catalog · <name>`): filter-first — every printable key types into the filter, `enter` toggles an entry, `ctrl+s` adds the selected entries in one write, `esc` goes back.
 - **Add provider**: preset list (or `Custom provider…`) then a field form; `enter` toggles `Scope` and submits `Create provider`, `e` edits the highlighted text field (non-text rows show why they have no free-text value), `esc` steps back. Supplied API keys are written **only** to the scope's `.env` (`~/.config/tasksmith/.env` or `<workspace-root>/.env`, with `.env` gitignored in workspace scope) and referenced from the manifest as `${env:<NAME>_API_KEY}` — never paste secrets into YAML or ask the user to. A preset-backed create keeps the preset's auth scheme and env var; a custom provider (name different from its type) never inherits the preset's auth, config, defaults, or models.
+- **Browser-only presets** (Codex, Claude Code, GitHub Copilot): choose a scope and create the preset, then use `/login <provider>` if sign-in is needed. These presets have fixed names, types, and OAuth settings, with no endpoint, auth env var, or API key field. Adding the preset does not verify live connectivity.
 
 Installing a preset through `/setup` or `/providers` keeps all preset models but skips aliases already assigned to other models. The transcript names each skipped alias and its owner. Use `F2` for intentional provider alias moves; for a workspace override, edit `spec.modelAliases` in `WORKSPACE.md`.
 
@@ -50,20 +51,20 @@ For subscription-billed (`QuotaBilled`) models:
 
 ## Provider OAuth sign-in (`tasksmith auth` & `/login`)
 
-OAuth model providers (such as Antigravity) authenticate through the daemon; the CLI drives the flow:
+OAuth model providers authenticate through the daemon. Choose the provider in `/setup`, or add the preset through `/providers` and use `/login <provider>`.
 
-For Codex, use `/setup` and choose **Codex**, or run `/login codex` and add the preset from `/providers`. From a shell use `tasksmith auth login codex`. The daemon opens the browser on its host and receives the callback there. The copy, paste, and browser-suppression options below apply to Antigravity.
-
-- **`tasksmith auth login [provider]`**: starts the daemon's PKCE flow, prints the authorization URL, opens a browser, and waits up to 5 minutes for completion.
-  - `--no-browser`: prints the URL without launching a browser.
-  - `--paste`: reads the final redirect URL from `stdin` — use this on SSH or headless hosts where the browser cannot reach the daemon's loopback callback.
+- **Codex** (`codex`): finish Sign in with ChatGPT in the browser on the daemon host.
+- **Claude Code** (`claudecode`) and **GitHub Copilot** (`github-copilot`): install `claude` or `copilot`, respectively, where the daemon can run it. Copilot needs a CLI that speaks protocol 4, such as `1.0.114`. Finish the vendor's browser sign-in on the daemon host. There is no pasted callback, `--no-browser`, or headless device login. Do not ask for vendor tokens or direct users to reuse a vendor CLI profile. In `/providers`, use the model manager's catalog when choosing models for the signed-in account; aliases in the preset are suggestions. These providers show quota instead of dollar costs and report windows only when exposed by the vendor.
+- **`tasksmith auth login [provider]`**: starts the provider's browser sign-in and waits for it to settle; for example, `tasksmith auth login claudecode` or `tasksmith auth login github-copilot`.
+  - `--no-browser` (Antigravity): prints the URL without launching a browser.
+  - `--paste` (Antigravity): reads the final redirect URL from `stdin` — use this on SSH or headless hosts where the browser cannot reach the daemon's loopback callback.
 - **`tasksmith auth status [provider]`**: prints `<provider>: <status> (<account>)` for one provider or a `PROVIDER / AUTH / STATUS` table across all configured providers.
 - **`tasksmith auth logout [provider]`**: deletes stored credentials for that provider and cancels any in-flight sign-in flow.
 - **REPL `/login [provider]`** (aliases `/auth`, `/signin`): opens the interactive sign-in screen:
-  - `c`: copy the authorization URL to clipboard.
-  - `Enter`: submit a pasted redirect URL (full address-bar URL, query string, or bare code).
-  - `Esc`: dismiss the screen while keeping the daemon's flow open for up to 5 minutes; the settled result posts to the conversation timeline.
+  - `c` (Antigravity): copy the authorization URL to clipboard.
+  - `Enter` (Antigravity): submit a pasted redirect URL (full address-bar URL, query string, or bare code).
+  - `Esc`: dismiss the screen while the daemon's flow continues; the settled result posts to the conversation timeline.
 - **Provider resolution & daemon requirement**:
   - Omitting `[provider]` auto-selects only when **exactly one** OAuth-capable provider is configured; otherwise the command lists the candidates and asks you to specify one.
   - All `tasksmith auth` subcommands require a running daemon and never auto-spawn one — instruct users to run `tasksmith daemon start` first if the daemon is stopped.
-- **Credential boundary**: never read, write, or print OAuth token files under `~/.local/share/tasksmith/credentials/`; manage credentials strictly via `tasksmith auth` or `/login`.
+- **Credential boundary**: never read, write, or print OAuth token files or vendor CLI profiles under `~/.local/share/tasksmith/credentials/`; manage credentials strictly via `tasksmith auth` or `/login`.

@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/providers"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
@@ -133,15 +134,24 @@ func (g *gatewayImpl) Quota(ctx context.Context, m models.Model) (*api.ModelQuot
 		outBuckets = append(outBuckets, toAPIQuotaBucket(b))
 	}
 
-	q := &api.ModelQuota{
+	return &api.ModelQuota{
 		Model:    string(m.ID),
 		Provider: inst.cfg.Name,
+		Account:  inst.quotaAccount(),
 		Buckets:  outBuckets,
+	}, nil
+}
+
+func (inst *providerInstance) quotaAccount() string {
+	if driver, ok := auth.GetBrowserOAuthDriver(inst.cfg.Type); ok {
+		if account, signedIn := driver.Account(); signedIn && account != "" {
+			return account
+		}
 	}
-	if _, account, terr := auth.LoadProviderToken(inst.cfg.Name); terr == nil && account != "" {
-		q.Account = account
+	if _, account, err := auth.LoadProviderToken(inst.cfg.Name); err == nil {
+		return account
 	}
-	return q, nil
+	return ""
 }
 
 func (g *gatewayImpl) QuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotResponse, error) {
@@ -152,6 +162,7 @@ func (g *gatewayImpl) QuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotRes
 	}
 	type providerEntry struct {
 		name string
+		inst *providerInstance
 		qp   llm.QuotaProvider
 	}
 	entries := make([]providerEntry, 0, len(g.providers))
@@ -160,7 +171,7 @@ func (g *gatewayImpl) QuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotRes
 			continue
 		}
 		if qp, ok := inst.llmProv.(llm.QuotaProvider); ok {
-			entries = append(entries, providerEntry{name: name, qp: qp})
+			entries = append(entries, providerEntry{name: name, inst: inst, qp: qp})
 		}
 	}
 	g.mu.RUnlock()
@@ -187,12 +198,10 @@ func (g *gatewayImpl) QuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotRes
 
 		apiSnap := api.ProviderQuotaSnapshot{
 			Provider:    entry.name,
+			Account:     entry.inst.quotaAccount(),
 			CollectedAt: snap.CollectedAt,
 			Buckets:     make(map[string]api.QuotaBucket, len(snap.Buckets)),
 			Models:      make(map[string][]string, len(snap.Models)),
-		}
-		if _, account, terr := auth.LoadProviderToken(entry.name); terr == nil && account != "" {
-			apiSnap.Account = account
 		}
 		for id, b := range snap.Buckets {
 			apiSnap.Buckets[id] = toAPIQuotaBucket(b)
@@ -287,10 +296,10 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 	if mw := openAIResponsesOptionsMiddleware(inst.openaiResponsesOpts); mw != nil {
 		model = model.WithMiddleware(mw)
 	}
-	if inst.cfg.Type == "antigravity" {
+	switch inst.cfg.Type {
+	case "antigravity":
 		model = model.WithMiddleware(antigravitySessionMiddleware())
-	}
-	if inst.cfg.Type == "anthropic" {
+	case "anthropic":
 		model = model.WithMiddleware(anthropicCachingMiddleware())
 	}
 	model = model.WithMiddleware(llm.DeferredToolsMiddleware(nil), llm.InlineToolsMiddleware(nil))
@@ -371,30 +380,48 @@ func (g *gatewayImpl) Embedding(ctx context.Context, m models.Model) (*embedding
 	return model.WithProfile(&p).WithMiddleware(errorEnrichingEmbeddingMiddleware()), nil
 }
 
-func (inst *providerInstance) profileForModel(modelID string) (profile.Profile, bool) {
+func (inst *providerInstance) isSubscriptionCLI() bool {
+	return inst.cfg.Type == providers.ClaudeCodeName || inst.cfg.Type == providers.GitHubCopilotName
+}
+
+func (inst *providerInstance) catalogProfile(prof profile.Profile) profile.Profile {
+	if inst.isSubscriptionCLI() {
+		prof.Pricing = profile.Pricing{}
+		prof.Capabilities.Decision = false
+		prof.Capabilities.Embedding = false
+	}
+	return prof
+}
+
+func (inst *providerInstance) profileForModel(ctx context.Context, modelID string) (profile.Profile, bool) {
 	for _, client := range inst.clients() {
 		if pp, ok := client.(profile.Provider); ok {
 			if prof, found := pp.GetProfile(modelID); found {
-				return prof, true
+				return inst.catalogProfile(prof), true
 			}
 		}
 	}
 	if inst.profileDiscovery != nil {
-		return inst.profileDiscovery.find(modelID)
+		prof, found := inst.profileDiscovery.find(ctx, modelID)
+		return inst.catalogProfile(prof), found
 	}
 	return profile.Profile{}, false
 }
 
 func (g *gatewayImpl) GetProfile(qualifiedID string) (profile.Profile, bool) {
+	return g.GetProfileContext(context.Background(), qualifiedID)
+}
+
+func (g *gatewayImpl) GetProfileContext(ctx context.Context, qualifiedID string) (profile.Profile, bool) {
 	id := models.ID(qualifiedID)
-	if !id.Valid() {
+	if ctx.Err() != nil || !id.Valid() {
 		return profile.Profile{}, false
 	}
 	g.mu.RLock()
-	inst, ok := g.providers[id.Provider()]
+	inst, closed := g.providers[id.Provider()], g.closed
 	g.mu.RUnlock()
-	if !ok {
+	if inst == nil || closed {
 		return profile.Profile{}, false
 	}
-	return inst.profileForModel(id.Name())
+	return inst.profileForModel(ctx, id.Name())
 }

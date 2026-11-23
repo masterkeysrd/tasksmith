@@ -34,7 +34,7 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - [x] **Deterministic tool & MCP availability**: `spec.enabled` on Tool/MCP manifests plus `WORKSPACE.md` `spec.policies.tools.exclude` / `spec.policies.mcps.exclude` as the only availability switches (legacy `permissions.json` disabled lists removed), with `[Disabled]` listings and in-place toggling in `/tools` and `/mcp`
 - [x] **SmartReplace in `edit`**: exact-first matching with conservative fallbacks for line endings, whitespace, indentation, and minor typos; preserves diff previews and file-change checks.
 - [x] **ChatGPT Codex & live model catalogs** — Sign in with a ChatGPT plan and browse the models available to that account in `/providers`. The gateway uses live catalogs where providers expose them. OpenAI, Google GenAI, and Antigravity presets include updated models and tier aliases. [Codex setup](./docs/reference/providers/codex.md)
-- [ ] **Claude Code & GitHub Copilot providers**: subscription-backed `claudecode` and `github-copilot` LLM gateway providers (via `loom`) with OAuth sign-in, built-in presets, `@fast`/`@balanced`/`@smart`/`@flagship` model tiers, and quota tracking
+- [x] **Claude Code & GitHub Copilot providers**: subscription-backed `claudecode` and `github-copilot` completion via Loom, with browser sign-in, built-in presets, four model-tier aliases, and provider-reported quota. Copilot requires a CLI that speaks protocol 4, such as `1.0.114`. [Claude Code setup](./docs/reference/providers/claudecode.md) · [Copilot setup](./docs/reference/providers/github-copilot.md)
 
 ---
 

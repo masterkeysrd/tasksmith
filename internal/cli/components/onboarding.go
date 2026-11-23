@@ -250,6 +250,8 @@ func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingS
 		{"anthropic", "claude-sonnet-5-5, opus-5-5, haiku-5-5"},
 		{"openai", "gpt-6.2-sol, gpt-6.2-astra"},
 		{"codex", "sign in with ChatGPT"},
+		{"claudecode", "sign in with Claude on the daemon host"},
+		{"github-copilot", "sign in with GitHub on the daemon host"},
 		{"google-genai", "neon, hydrogen, carbon, argon"},
 		{"antigravity", "gemini via Cloud Code"},
 		{"ollama", "local models (http://localhost:11434)"},
@@ -275,7 +277,7 @@ func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingS
 
 		opt := uicomponents.Option{
 			Value:       p.name,
-			Label:       strings.ToUpper(p.name[:1]) + p.name[1:],
+			Label:       ProviderDisplayName(p.name, ""),
 			Description: p.desc,
 		}
 		if status != "" {
@@ -351,7 +353,7 @@ func renderCredentialsStep(props OnboardingWizardProps, state store.OnboardingSt
 	}
 
 	return Picker(PickerProps{
-		Title:    fmt.Sprintf("Configure %s credentials", prov),
+		Title:    fmt.Sprintf("Configure %s credentials", ProviderDisplayName(prov, "")),
 		Subtitle: "Enter the required API key or credentials.",
 		Options:  options,
 		InputActions: map[string]InputAction{
@@ -412,10 +414,7 @@ var oauthWaiter = trail.FC("OAuthWaiter", func(props oauthWaiterProps) trail.Nod
 		},
 	}
 
-	titleName := props.Provider
-	if len(titleName) > 0 {
-		titleName = strings.ToUpper(titleName[:1]) + titleName[1:]
-	}
+	titleName := ProviderDisplayName(props.Provider, "")
 
 	subtitle := fmt.Sprintf("Waiting for %s authorization in the browser…", titleName)
 	if props.OAuthAuthURL != "" {
@@ -441,10 +440,7 @@ func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.Onboard
 		prov = state.Status.MissingCredentials[0]
 	}
 
-	titleName := prov
-	if len(titleName) > 0 {
-		titleName = strings.ToUpper(titleName[:1]) + titleName[1:]
-	}
+	titleName := ProviderDisplayName(prov, "")
 
 	envVar := state.AuthEnv
 	if envVar == "" {

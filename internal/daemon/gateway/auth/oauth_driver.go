@@ -2,7 +2,10 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"strings"
 	"sync"
 
@@ -45,6 +48,22 @@ func GetBrowserOAuthDriver(provider string) (BrowserOAuthDriver, bool) {
 	defer oauthDriversMu.RUnlock()
 	driver, ok := browserOAuthDrivers[provider]
 	return driver, ok
+}
+
+func CloseBrowserOAuthDrivers() error {
+	oauthDriversMu.RLock()
+	drivers := maps.Clone(browserOAuthDrivers)
+	oauthDriversMu.RUnlock()
+
+	var errs []error
+	for provider, driver := range drivers {
+		if closer, ok := driver.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close browser OAuth driver %q: %w", provider, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // RegisterOAuthDriver registers an OAuth driver for a provider name.

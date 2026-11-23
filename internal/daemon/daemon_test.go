@@ -29,6 +29,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/providers"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
@@ -149,7 +150,8 @@ func (g *fakeGateway) QuotaCapable(models.Model) bool { return false }
 func (g *fakeGateway) Close() error { return nil }
 
 type fakeGatewayPool struct {
-	gw *fakeGateway
+	gw       *fakeGateway
+	closeErr error
 }
 
 func newFakeGatewayPool(prov *fakeProvider) *fakeGatewayPool {
@@ -169,7 +171,7 @@ func (p *fakeGatewayPool) Acquire(ctx context.Context, _ gateway.Config) (gatewa
 }
 
 func (p *fakeGatewayPool) Close() error {
-	return nil
+	return p.closeErr
 }
 
 func shortTempDir(t *testing.T) string {
@@ -235,6 +237,61 @@ func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Daemon, *client.Client,
 	}
 
 	return srv, cli, wsDir
+}
+
+type closeTestOAuthDriver struct {
+	auth.BrowserOAuthDriver
+	closeErr error
+	closes   int
+}
+
+func (d *closeTestOAuthDriver) Close() error {
+	d.closes++
+	return d.closeErr
+}
+
+func TestDaemonCloseAggregatesPoolAndOAuthDriverErrors(t *testing.T) {
+	const provider = providers.ClaudeCodeName
+	original, ok := auth.GetBrowserOAuthDriver(provider)
+	if !ok {
+		t.Fatalf("browser OAuth driver %q not registered", provider)
+	}
+	driver := &closeTestOAuthDriver{
+		BrowserOAuthDriver: original,
+		closeErr:           errors.New("browser OAuth driver close failed"),
+	}
+	auth.RegisterBrowserOAuthDriver(provider, driver)
+	t.Cleanup(func() { auth.RegisterBrowserOAuthDriver(provider, original) })
+
+	dir := t.TempDir()
+	t.Cleanup(xdg.ClearCache)
+	t.Setenv("XDG_DATA_HOME", dir)
+	xdg.ClearCache()
+
+	pool := newFakeGatewayPool(nil)
+	pool.closeErr = errors.New("gateway pool close failed")
+	d, err := New(Config{
+		SocketPath:  filepath.Join(dir, "daemon.sock"),
+		LockPath:    filepath.Join(dir, "daemon.lock"),
+		GatewayPool: pool,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = d.Close(t.Context())
+	for _, want := range []error{pool.closeErr, driver.closeErr} {
+		if !errors.Is(err, want) {
+			t.Errorf("Close() = %v, want it to contain %v", err, want)
+		}
+	}
+	if again := d.Close(t.Context()); again != err {
+		t.Errorf("second Close() = %v, want the original result %v", again, err)
+	}
+	if driver.closes != 1 {
+		t.Errorf("driver close count = %d, want 1", driver.closes)
+	}
 }
 
 func extractAPIMessageText(msg api.Message) string {

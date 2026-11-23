@@ -15,6 +15,8 @@ TaskSmith includes built-in drivers and presets for the following providers:
 | **OpenAI** | `openai` | `completion`, `decision`, `embedding` | Frontier reasoning (`gpt-6.2-sol`, `gpt-6.2-astra`), Responses API tools, embeddings | [OpenAI Guide](./providers/openai.md) |
 | **Codex** | `codex` | `completion`, `decision` (fallback) | Direct inference using an eligible ChatGPT plan, with a live catalog in **Manage models** | [Codex Guide](./providers/codex.md) |
 | **Anthropic** | `anthropic` | `completion`, `decision` (fallback) | Extended thinking, deep reasoning (`claude-sonnet-5-5`, `claude-opus-5-5`), prompt caching | [Anthropic Guide](./providers/anthropic.md) |
+| **Claude Code** | `claudecode` | `completion` | Claude subscription inference through the installed `claude` CLI | [Claude Code Guide](./providers/claudecode.md) |
+| **GitHub Copilot** | `github-copilot` | `completion` | Copilot subscription inference through an installed `copilot` CLI that speaks protocol 4 | [GitHub Copilot Guide](./providers/github-copilot.md) |
 | **Ollama** | `ollama` | `completion`, `decision`, `embedding` | 100% offline local inference (`qwen3.8`, `nimble-v3`, `nomic-embed-text`), zero data egress | [Ollama Guide](./providers/ollama.md) |
 | **Google GenAI** | `google-genai`, `genai`, `gemini` | `completion`, `embedding` | Multimodal inputs and 1M+ token context, with `gemini-4-neon` as the preset default | [Google GenAI Guide](./providers/google-genai.md) |
 | **TypeSafe** | `typesafe` | `decision` | Ultra-fast native System 1 decisions (`jev-latest`), sub-50ms deterministic classifications | [TypeSafe Guide](./providers/typesafe.md) |
@@ -35,7 +37,8 @@ metadata:
   # Provider identifier used in model references (e.g. "openai/gpt-5.5")
   name: openai
 spec:
-  # Driver type: openai | codex | anthropic | ollama | google-genai (genai, gemini) | typesafe | antigravity
+  # Driver type: openai | codex | anthropic | claudecode | github-copilot |
+  #              ollama | google-genai (genai, gemini) | typesafe | antigravity
   type: openai
 
   # Enable or disable this provider (default: true when omitted). A disabled
@@ -116,7 +119,9 @@ Requests requiring tools, tool history, media, or a response schema fail when th
 
 ### Authentication Schemes
 
-`spec.auth.type` selects how the resolved credential is put on the wire. Matching is case-insensitive.
+For HTTP providers, `spec.auth.type` selects how the resolved credential is put on the wire. Matching is case-insensitive.
+
+[Claude Code](./providers/claudecode.md) and [GitHub Copilot](./providers/github-copilot.md) instead use vendor CLI sign-in. Set `metadata.name` and `spec.type` to the same canonical identifier (`claudecode` or `github-copilot`) and use only `spec.auth.type: oauth2`. Do not set `spec.endpoint`, `spec.headers`, `spec.config`, or additional auth fields. The installed vendor CLI handles sign-in in the browser on the daemon host. These providers use subscription quota rather than per-token pricing; TaskSmith reports quota windows only when the vendor exposes them.
 
 | `type` | Request header | Notes |
 | :--- | :--- | :--- |
@@ -128,9 +133,9 @@ Requests requiring tools, tool history, media, or a response schema fail when th
 
 `auth.header` replaces `Authorization` for any scheme except `none`. When it does, the gateway removes the vendor credential header a provider SDK would otherwise add (`X-Api-Key`, `x-goog-api-key`, or its own `Authorization`), so exactly the configured header is sent.
 
-Secret fields (`auth.token`, `auth.password`) use declarative WARP expressions (`${env:<VAR>}` or `${file:<PATH>}`). `${file:...}` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value, new file contents, or signing in or switching accounts on an `oauth2` provider — changes the gateway fingerprint and rebuilds provider connections.
+Secret fields (`auth.token`, `auth.password`) use declarative WARP expressions (`${env:<VAR>}` or `${file:<PATH>}`). `${file:...}` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value, new file contents, or signing in or switching accounts on an `oauth2` provider — changes the gateway fingerprint. For Claude Code and GitHub Copilot, gateways share a backend for the selected registration; signing out clears that local registration independently of best-effort vendor cleanup. See [Gateway Architecture](../architecture/gateway.md#vendor-cli-completion-drivers).
 
-Use `/login <provider>` in the REPL or `tasksmith auth login <provider>` from a shell. Check sign-in with `tasksmith auth status` and clear credentials with `tasksmith auth logout <provider>`. Antigravity supports `--paste` for remote callbacks. Codex completes sign-in in a browser on the daemon host. See [CLI Reference — Provider Sign-In](./cli.md#provider-sign-in-login).
+Use `/login <provider>` in the REPL or `tasksmith auth login <provider>` from a shell. Check sign-in with `tasksmith auth status` and clear credentials with `tasksmith auth logout <provider>`. Antigravity supports `--paste` for remote callbacks. Codex, Claude Code, and GitHub Copilot complete sign-in in a browser on the daemon host. See [CLI Reference — Provider Sign-In](./cli.md#provider-sign-in-login).
 
 ### Thinking Capability Fields
 
@@ -182,6 +187,8 @@ When configuring an agent, tool, or decision manifest, reference models using ei
   Resolves against the workspace or provider defaults configured in `WORKSPACE.md`.
 
 References to a model declared in a provider manifest match case-insensitively, so `Anthropic/Claude-Sonnet-5` resolves to the declared `anthropic/claude-sonnet-5` with its limits, capabilities, and pricing intact. Identifiers for models not listed in any manifest are matched exactly and passed through to the provider.
+
+Nonzero manifest limits override the corresponding fields from provider metadata. The [Claude Code](./providers/claudecode.md#preset-model-limits) and [GitHub Copilot](./providers/github-copilot.md#preset-model-limits) presets declare context and output limits; those values do not grant model access.
 
 A model's `name` is its WARP resource name used for referencing, and `label` is the human-readable display value. Provider manifests commonly repeat the `id` as `name`; because that carries no display information, it does not override the display name from the built-in provider profile. Set `label` (or a `name` distinct from `id`) to change what the CLI and `/model` picker show.
 

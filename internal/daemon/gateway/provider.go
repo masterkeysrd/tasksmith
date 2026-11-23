@@ -46,24 +46,34 @@ func (inst *providerInstance) clients() [3]any {
 	return [3]any{inst.llmProv, inst.decisionProv, inst.embeddingProv}
 }
 
+func (inst *providerInstance) initBrowserCompletion(client interface {
+	llm.Provider
+	llm.ModelLister
+}, err error) (*providerInstance, error) {
+	if errors.Is(err, ErrInvalidConfig) {
+		return nil, err
+	}
+	if err != nil {
+		inst.authErr = err
+		inst.warning = err.Error()
+		return inst, nil
+	}
+	inst.llmProv = client
+	inst.profileDiscovery = &profileDiscovery{lister: client}
+	return inst, nil
+}
+
 func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string) (*providerInstance, error) {
 	inst := &providerInstance{cfg: cfg}
+	overrides := cfg.Endpoint != "" || len(cfg.Headers) != 0 || len(cfg.Config) != 0
 
 	switch cfg.Type {
+	case providers.ClaudeCodeName:
+		return inst.initBrowserCompletion(providers.NewClaudeCode(cfg.Name, cfg.Auth, overrides))
+	case providers.GitHubCopilotName:
+		return inst.initBrowserCompletion(providers.NewCopilot(cfg.Name, cfg.Auth, overrides))
 	case providers.CodexName:
-		overrides := cfg.Endpoint != "" || len(cfg.Headers) != 0 || len(cfg.Config) != 0
-		client, err := providers.NewCodex(cfg.Name, cfg.Auth, overrides)
-		if errors.Is(err, ErrInvalidConfig) {
-			return nil, err
-		}
-		if err != nil {
-			inst.authErr = err
-			inst.warning = err.Error()
-			return inst, nil
-		}
-		inst.llmProv = client
-		inst.profileDiscovery = &profileDiscovery{lister: client}
-		return inst, nil
+		return inst.initBrowserCompletion(providers.NewCodex(cfg.Name, cfg.Auth, overrides))
 	case "ollama":
 		endpoint := cfg.Endpoint
 		if endpoint == "" {

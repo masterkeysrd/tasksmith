@@ -2504,6 +2504,106 @@ func TestUpdatedProviderPresetModels(t *testing.T) {
 	}
 }
 
+func TestSubscriptionProviderPresets(t *testing.T) {
+	setupTestXDG(t)
+	tiers := []string{"fast", "balanced", "smart", "flagship"}
+	type presetModel struct {
+		id      string
+		context int
+		output  int
+	}
+	for _, tc := range []struct {
+		provider string
+		models   [4]presetModel
+	}{
+		{"claudecode", [4]presetModel{
+			{"claude-haiku-5-5", 1000000, 128000},
+			{"claude-sonnet-5-5", 1000000, 128000},
+			{"claude-opus-5-5", 1000000, 128000},
+			{"claude-fable-5-2", 1000000, 128000},
+		}},
+		{"github-copilot", [4]presetModel{
+			{"gpt-6-luna", 1050000, 128000},
+			{"gpt-6.2-sol", 1050000, 128000},
+			{"gpt-6.1-terra", 1050000, 128000},
+			{"gpt-6.2-astra", 1050000, 128000},
+		}},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			p := findWarpPreset(tc.provider)
+			if p == nil {
+				t.Fatal("missing provider preset")
+			}
+			checkSpec := func(spec warp.ModelProviderSpec) {
+				t.Helper()
+				if spec.Type != tc.provider || spec.Endpoint != "" || len(spec.Headers) != 0 || len(spec.Config) != 0 {
+					t.Errorf("expected canonical provider type without endpoint or connection overrides, got %+v", spec)
+				}
+				if spec.Auth == nil || *spec.Auth != (warp.ProviderAuth{Type: warp.AuthTypeOAuth2}) {
+					t.Errorf("expected managed OAuth without overrides, got %+v", spec.Auth)
+				}
+				if spec.DefaultModels == nil || spec.DefaultModels.Completion != tc.models[1].id ||
+					spec.DefaultModels.Decision != "" || spec.DefaultModels.Embedding != "" {
+					t.Errorf("expected only the balanced completion default, got %+v", spec.DefaultModels)
+				}
+				if len(spec.Models) != len(tc.models) {
+					t.Fatalf("got %d models, want %d", len(spec.Models), len(tc.models))
+				}
+				for i, m := range spec.Models {
+					want := tc.models[i]
+					if m.ID != want.id || m.Label == "" || !slices.Equal(m.Aliases, tiers[i:i+1]) {
+						t.Errorf("expected model %s with alias @%s, got %+v", want.id, tiers[i], m)
+					}
+					if limits := (warp.ProviderModelLimits{Context: want.context, Output: want.output}); m.Limits != limits {
+						t.Errorf("%s limits = %+v, want %+v", m.ID, m.Limits, limits)
+					}
+					if m.Capabilities != nil || m.Cost != nil {
+						t.Errorf("%s declares capability or pricing overrides", m.ID)
+					}
+				}
+			}
+			checkSpec(p.Spec)
+
+			dir := t.TempDir()
+			skipped, err := Initialize(t.Context(), dir, InitOptions{Provider: tc.provider, Scope: "workspace"})
+			if err != nil || len(skipped) != 0 {
+				t.Fatalf("Initialize: skipped=%+v, err=%v", skipped, err)
+			}
+			w, err := Open(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec, ok := w.ProviderRecord(tc.provider)
+			if !ok {
+				t.Fatal("installed provider not found")
+			}
+			checkSpec(rec.Def.Spec)
+
+			dir = t.TempDir()
+			owner := tc.provider + "/" + tc.models[1].id
+			skipped, err = Initialize(t.Context(), dir, InitOptions{
+				Provider:     tc.provider,
+				Scope:        "workspace",
+				ModelAliases: map[string]string{"fast": owner},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(skipped) != 1 || skipped[0].Alias != "@fast" || skipped[0].ModelID != tc.provider+"/"+tc.models[0].id ||
+				skipped[0].Owner != owner || !skipped[0].WorkspaceOverride {
+				t.Fatalf("expected only the conflicting @fast alias to be skipped, got %+v", skipped)
+			}
+			w, err = Open(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := w.Catalog().ResolveModels(warp.ModelRoleCompletion, "@fast"); len(got) != 1 || got[0].QualifiedID != owner {
+				t.Errorf("resolved @fast to %v, want [%s]", got, owner)
+			}
+		})
+	}
+}
+
 // TestInheritAliasPassesValidation verifies the TaskSmith-reserved "@inherit"
 // model alias never surfaces as a registry validation warning and does not
 // mask genuine cross-reference problems reported after it.
