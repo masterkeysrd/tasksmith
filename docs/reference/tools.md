@@ -334,7 +334,7 @@ Executes a shell command inside the virtualized workspace sandbox. Supports sync
 | `dir` | string | No | Optional working directory relative to sandbox root. |
 | `run_in_background` | boolean | No | Set to `true` to immediately transition to background task execution and return `task_id`. |
 | `wait_ms` | integer | No | Milliseconds to wait before transitioning to background. Defaults to 60000ms (or 500ms when `run_in_background` is true). |
-| `bypass_sandbox` | boolean | No | Run this single command directly on the host without the OS kernel sandbox wrapper. Requires the workspace's `allowUnsandboxed` posture (default true in trusted workspaces, always false in restricted ones) and explicit user approval in the `bash_unsandboxed(...)` rule namespace. Rejected in read-only sessions. Intended for commands that genuinely fail under kernel restrictions (GPG commit signing, SSH push, Docker daemon socket). |
+| `bypass_sandbox` | boolean | No | Retry a command once on the host after a confirmed OS sandbox failure, such as blocked GPG signing or a test that needs a host socket. The agent explains the blocker in `description`. Requires `allowUnsandboxed` (default true in trusted workspaces, always false in restricted ones) and user approval or a matching `bash_unsandboxed(...)` allow rule. Rejected in read-only sessions. |
 
 When a command matches an `excludedCommands` pattern in `sandbox.json` (strict AST matching: no redirects, substitutions, variable-expanded arguments, subshells, `cd`, `eval`, or background operators), the plan is flagged unsandboxed automatically while ordinary `bash(...)` permission rules and modes still decide approval.
 
