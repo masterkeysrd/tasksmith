@@ -76,18 +76,17 @@ var exitPlanToolWidget = trail.FC("ExitPlanToolWidget", func(props planToolProps
 		headerNodes = append(headerNodes, suffix)
 	}
 
-	var planSubline trail.Node
+	var planSubline *toolSubline
 	if subline != "" {
-		planSubline = trail.Box(trail.BoxProps{
-			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Width(style.Percent(100)).MinWidth(style.Cells(0)),
-		},
-			trail.Span(trail.SpanProps{
-				Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary),
-			}, trail.Text("  ⎿  ")),
-			trail.Span(trail.SpanProps{
-				Style: style.S().Flex(1, 1).MinWidth(style.Cells(0)).WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere).Foreground(scheme.Color.Text.Secondary),
-			}, trail.Text(subline)),
-		)
+		planSubline = &toolSubline{
+			prefixColor: scheme.Color.Text.Secondary,
+			wrap:        true,
+			nodes: []trail.Node{
+				trail.Span(trail.SpanProps{
+					Style: style.S().Flex(1, 1).MinWidth(style.Cells(0)).WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere).Foreground(scheme.Color.Text.Secondary),
+				}, trail.Text(subline)),
+			},
+		}
 	}
 	return wrapToolWidget(tool, scheme, headerNodes, planSubline)
 })

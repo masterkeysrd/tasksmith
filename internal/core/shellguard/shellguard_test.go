@@ -1424,3 +1424,76 @@ func TestGuardReadDirsAndWriteDirs(t *testing.T) {
 		t.Errorf("expected touch and rm in writeTarget to both be api.SafetySafe, got %+v", writeOps)
 	}
 }
+
+func TestStaticHeredocDevNullHomeAndUnknownTargets(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "mock", "home", "tester")
+	ws := "/tmp/workspace"
+	g := New(Config{
+		WorkspaceDir: ws,
+		HomeDir:      home,
+		ReadDirs:     []string{filepath.Join(home, ".local", "state", "logs")},
+	})
+
+	cases := []struct {
+		name       string
+		command    string
+		wantAction api.ActionType
+		wantSafety api.SafetyLevel
+	}{
+		{
+			name:       "stderr redirect to dev null keeps read command safe",
+			command:    `ls -lt "$HOME/.local/state/logs" 2>/dev/null | head -n 10`,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "git commit with quoted static cat heredoc stays write safe",
+			command:    "git commit -m \"$(cat <<'EOF'\nfeat: improve reviewer\n\nBody text.\nEOF\n)\"",
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "unknown command with non-path loop variable stays safe",
+			command:    `for id in 101 102; do gh run view $id --log-failed; done`,
+			wantAction: api.ActionUnknown,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "unknown command with dynamic path-shaped argument stays unknown",
+			command:    `mytool "$OUT_DIR/result.txt"`,
+			wantAction: api.ActionUnknown,
+			wantSafety: api.SafetyUnknown,
+		},
+		{
+			name:       "leading HOME expansion outside ReadDirs resolves as outside read",
+			command:    `ls "$HOME/Documents"`,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetyOutside,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ops, err := g.Analyze(tc.command)
+			if err != nil {
+				t.Fatalf("Analyze(%q) error: %v", tc.command, err)
+			}
+			if len(ops) == 0 {
+				t.Fatalf("Analyze(%q) returned 0 ops", tc.command)
+			}
+			worstAction := ops[0].Action
+			worstSafety := ops[0].Safety
+			for _, op := range ops[1:] {
+				if op.Action.Severity() > worstAction.Severity() {
+					worstAction = op.Action
+				}
+				if op.Safety.Severity() > worstSafety.Severity() {
+					worstSafety = op.Safety
+				}
+			}
+			if worstAction != tc.wantAction || worstSafety != tc.wantSafety {
+				t.Fatalf("Analyze(%q) = (%s, %s), want (%s, %s)", tc.command, worstAction, worstSafety, tc.wantAction, tc.wantSafety)
+			}
+		})
+	}
+}

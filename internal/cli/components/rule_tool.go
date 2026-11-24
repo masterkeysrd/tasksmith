@@ -51,16 +51,22 @@ var LoadRuleToolWidget = trail.FC("LoadRuleToolWidget", func(props LoadRuleToolW
 		headerNodes = append(headerNodes, stateSuffix)
 	}
 
-	var warnSubline trail.Node
+	var warnSubline *toolSubline
 	if !failed && output.Truncated {
-		warnSubline = trail.Span(trail.SpanProps{
-			Style: style.S().
-				Flex(0, 0).
-				WhiteSpace(style.WhiteSpacePre).
-				Overflow(style.OverflowHidden).
-				TextOverflow(style.TextOverflowEllipsis).
-				Foreground(scheme.Color.Text.Warning),
-		}, trail.Text("  ⎿  ⚠ Rule exceeds size limit (500 lines / 32 KB) and was truncated"))
+		warnSubline = &toolSubline{
+			prefixColor: scheme.Color.Text.Warning,
+			nodes: []trail.Node{
+				trail.Span(trail.SpanProps{
+					Style: style.S().
+						Flex(0, 1).
+						MinWidth(style.Cells(0)).
+						WhiteSpace(style.WhiteSpacePre).
+						Overflow(style.OverflowHidden).
+						TextOverflow(style.TextOverflowEllipsis).
+						Foreground(scheme.Color.Text.Warning),
+				}, trail.Text("⚠ Rule exceeds size limit (500 lines / 32 KB) and was truncated")),
+			},
+		}
 	}
 
 	return wrapToolWidget(tool, scheme, headerNodes, warnSubline)

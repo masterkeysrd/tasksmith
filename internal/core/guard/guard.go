@@ -100,6 +100,9 @@ func TasksmithSecretPaths() []string {
 // TaskSmith's own global XDG secret stores.
 func IsSensitivePath(targetPath, homeDir string) bool {
 	cleaned := fsutils.ExpandAndCleanPath(targetPath, "", homeDir)
+	if cleaned == "/dev/null" {
+		return false
+	}
 	for _, sp := range DefaultSensitivePaths {
 		if fsutils.IsInsideDir(cleaned, sp) {
 			return true
@@ -329,6 +332,9 @@ func isInsideWriteDir(resolved, wd, homeDir string) bool {
 //     returns SafetyOutside for ActionRead, or SafetyUnsafe for non-read actions.
 func EvaluatePathWithConfig(targetPath string, action api.ActionType, cfg PathConfig) (string, api.SafetyLevel) {
 	resolved := fsutils.ExpandAndCleanPath(targetPath, cfg.WorkspaceDir, cfg.HomeDir)
+	if resolved == "/dev/null" && (action == api.ActionRead || action == api.ActionWrite) {
+		return resolved, api.SafetySafe
+	}
 	if IsSensitivePath(resolved, cfg.HomeDir) {
 		return resolved, api.SafetyUnsafe
 	}

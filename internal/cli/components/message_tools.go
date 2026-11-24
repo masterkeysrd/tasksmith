@@ -1,11 +1,9 @@
 package components
 
 import (
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"image/color"
-	"math"
 	"path/filepath"
 	"strings"
 
@@ -129,7 +127,42 @@ func toolStateSuffix(status store.ToolStatus, scheme *theme.Scheme) trail.Node {
 	}, trail.Text(suffixText))
 }
 
-func toolErrorSubline(tool store.ToolPart, scheme *theme.Scheme) trail.Node {
+const (
+	toolSublineMidPrefix  = "  ├  "
+	toolSublineLastPrefix = "  ⎿  "
+)
+
+type toolSubline struct {
+	prefixColor color.Color
+	nodes       []trail.Node
+	wrap        bool
+}
+
+func renderToolSubline(sub *toolSubline, prefix string) trail.Node {
+	if sub == nil || len(sub.nodes) == 0 {
+		return nil
+	}
+	rowStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		MinWidth(style.Cells(0))
+	if !sub.wrap {
+		rowStyle = rowStyle.Overflow(style.OverflowHidden)
+	}
+	children := make([]trail.Node, 0, len(sub.nodes)+1)
+	children = append(children, trail.Span(trail.SpanProps{
+		Style: style.S().
+			Flex(0, 0).
+			WhiteSpace(style.WhiteSpacePre).
+			Foreground(sub.prefixColor),
+	}, trail.Text(prefix)))
+	children = append(children, sub.nodes...)
+	return trail.Box(trail.BoxProps{Style: rowStyle}, children...)
+}
+
+func toolErrorSubline(tool store.ToolPart, scheme *theme.Scheme) *toolSubline {
 	if tool.Response == nil || !tool.Response.IsError {
 		return nil
 	}
@@ -149,14 +182,20 @@ func toolErrorSubline(tool store.ToolPart, scheme *theme.Scheme) trail.Node {
 	if firstLine == "" {
 		return nil
 	}
-	return trail.Span(trail.SpanProps{
-		Style: style.S().
-			Flex(0, 0).
-			WhiteSpace(style.WhiteSpacePre).
-			Overflow(style.OverflowHidden).
-			TextOverflow(style.TextOverflowEllipsis).
-			Foreground(scheme.Color.Text.Error),
-	}, trail.Text("  ⎿  ✗ "+firstLine))
+	return &toolSubline{
+		prefixColor: scheme.Color.Text.Secondary,
+		nodes: []trail.Node{
+			trail.Span(trail.SpanProps{
+				Style: style.S().
+					Flex(0, 1).
+					MinWidth(style.Cells(0)).
+					WhiteSpace(style.WhiteSpacePre).
+					Overflow(style.OverflowHidden).
+					TextOverflow(style.TextOverflowEllipsis).
+					Foreground(scheme.Color.Text.Error),
+			}, trail.Text("✗ "+firstLine)),
+		},
+	}
 }
 
 func renderPathNodes(rawPath string, isDir bool, scheme *theme.Scheme) []trail.Node {
@@ -272,10 +311,6 @@ func renderDiffStatNodes(additions int, deletions int, replacements int, scheme 
 	return nodes
 }
 
-// toolReviewNarrownessThreshold is the terminal width below which the tool
-// permission-review subline elides its numeric score and provenance details.
-const toolReviewNarrownessThreshold = 72
-
 func toolPermissionReview(tool store.ToolPart) *api.PermissionReview {
 	if tool.PermissionReview != nil {
 		return tool.PermissionReview
@@ -298,52 +333,7 @@ func toolAutoApprovedBadge(tool store.ToolPart, scheme *theme.Scheme) trail.Node
 	}, trail.Text(" [Auto-approved]"))
 }
 
-// ToolPermissionReviewSublineProps configures [ToolPermissionReviewSubline].
-type ToolPermissionReviewSublineProps struct {
-	Tool store.ToolPart
-}
-
-// ToolPermissionReviewSubline renders the calibrated permission-reviewer
-// provenance line for an auto-approved tool card, eliding the numeric breakdown
-// on narrow terminals.
-var ToolPermissionReviewSubline = trail.FC("ToolPermissionReviewSubline", func(props ToolPermissionReviewSublineProps) trail.Node {
-	scheme := theme.UseTheme()
-	width := trail.UseWindowSize().Width
-
-	rev := toolPermissionReview(props.Tool)
-	if rev == nil {
-		return nil
-	}
-	model := cmp.Or(strings.TrimSpace(rev.Model), "decision_model")
-	text := "Reviewer: " + model
-	if width <= 0 || width >= toolReviewNarrownessThreshold {
-		parts := []string{
-			text,
-			fmt.Sprintf("score: %.0f%% (min %.0f%%)", math.Round(rev.Probability*100), math.Round(rev.Threshold*100)),
-		}
-		if rev.LatencyMs > 0 {
-			parts = append(parts, format.DurationMilis(rev.LatencyMs))
-		}
-		if rev.DecisionScope != "" && rev.RubricDigest != "" {
-			parts = append(parts, rev.DecisionScope+"#"+rev.RubricDigest)
-		} else if rev.DecisionScope != "" {
-			parts = append(parts, rev.DecisionScope)
-		} else if rev.RubricDigest != "" {
-			parts = append(parts, "#"+rev.RubricDigest)
-		}
-		text = strings.Join(parts, " · ")
-	}
-	return trail.Span(trail.SpanProps{
-		Style: style.S().
-			Flex(0, 0).
-			WhiteSpace(style.WhiteSpacePre).
-			Overflow(style.OverflowHidden).
-			TextOverflow(style.TextOverflowEllipsis).
-			Foreground(scheme.Color.Text.Muted),
-	}, trail.Text("  ⎿  "+text))
-})
-
-func wrapToolWidget(tool store.ToolPart, scheme *theme.Scheme, headerNodes []trail.Node, sublines ...trail.Node) trail.Node {
+func wrapToolWidget(tool store.ToolPart, scheme *theme.Scheme, headerNodes []trail.Node, sublines ...*toolSubline) trail.Node {
 	if badge := toolAutoApprovedBadge(tool, scheme); badge != nil {
 		headerNodes = append(headerNodes, badge)
 	}
@@ -357,20 +347,27 @@ func wrapToolWidget(tool store.ToolPart, scheme *theme.Scheme, headerNodes []tra
 			Overflow(style.OverflowHidden),
 	}, headerNodes...)
 
-	rows := []trail.Node{headerRow}
+	var activeSubs []*toolSubline
 	for _, sub := range sublines {
-		if sub != nil {
-			rows = append(rows, sub)
+		if sub != nil && len(sub.nodes) > 0 {
+			activeSubs = append(activeSubs, sub)
 		}
 	}
-	if toolPermissionReview(tool) != nil {
-		rows = append(rows, ToolPermissionReviewSubline(ToolPermissionReviewSublineProps{Tool: tool}))
-	}
 	if errSubline := toolErrorSubline(tool, scheme); errSubline != nil {
-		rows = append(rows, errSubline)
+		activeSubs = append(activeSubs, errSubline)
 	}
-	if len(rows) == 1 {
+	if len(activeSubs) == 0 {
 		return headerRow
+	}
+
+	rows := make([]trail.Node, 0, len(activeSubs)+1)
+	rows = append(rows, headerRow)
+	for i, sub := range activeSubs {
+		prefix := toolSublineMidPrefix
+		if i == len(activeSubs)-1 {
+			prefix = toolSublineLastPrefix
+		}
+		rows = append(rows, renderToolSubline(sub, prefix))
 	}
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
@@ -448,16 +445,22 @@ var ViewToolWidget = trail.FC("ViewToolWidget", func(props ViewToolWidgetProps) 
 		headerNodes = append(headerNodes, stateSuffix)
 	}
 
-	var warnSubline trail.Node
+	var warnSubline *toolSubline
 	if toolErrorSubline(tool, scheme) == nil && output.Omitted && output.Content != "" {
-		warnSubline = trail.Span(trail.SpanProps{
-			Style: style.S().
-				Flex(0, 0).
-				WhiteSpace(style.WhiteSpacePre).
-				Overflow(style.OverflowHidden).
-				TextOverflow(style.TextOverflowEllipsis).
-				Foreground(scheme.Color.Text.Warning),
-		}, trail.Text("  ⎿  "+output.Content))
+		warnSubline = &toolSubline{
+			prefixColor: scheme.Color.Text.Warning,
+			nodes: []trail.Node{
+				trail.Span(trail.SpanProps{
+					Style: style.S().
+						Flex(0, 1).
+						MinWidth(style.Cells(0)).
+						WhiteSpace(style.WhiteSpacePre).
+						Overflow(style.OverflowHidden).
+						TextOverflow(style.TextOverflowEllipsis).
+						Foreground(scheme.Color.Text.Warning),
+				}, trail.Text(output.Content)),
+			},
+		}
 	}
 	return wrapToolWidget(tool, scheme, headerNodes, warnSubline)
 })
@@ -987,7 +990,7 @@ var BashToolWidget = trail.FC("BashToolWidget", func(props BashToolWidgetProps) 
 	}
 
 	cmd := strings.TrimSpace(strings.ReplaceAll(input.Command, "\n", " "))
-	var cmdRow trail.Node
+	var cmdSubline *toolSubline
 	if cmd != "" {
 		line2Nodes := []trail.Node{
 			trail.Span(trail.SpanProps{
@@ -995,7 +998,7 @@ var BashToolWidget = trail.FC("BashToolWidget", func(props BashToolWidgetProps) 
 					Flex(0, 0).
 					WhiteSpace(style.WhiteSpacePre).
 					Foreground(scheme.Color.Text.Secondary),
-			}, trail.Text("  ⎿  "), icon.FontAwesomeTerminal, trail.Text(" ")),
+			}, icon.FontAwesomeTerminal, trail.Text(" ")),
 			trail.Span(trail.SpanProps{
 				Style: style.S().
 					Flex(0, 1).
@@ -1014,18 +1017,13 @@ var BashToolWidget = trail.FC("BashToolWidget", func(props BashToolWidgetProps) 
 					Foreground(scheme.Color.Text.Secondary),
 			}, trail.Text(" (in "+input.Dir+")")))
 		}
-		cmdRow = trail.Box(trail.BoxProps{
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexRow).
-				Width(style.Percent(100)).
-				MaxWidth(style.Percent(100)).
-				MinWidth(style.Cells(0)).
-				Overflow(style.OverflowHidden),
-		}, line2Nodes...)
+		cmdSubline = &toolSubline{
+			prefixColor: scheme.Color.Text.Secondary,
+			nodes:       line2Nodes,
+		}
 	}
 
-	return wrapToolWidget(tool, scheme, headerNodes, cmdRow)
+	return wrapToolWidget(tool, scheme, headerNodes, cmdSubline)
 })
 
 func BashToolRenderer(tool store.ToolPart) trail.Node {

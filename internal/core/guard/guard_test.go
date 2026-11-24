@@ -145,6 +145,7 @@ func TestIsSensitivePathAndEvaluatePath(t *testing.T) {
 		{"/private/etc/hosts", true},
 		{"/proc/self/environ", true},
 		{"/dev/sda", true},
+		{"/dev/null", false},
 		{"~/.ssh/id_rsa", true},
 		{filepath.Join(home, ".ssh", "id_rsa"), true},
 		{filepath.Join(home, ".aws", "credentials"), true},
@@ -182,6 +183,9 @@ func TestIsSensitivePathAndEvaluatePath(t *testing.T) {
 		{filepath.Join(configDir, ".env"), api.ActionRead, filepath.Join(configDir, ".env"), api.SafetyUnsafe},
 		{filepath.Join(dataDir, "credentials", "token.json"), api.ActionRead, filepath.Join(dataDir, "credentials", "token.json"), api.SafetyUnsafe},
 		{"~", api.ActionRead, home, api.SafetyOutside},
+		{"/dev/null", api.ActionRead, "/dev/null", api.SafetySafe},
+		{"/dev/null", api.ActionWrite, "/dev/null", api.SafetySafe},
+		{"/dev/null", api.ActionDelete, "/dev/null", api.SafetyUnsafe},
 	}
 
 	for _, tc := range evalCases {

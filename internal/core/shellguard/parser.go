@@ -457,6 +457,20 @@ func extractSubstFromNode(node syntax.Node) ([]ParsedCommand, bool) {
 			return false
 		}
 		switch sub := n.(type) {
+		case *syntax.DblQuoted:
+			for _, qp := range sub.Parts {
+				if cs, ok := qp.(*syntax.CmdSubst); ok {
+					if _, static := staticCatHeredocLiteral(cs); static {
+						continue
+					}
+				}
+				subCmds, comp := extractSubstFromNode(qp)
+				cmds = append(cmds, subCmds...)
+				if comp {
+					isCompound = true
+				}
+			}
+			return false
 		case *syntax.CmdSubst:
 			subChain, err := parseStmts(sub.Stmts)
 			if err == nil {
@@ -509,20 +523,52 @@ func extractSubstFromRedirect(redir *syntax.Redirect) ([]ParsedCommand, bool) {
 	return cmds, isCompound
 }
 
+// isSimpleHomeParam reports whether pe is a plain $HOME or ${HOME} expansion
+// without modifiers, slicing, indexing, or replacements.
+func isSimpleHomeParam(pe *syntax.ParamExp) bool {
+	return pe != nil && !pe.Excl && !pe.Length && !pe.Width &&
+		pe.Param != nil && pe.Param.Value == "HOME" &&
+		pe.Index == nil && pe.Slice == nil && pe.Repl == nil && pe.Exp == nil
+}
+
+// leadingHomeFollowedByPathSep reports whether parts[1:] is empty or begins
+// with "/" so a leading $HOME/${HOME} maps cleanly onto "~" / "~/...".
+func leadingHomeFollowedByPathSep(parts []syntax.WordPart) bool {
+	if len(parts) == 0 {
+		return true
+	}
+	lit, ok := parts[0].(*syntax.Lit)
+	return ok && (lit.Value == "" || strings.HasPrefix(lit.Value, "/"))
+}
+
 // wordString extracts the literal string from a Word, handling DblQuoted, SglQuoted, etc.
 func wordString(word *syntax.Word) string {
 	if word == nil {
 		return ""
 	}
 	var b strings.Builder
-	for _, part := range word.Parts {
+	for i, part := range word.Parts {
 		switch p := part.(type) {
 		case *syntax.Lit:
 			b.WriteString(p.Value)
+		case *syntax.ParamExp:
+			if i == 0 && b.Len() == 0 && isSimpleHomeParam(p) && leadingHomeFollowedByPathSep(word.Parts[i+1:]) {
+				b.WriteString("~")
+			}
 		case *syntax.DblQuoted:
-			for _, qp := range p.Parts {
-				if lit, ok := qp.(*syntax.Lit); ok {
-					b.WriteString(lit.Value)
+			for j, qp := range p.Parts {
+				switch inner := qp.(type) {
+				case *syntax.Lit:
+					b.WriteString(inner.Value)
+				case *syntax.ParamExp:
+					if i == 0 && j == 0 && b.Len() == 0 && isSimpleHomeParam(inner) && leadingHomeFollowedByPathSep(p.Parts[j+1:]) &&
+						(i+1 == len(word.Parts) || leadingHomeFollowedByPathSep(word.Parts[i+1:])) {
+						b.WriteString("~")
+					}
+				case *syntax.CmdSubst:
+					if lit, ok := staticCatHeredocLiteral(inner); ok {
+						b.WriteString(lit)
+					}
 				}
 			}
 		case *syntax.SglQuoted:
@@ -562,7 +608,27 @@ func hasCmdSubst(word *syntax.Word) bool {
 		if found {
 			return false
 		}
-		switch n.(type) {
+		switch sub := n.(type) {
+		case *syntax.DblQuoted:
+			for _, qp := range sub.Parts {
+				if cs, ok := qp.(*syntax.CmdSubst); ok {
+					if _, static := staticCatHeredocLiteral(cs); static {
+						continue
+					}
+				}
+				syntax.Walk(qp, func(inner syntax.Node) bool {
+					if found {
+						return false
+					}
+					switch inner.(type) {
+					case *syntax.CmdSubst, *syntax.ProcSubst:
+						found = true
+						return false
+					}
+					return true
+				})
+			}
+			return false
 		case *syntax.CmdSubst, *syntax.ProcSubst:
 			found = true
 			return false
@@ -576,8 +642,50 @@ func hasVariableOrCmdSubst(word *syntax.Word) bool {
 	if word == nil {
 		return false
 	}
+	for i, part := range word.Parts {
+		switch p := part.(type) {
+		case *syntax.ParamExp:
+			if i == 0 && isSimpleHomeParam(p) && leadingHomeFollowedByPathSep(word.Parts[i+1:]) {
+				continue
+			}
+			return true
+		case *syntax.DblQuoted:
+			for j, qp := range p.Parts {
+				switch inner := qp.(type) {
+				case *syntax.Lit:
+					continue
+				case *syntax.ParamExp:
+					if i == 0 && j == 0 && isSimpleHomeParam(inner) && leadingHomeFollowedByPathSep(p.Parts[j+1:]) &&
+						(i+1 == len(word.Parts) || leadingHomeFollowedByPathSep(word.Parts[i+1:])) {
+						continue
+					}
+					return true
+				case *syntax.CmdSubst:
+					if _, static := staticCatHeredocLiteral(inner); static {
+						continue
+					}
+					return true
+				default:
+					if wordPartHasDynamic(inner) {
+						return true
+					}
+				}
+			}
+		default:
+			if wordPartHasDynamic(part) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func wordPartHasDynamic(part syntax.Node) bool {
+	if part == nil {
+		return false
+	}
 	found := false
-	syntax.Walk(word, func(n syntax.Node) bool {
+	syntax.Walk(part, func(n syntax.Node) bool {
 		if found {
 			return false
 		}

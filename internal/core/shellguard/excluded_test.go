@@ -147,6 +147,36 @@ func TestMatchExcludedCommand(t *testing.T) {
 			patterns: []string{"git commit *", "docker compose *"},
 			want:     true,
 		},
+		{
+			name:     "quoted static cat heredoc substitution matches",
+			command:  "git commit -m \"$(cat <<'EOF'\nfeat: add reviewer\n\nBody text.\nEOF\n)\"",
+			patterns: []string{"git commit *"},
+			want:     true,
+		},
+		{
+			name:     "unquoted static cat heredoc substitution rejected due to word splitting",
+			command:  "git commit -m $(cat <<'EOF'\nfeat: add reviewer\nEOF\n)",
+			patterns: []string{"git commit *"},
+			want:     false,
+		},
+		{
+			name:     "dynamic heredoc substitution rejected",
+			command:  "git commit -m \"$(cat <<EOF\nfeat: $(whoami)\nEOF\n)\"",
+			patterns: []string{"git commit *"},
+			want:     false,
+		},
+		{
+			name:     "stdin static heredoc matches",
+			command:  "git commit -F - <<'EOF'\nfeat: add reviewer\nEOF\n",
+			patterns: []string{"git commit *"},
+			want:     true,
+		},
+		{
+			name:     "stderr to dev null and fd dup match",
+			command:  "git commit -m release 2>/dev/null && docker compose ps 2>&1",
+			patterns: []string{"git commit *", "docker compose *"},
+			want:     true,
+		},
 
 		// --- Raw-AST bypasses (must stay sandboxed) ---
 		{

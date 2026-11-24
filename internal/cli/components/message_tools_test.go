@@ -35,7 +35,7 @@ func TestToolCardAutoApprovedSucceeded(t *testing.T) {
 				DecisionScope: "system",
 				RubricDigest:  "deadbeef",
 				Probability:   0.96,
-				Threshold:     0.90,
+				Threshold:     0.85,
 				LatencyMs:     42,
 			},
 		},
@@ -47,15 +47,19 @@ func TestToolCardAutoApprovedSucceeded(t *testing.T) {
 		"Ran",
 		"Clean build dir",
 		"[Auto-approved]",
-		"Reviewer: typesafe/jev-latest · score: 96% (min 90%) · 42ms · system#deadbeef",
+		"  ⎿  ",
+		"rm -rf build",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in rendered auto-approved card:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "Reviewer:") || strings.Contains(out, "  ├  ") {
+		t.Fatalf("succeeded bash card must render single ⎿ subline without Reviewer row:\n%s", out)
+	}
 }
 
-func TestToolCardAutoApprovedFailedKeepsExitStatusAndReceipt(t *testing.T) {
+func TestToolCardAutoApprovedFailedKeepsExitStatusBadgeAndTreeConnectors(t *testing.T) {
 	tool := store.ToolPart{
 		ID:     "tc-2",
 		Status: store.ToolFailed,
@@ -63,8 +67,8 @@ func TestToolCardAutoApprovedFailedKeepsExitStatusAndReceipt(t *testing.T) {
 			ID:   "tc-2",
 			Name: "bash",
 			Args: map[string]any{
-				"description": "Run failing script",
-				"command":     "exit 1",
+				"description": "Build binary",
+				"command":     "go build ./...",
 			},
 		},
 		Response: &api.Message{
@@ -73,8 +77,8 @@ func TestToolCardAutoApprovedFailedKeepsExitStatusAndReceipt(t *testing.T) {
 			ToolCallID:        "tc-2",
 			Name:              "bash",
 			IsError:           true,
-			Content:           []api.Block{{Type: api.BlockText, Text: "command failed with exit code 1"}},
-			StructuredContent: []byte(`{"exit_code":1,"duration_ms":12,"status":"failed"}`),
+			Content:           []api.Block{{Type: api.BlockText, Text: "cmd/main.go:12: undefined: run"}},
+			StructuredContent: []byte(`{"exit_code":1,"duration_ms":1200,"status":"failed"}`),
 			PermissionReview: &api.PermissionReview{
 				RequestID:     "req-2",
 				Source:        "decision_model",
@@ -83,7 +87,7 @@ func TestToolCardAutoApprovedFailedKeepsExitStatusAndReceipt(t *testing.T) {
 				DecisionScope: "workspace",
 				RubricDigest:  "abcd1234",
 				Probability:   0.97,
-				Threshold:     0.95,
+				Threshold:     0.85,
 				LatencyMs:     65,
 			},
 		},
@@ -91,14 +95,17 @@ func TestToolCardAutoApprovedFailedKeepsExitStatusAndReceipt(t *testing.T) {
 
 	out := testutils.Render(t, BashToolWidget(BashToolWidgetProps{Tool: tool}), 120, 24)
 	for _, want := range []string{
-		"exit 1",
-		"[Auto-approved]",
-		"Reviewer: openai/gpt-5-mini · score: 97% (min 95%) · 65ms · workspace#abcd1234",
-		"command failed with exit code 1",
+		"● Ran Build binary (exit 1, 1.2s) [Auto-approved]",
+		"  ├  ",
+		"go build ./...",
+		"  ⎿  ✗ cmd/main.go:12: undefined: run",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in failed auto-approved card:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "Reviewer:") {
+		t.Fatalf("failed card must not render separate Reviewer subline:\n%s", out)
 	}
 }
 
@@ -120,7 +127,7 @@ func TestToolCardHumanApprovedAndLegacyOmitBadge(t *testing.T) {
 	}
 	outHuman := testutils.Render(t, WriteToolWidget(WriteToolWidgetProps{Tool: humanApproved}), 100, 24)
 	if strings.Contains(outHuman, "[Auto-approved]") || strings.Contains(outHuman, "Reviewer:") {
-		t.Fatalf("human-approved card must not show auto-approved badge or reviewer subline:\n%s", outHuman)
+		t.Fatalf("human-approved card must not show auto-approved badge:\n%s", outHuman)
 	}
 
 	legacyInFlight := store.ToolPart{
@@ -138,7 +145,7 @@ func TestToolCardHumanApprovedAndLegacyOmitBadge(t *testing.T) {
 	}
 }
 
-func TestToolCardAutoApprovedNarrowWidthElidesNumericBreakdown(t *testing.T) {
+func TestToolCardAutoApprovedFileToolSingleLine(t *testing.T) {
 	tool := store.ToolPart{
 		ID:     "tc-5",
 		Status: store.ToolSucceeded,
@@ -160,23 +167,18 @@ func TestToolCardAutoApprovedNarrowWidthElidesNumericBreakdown(t *testing.T) {
 				DecisionScope: "system",
 				RubricDigest:  "cafebabe",
 				Probability:   0.96,
-				Threshold:     0.90,
+				Threshold:     0.85,
 				LatencyMs:     30,
 			},
 		},
 	}
 
-	wide := testutils.Render(t, RemoveToolWidget(RemoveToolWidgetProps{Tool: tool}), 110, 24)
-	if !strings.Contains(wide, "score: 96% (min 90%)") {
-		t.Fatalf("wide card should include numeric breakdown:\n%s", wide)
+	out := strings.TrimRight(testutils.Render(t, RemoveToolWidget(RemoveToolWidgetProps{Tool: tool}), 110, 24), "\n")
+	if strings.Contains(out, "\n") || strings.Contains(out, "⎿") || strings.Contains(out, "├") {
+		t.Fatalf("auto-approved file tool should stay on a single line:\n%s", out)
 	}
-
-	narrow := testutils.Render(t, RemoveToolWidget(RemoveToolWidgetProps{Tool: tool}), 48, 24)
-	if !strings.Contains(narrow, "Reviewer: typesafe/jev-latest") {
-		t.Fatalf("narrow card should preserve reviewer model:\n%s", narrow)
-	}
-	if strings.Contains(narrow, "score:") || strings.Contains(narrow, "min 90%") {
-		t.Fatalf("narrow card should elide numeric score breakdown:\n%s", narrow)
+	if !strings.Contains(out, "[Auto-approved]") {
+		t.Fatalf("missing [Auto-approved] badge:\n%s", out)
 	}
 }
 
@@ -199,7 +201,7 @@ func TestTimelineNoticeHostAccessAutoApproved(t *testing.T) {
 				Model:         "typesafe/jev-latest",
 				DecisionScope: "system",
 				Probability:   0.98,
-				Threshold:     0.90,
+				Threshold:     0.85,
 			},
 		},
 	}
@@ -224,7 +226,7 @@ func TestTimelineNoticeHostAccessAutoApproved(t *testing.T) {
 	}
 }
 
-func TestToolCardReadsToolPartPermissionReviewAndFormatsDuration(t *testing.T) {
+func TestToolCardReadsToolPartPermissionReview(t *testing.T) {
 	tool := store.ToolPart{
 		ID:     "tc-plan-1",
 		Status: store.ToolSucceeded,
@@ -241,7 +243,7 @@ func TestToolCardReadsToolPartPermissionReviewAndFormatsDuration(t *testing.T) {
 			DecisionScope: "system",
 			RubricDigest:  "faceb00c",
 			Probability:   0.95,
-			Threshold:     0.90,
+			Threshold:     0.85,
 			LatencyMs:     1500,
 		},
 		Response: &api.Message{
@@ -255,13 +257,14 @@ func TestToolCardReadsToolPartPermissionReviewAndFormatsDuration(t *testing.T) {
 
 	out := testutils.Render(t, PlanToolRenderer(tool), 120, 24)
 	for _, want := range []string{
-		"Approved plan plans/feat.md",
-		"[Auto-approved]",
-		"Switched to accept_edits mode",
-		"Reviewer: typesafe/jev-latest · score: 95% (min 90%) · 1.5s · system#faceb00c",
+		"Approved plan plans/feat.md [Auto-approved]",
+		"  ⎿  Switched to accept_edits mode",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in PlanToolRenderer output:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "Reviewer:") {
+		t.Fatalf("PlanToolRenderer must not render separate Reviewer subline:\n%s", out)
 	}
 }

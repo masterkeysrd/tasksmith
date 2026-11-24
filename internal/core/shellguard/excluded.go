@@ -54,8 +54,10 @@ func stmtMatchesExcluded(stmt *syntax.Stmt, patterns []string) bool {
 	if stmt == nil || stmt.Negated || stmt.Background || stmt.Coprocess || stmt.Disown {
 		return false
 	}
-	if len(stmt.Redirs) > 0 {
-		return false
+	for _, r := range stmt.Redirs {
+		if !safeExcludedRedirect(r) {
+			return false
+		}
 	}
 	switch cmd := stmt.Cmd.(type) {
 	case *syntax.BinaryCmd:
@@ -128,17 +130,157 @@ func staticWordLiteral(word *syntax.Word) (value string, unquotedText string, ok
 			sb.WriteString(p.Value)
 		case *syntax.DblQuoted:
 			for _, inner := range p.Parts {
-				lit, isLit := inner.(*syntax.Lit)
-				if !isLit {
+				switch ip := inner.(type) {
+				case *syntax.Lit:
+					sb.WriteString(ip.Value)
+				case *syntax.CmdSubst:
+					lit, ok := staticCatHeredocLiteral(ip)
+					if !ok {
+						return "", "", false
+					}
+					sb.WriteString(lit)
+				default:
 					return "", "", false
 				}
-				sb.WriteString(lit.Value)
 			}
 		default:
 			return "", "", false
 		}
 	}
 	return sb.String(), unq.String(), true
+}
+
+// safeExcludedRedirect reports whether a redirection cannot touch host files or
+// alter argv: static stdin heredocs/herestrings, standard descriptor
+// duplications between fds 0–2, and redirects to /dev/null.
+func safeExcludedRedirect(r *syntax.Redirect) bool {
+	if r == nil {
+		return false
+	}
+	fd := ""
+	if r.N != nil {
+		fd = r.N.Value
+	}
+	isStdFD := fd == "" || fd == "0" || fd == "1" || fd == "2"
+	switch r.Op {
+	case syntax.Hdoc, syntax.DashHdoc:
+		if fd != "" && fd != "0" {
+			return false
+		}
+		_, ok := staticHeredocBody(r)
+		return ok
+	case syntax.WordHdoc:
+		if fd != "" && fd != "0" {
+			return false
+		}
+		_, unq, ok := staticWordLiteral(r.Word)
+		return ok && !strings.ContainsAny(unq, "*?[")
+	case syntax.DplOut, syntax.DplIn:
+		if !isStdFD {
+			return false
+		}
+		lit, unq, ok := staticWordLiteral(r.Word)
+		return ok && !strings.ContainsAny(unq, "*?[") && (lit == "0" || lit == "1" || lit == "2" || lit == "-")
+	case syntax.RdrOut, syntax.AppOut, syntax.RdrClob, syntax.RdrAll, syntax.AppAll, syntax.RdrIn:
+		if !isStdFD {
+			return false
+		}
+		lit, unq, ok := staticWordLiteral(r.Word)
+		return ok && lit == "/dev/null" && !strings.ContainsAny(unq, "*?[")
+	default:
+		return false
+	}
+}
+
+// staticCatHeredocLiteral folds the pure multi-line string idiom
+// $(cat <<'EOF' ... EOF) to its literal text when cat receives no arguments,
+// environment assignments, or extra redirects and the heredoc body is static.
+func staticCatHeredocLiteral(cs *syntax.CmdSubst) (string, bool) {
+	if cs == nil || cs.TempFile || cs.ReplyVar || len(cs.Stmts) != 1 {
+		return "", false
+	}
+	stmt := cs.Stmts[0]
+	if stmt == nil || stmt.Negated || stmt.Background || stmt.Coprocess || stmt.Disown || len(stmt.Redirs) != 1 {
+		return "", false
+	}
+	r := stmt.Redirs[0]
+	if r == nil || (r.Op != syntax.Hdoc && r.Op != syntax.DashHdoc) || (r.N != nil && r.N.Value != "0") {
+		return "", false
+	}
+	body, ok := staticHeredocBody(r)
+	if !ok {
+		return "", false
+	}
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Assigns) > 0 || len(call.Args) != 1 {
+		return "", false
+	}
+	lit, unq, ok := staticWordLiteral(call.Args[0])
+	if !ok || lit != "cat" || strings.ContainsAny(unq, "*?[") {
+		return "", false
+	}
+	return strings.TrimRight(body, "\n"), true
+}
+
+// staticHeredocBody returns the exact literal body of a heredoc when no
+// runtime parameter, command, arithmetic, or backslash expansion can occur.
+func staticHeredocBody(r *syntax.Redirect) (string, bool) {
+	if r == nil || r.Word == nil || r.Hdoc == nil || (r.Op != syntax.Hdoc && r.Op != syntax.DashHdoc) {
+		return "", false
+	}
+	quotedDelim, ok := isStaticHeredocDelim(r.Word)
+	if !ok {
+		return "", false
+	}
+	var sb strings.Builder
+	for _, part := range r.Hdoc.Parts {
+		lit, isLit := part.(*syntax.Lit)
+		if !isLit {
+			return "", false
+		}
+		if !quotedDelim && strings.Contains(lit.Value, "\\") {
+			return "", false
+		}
+		sb.WriteString(lit.Value)
+	}
+	body := sb.String()
+	if r.Op == syntax.DashHdoc {
+		lines := strings.Split(body, "\n")
+		for i, line := range lines {
+			lines[i] = strings.TrimLeft(line, "\t")
+		}
+		body = strings.Join(lines, "\n")
+	}
+	return body, true
+}
+
+func isStaticHeredocDelim(word *syntax.Word) (quoted bool, ok bool) {
+	if word == nil || len(word.Parts) == 0 {
+		return false, false
+	}
+	for _, part := range word.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			if strings.Contains(p.Value, "\\") {
+				quoted = true
+			}
+		case *syntax.SglQuoted:
+			if p.Dollar {
+				return false, false
+			}
+			quoted = true
+		case *syntax.DblQuoted:
+			for _, inner := range p.Parts {
+				if _, isLit := inner.(*syntax.Lit); !isLit {
+					return false, false
+				}
+			}
+			quoted = true
+		default:
+			return false, false
+		}
+	}
+	return quoted, true
 }
 
 // argvMatchesExcludedPattern matches the static argv token-by-token. A

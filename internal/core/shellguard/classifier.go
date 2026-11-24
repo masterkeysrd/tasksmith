@@ -1,6 +1,7 @@
 package shellguard
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -452,6 +453,9 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 	currRedir := &cmd
 	for currRedir != nil {
 		for _, redir := range currRedir.Redirects {
+			if !redir.IsDynamic && filepath.Clean(strings.TrimSpace(redir.Target)) == "/dev/null" {
+				continue
+			}
 			switch redir.Op {
 			case ">", ">>", ">|", "&>", "&>>":
 				writeRedirs = append(writeRedirs, redir)
@@ -495,7 +499,7 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 	}
 
 	// Declarative command-aware target extraction
-	for _, t := range extractTargets(rule, cmd) {
+	for _, t := range extractTargets(rule, hasRule, cmd) {
 		checks = append(checks, PathCheck{
 			path:      t.Path,
 			isDynamic: t.IsDynamic,
@@ -557,7 +561,8 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 						safety = api.SafetySafe
 					}
 				}
-			} else if state.isCWDUnknown || check.isDynamic || check.path == "" {
+			} else if state.isCWDUnknown || check.isDynamic || check.path == "" ||
+				((check.path == "~" || strings.HasPrefix(check.path, "~/")) && g.homeDir == "") {
 				safety = api.SafetyUnknown
 			} else {
 				resolved = g.resolveTarget(check.path, state.virtualCWD)
@@ -631,8 +636,11 @@ func resolveExecutableAndArgs(cmd ParsedCommand) (string, []string) {
 
 // extractTargets declaratively extracts target file or directory arguments from
 // a command using its CommandRule configuration (TargetMode, ValueFlags, PathFlags,
-// and SubcommandModes).
-func extractTargets(rule CommandRule, cmd ParsedCommand) []TargetArg {
+// and SubcommandModes). When hasRule is false (an unknown CLI whose positional
+// grammar is unspecified), only arguments that syntactically resemble paths are
+// treated as filesystem targets so subcommands, IDs, and query strings do not
+// trigger false path-escape or dynamic-path classifications.
+func extractTargets(rule CommandRule, hasRule bool, cmd ParsedCommand) []TargetArg {
 	if isInlineInterpreterScript(cmd) {
 		return nil
 	}
@@ -741,8 +749,26 @@ func extractTargets(rule CommandRule, cmd ParsedCommand) []TargetArg {
 		}
 		return targets
 	default: // TargetsAll
-		return append(targets, positional...)
+		out := append(targets, positional...)
+		if !hasRule {
+			filtered := out[:0]
+			for _, t := range out {
+				if looksLikePathTarget(t) {
+					filtered = append(filtered, t)
+				}
+			}
+			return filtered
+		}
+		return out
 	}
+}
+
+func looksLikePathTarget(t TargetArg) bool {
+	p := strings.TrimSpace(t.Path)
+	if p == "" {
+		return false
+	}
+	return strings.Contains(p, "/") || strings.HasPrefix(p, ".") || strings.HasPrefix(p, "~")
 }
 
 func matchPathFlag(pathFlags []string, args []string, idx int, isDyn func(int) bool) (TargetArg, int, bool) {

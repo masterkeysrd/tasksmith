@@ -1126,19 +1126,27 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 		t.Fatalf("Send decision: %v", err)
 	}
 
-	// Verify file on disk was updated
-	var diskBytes []byte
+	// Verify file on disk was updated and the turn has settled so journal
+	// snapshots are committed before querying Changes.
+	var (
+		diskBytes []byte
+		settled   api.SessionStatus
+	)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		b, err := os.ReadFile(targetFile)
-		if err == nil && string(b) == "updated content\n" {
+		b, readErr := os.ReadFile(targetFile)
+		st, sessErr := cli.GetSession(ctx, sess.ID)
+		if sessErr == nil {
+			settled = st.Status
+		}
+		if readErr == nil && string(b) == "updated content\n" && sessErr == nil && st.Status == api.StatusIdle {
 			diskBytes = b
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if string(diskBytes) != "updated content\n" {
-		t.Fatalf("disk content = %q, want \"updated content\\n\"", string(diskBytes))
+	if string(diskBytes) != "updated content\n" || settled != api.StatusIdle {
+		t.Fatalf("after approval: disk content = %q, status = %q; want \"updated content\\n\" and %q", string(diskBytes), settled, api.StatusIdle)
 	}
 
 	// 4. Inspect Changes and DiffChange
@@ -2443,15 +2451,27 @@ func TestGetWorkspaceSurfacesWarnings(t *testing.T) {
 
 func TestWorkspaceCommandsAndSkillsEndpointsAndExecution(t *testing.T) {
 	ctx := context.Background()
-	var lastPrompt string
+	var (
+		promptMu   sync.Mutex
+		lastPrompt string
+	)
+	getPrompt := func() string {
+		promptMu.Lock()
+		defer promptMu.Unlock()
+		return lastPrompt
+	}
 	prov := &fakeProvider{
 		chunkHandler: func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
 			if len(req.Messages) > 0 {
+				var chunk strings.Builder
 				for _, b := range req.Messages[len(req.Messages)-1].GetContent() {
 					if tb, ok := b.(*message.TextBlock); ok && tb != nil {
-						lastPrompt += tb.Text
+						chunk.WriteString(tb.Text)
 					}
 				}
+				promptMu.Lock()
+				lastPrompt += chunk.String()
+				promptMu.Unlock()
 			}
 			return func(yield func(message.AssistantChunk, error) bool) {
 				yield(message.AssistantChunk{
@@ -2578,15 +2598,22 @@ Deploying to environment {{.target}}.
 		t.Fatalf("CreateSession: %v", err)
 	}
 
+	waitForPrompt := func(substr string) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if strings.Contains(getPrompt(), substr) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Errorf("expected rendered prompt containing %q, got: %q", substr, getPrompt())
+	}
+
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "/review 456"}); err != nil {
 		t.Fatalf("Send /review 456: %v", err)
 	}
-	// Wait a moment for turn to process
-	time.Sleep(50 * time.Millisecond)
-
-	if !strings.Contains(lastPrompt, "Reviewing PR #456 on branch main.") {
-		t.Errorf("expected rendered command prompt, got: %q", lastPrompt)
-	}
+	waitForPrompt("Reviewing PR #456 on branch main.")
 
 	// 6. Execution: Missing required argument returns 400 Bad Request
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "/review"}); !errors.As(err, &apiErr) || apiErr.StatusCode != 400 {
@@ -2597,11 +2624,7 @@ Deploying to environment {{.target}}.
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "/deploy staging"}); err != nil {
 		t.Fatalf("Send /deploy staging: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
-
-	if !strings.Contains(lastPrompt, "Deploying to environment staging.") {
-		t.Errorf("expected rendered skill prompt, got: %q", lastPrompt)
-	}
+	waitForPrompt("Deploying to environment staging.")
 }
 
 func TestWorkspaceToolsEndpoint(t *testing.T) {

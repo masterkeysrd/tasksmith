@@ -79,11 +79,8 @@ var questionToolWidget = trail.FC("QuestionToolWidget", func(props questionToolP
 	if answered && output.Canceled {
 		children = append(children, row("    > ", "Canceled", answerStyle))
 	}
-	if toolPermissionReview(tool) != nil {
-		children = append(children, ToolPermissionReviewSubline(ToolPermissionReviewSublineProps{Tool: tool}))
-	}
 	if err := toolErrorSubline(tool, scheme); err != nil {
-		children = append(children, err)
+		children = append(children, renderToolSubline(err, toolSublineLastPrefix))
 	}
 	return trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexColumn).Width(style.Percent(100)).MinWidth(style.Cells(0))}, children...)
 })
