@@ -11,7 +11,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
-	github.com/masterkeysrd/kite v0.0.7-0.20261118073631-ce28699d019e
+	github.com/masterkeysrd/kite v0.0.7-0.20261124043038-ee8fde81b6bf
 	github.com/masterkeysrd/loom v0.0.11-0.20261123163531-c16a26373267
 	github.com/masterkeysrd/warp v0.0.7-0.20261120020207-9b2980bf4ae4
 	github.com/mattn/go-isatty v0.0.24

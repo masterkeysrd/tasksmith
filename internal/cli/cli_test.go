@@ -35,6 +35,22 @@ func waitFor(t *testing.T, condition func() bool, timeout time.Duration, msg str
 	t.Fatalf("timed out waiting for %s", msg)
 }
 
+func startRun(t *testing.T, opts Options) (<-chan error, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	errCh := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		errCh <- Run(ctx, opts)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return errCh, cancel
+}
+
 func TestBuiltinSkillAutocomplete(t *testing.T) {
 	store.ResetApp()
 	store.ResetSession()
@@ -125,16 +141,11 @@ func TestRunCtrlCDoublePressExits(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx := t.Context()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, Options{
-			Client:    c,
-			Workspace: "/tmp/ws",
-			Backend:   b,
-		})
-	}()
+	errCh, _ := startRun(t, Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Backend:   b,
+	})
 
 	waitFor(t, func() bool {
 		return b.LastFrame().Surface != nil
@@ -184,16 +195,11 @@ func TestRunCtrlCDisarmedByOtherKey(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx := t.Context()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, Options{
-			Client:    c,
-			Workspace: "/tmp/ws",
-			Backend:   b,
-		})
-	}()
+	errCh, _ := startRun(t, Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Backend:   b,
+	})
 
 	waitFor(t, func() bool {
 		return b.LastFrame().Surface != nil
@@ -259,15 +265,11 @@ func TestRunContextCanceled(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, Options{
-			Client:    c,
-			Workspace: "/tmp/ws",
-			Backend:   b,
-		})
-	}()
+	errCh, cancel := startRun(t, Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Backend:   b,
+	})
 
 	waitFor(t, func() bool {
 		return b.LastFrame().Surface != nil
@@ -295,17 +297,13 @@ func TestRunWithCWD(t *testing.T) {
 		t.Fatalf("expected client CWD to be empty, got: %q", c.CWD())
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	opts := Options{
 		Client:    c,
 		Workspace: "/tmp/custom-ws",
 		Backend:   b,
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, opts)
-	}()
+	errCh, cancel := startRun(t, opts)
 
 	waitFor(t, func() bool {
 		return b.LastFrame().Surface != nil
@@ -322,9 +320,6 @@ func TestRunStartupHeader(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
 	opts := Options{
 		Client:    c,
 		Workspace: "/tmp/ws",
@@ -333,10 +328,7 @@ func TestRunStartupHeader(t *testing.T) {
 		Backend:   b,
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, opts)
-	}()
+	startRun(t, opts)
 
 	// The startup banner is initially rendered live on the surface (not in static scrollback)
 	waitFor(t, func() bool {
@@ -361,9 +353,6 @@ func TestRunStartupNoticesRenderAsWarnings(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
 	opts := Options{
 		Client:    c,
 		Workspace: "/tmp/ws",
@@ -374,10 +363,7 @@ func TestRunStartupNoticesRenderAsWarnings(t *testing.T) {
 		},
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, opts)
-	}()
+	startRun(t, opts)
 
 	waitFor(t, func() bool {
 		frame := testutils.SurfaceText(b)
@@ -393,9 +379,6 @@ func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
 	opts := Options{
 		Client:    c,
 		Workspace: "/tmp/ws",
@@ -404,10 +387,7 @@ func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 		Backend:   b,
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, opts)
-	}()
+	startRun(t, opts)
 
 	waitFor(t, func() bool {
 		frame := testutils.SurfaceText(b)
@@ -443,9 +423,6 @@ func TestRunSubmitPromptAndActiveStream(t *testing.T) {
 	b := mock.New(80, 24)
 	c, st := startTestUnixDaemon(t)
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
 	opts := Options{
 		Client:    c,
 		Workspace: "/workspace/project",
@@ -454,10 +431,7 @@ func TestRunSubmitPromptAndActiveStream(t *testing.T) {
 		Backend:   b,
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, opts)
-	}()
+	startRun(t, opts)
 
 	waitFor(t, func() bool {
 		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
@@ -533,15 +507,11 @@ func TestRunSlashCommandModeAndExit(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx := t.Context()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, Options{
-			Client:    c,
-			Workspace: "/tmp/ws",
-			Backend:   b,
-		})
-	}()
+	errCh, _ := startRun(t, Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Backend:   b,
+	})
 
 	waitFor(t, func() bool {
 		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
@@ -580,8 +550,8 @@ func TestRunSlashCommandModeAndExit(t *testing.T) {
 func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 	store.ClearTranscript()
 	store.ClearSlot()
-	defer store.ClearTranscript()
-	defer store.ClearSlot()
+	t.Cleanup(store.ClearTranscript)
+	t.Cleanup(store.ClearSlot)
 
 	b := mock.New(80, 24)
 	c, err := client.New("/tmp/mock.sock")
@@ -589,17 +559,11 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, Options{
-			Client:    c,
-			Workspace: "/tmp/ws",
-			Backend:   b,
-		})
-	}()
+	startRun(t, Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Backend:   b,
+	})
 
 	waitFor(t, func() bool {
 		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
@@ -678,8 +642,8 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
 	store.ClearTranscript()
 	store.ClearSlot()
-	defer store.ClearTranscript()
-	defer store.ClearSlot()
+	t.Cleanup(store.ClearTranscript)
+	t.Cleanup(store.ClearSlot)
 
 	b := mock.New(80, 24)
 	c, st := startTestUnixDaemon(t)
@@ -712,9 +676,6 @@ func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
 	}
 	st.mu.Unlock()
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
 	opts := Options{
 		Client:    c,
 		Workspace: "/workspace/project",
@@ -723,10 +684,7 @@ func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
 		Backend:   b,
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, opts)
-	}()
+	startRun(t, opts)
 
 	waitFor(t, func() bool {
 		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
@@ -755,14 +713,11 @@ func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
 func TestRunClearReprintHeader(t *testing.T) {
 	store.ClearTranscript()
 	store.ClearSlot()
-	defer store.ClearTranscript()
-	defer store.ClearSlot()
+	t.Cleanup(store.ClearTranscript)
+	t.Cleanup(store.ClearSlot)
 
 	b := testutils.NewClearingBackend(mock.New(80, 24))
 	c, _ := startTestUnixDaemon(t)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 
 	opts := Options{
 		Client:    c,
@@ -771,10 +726,7 @@ func TestRunClearReprintHeader(t *testing.T) {
 		Backend:   b,
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Run(ctx, opts)
-	}()
+	startRun(t, opts)
 
 	waitFor(t, func() bool {
 		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b.Backend), ">")

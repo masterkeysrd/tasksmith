@@ -184,11 +184,21 @@ func StartApp(t *testing.T, node trail.Node, width, height int) *App {
 	t.Helper()
 	b := mock.New(width, height)
 	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		_ = trail.Run(ctx, node, trail.WithBackend(b))
 	}()
-	return &App{t: t, Backend: b, stop: cancel}
+	app := &App{
+		t:       t,
+		Backend: b,
+		stop: func() {
+			cancel()
+			<-done
+		},
+	}
+	t.Cleanup(app.Stop)
+	return app
 }
 
 // Stop tears down a [StartApp] runtime. Call it when the helper returns so the

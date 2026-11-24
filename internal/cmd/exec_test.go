@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,6 +75,22 @@ func decodeFrames[T any](t *testing.T, raw string) []T {
 	return frames
 }
 
+func isTitleGeneratorRequest(req *llm.Request) bool {
+	return len(req.Messages) > 0 &&
+		strings.Contains(req.Messages[0].GetContent().Text(), "You will generate a short title based on the first message")
+}
+
+func titleResponse(req *llm.Request) llm.StreamResponse {
+	return func(yield func(message.AssistantChunk, error) bool) {
+		yield(message.AssistantChunk{
+			BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+			Model:     req.Model,
+			Content:   []message.Block{&message.TextBlock{Text: "Test session"}},
+			Done:      true,
+		}, nil)
+	}
+}
+
 func TestExecCommandTextOutput(t *testing.T) {
 	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
 
@@ -87,13 +104,21 @@ func TestExecCommandTextOutput(t *testing.T) {
 }
 
 func TestExecCommandPipedStdinBecomesContext(t *testing.T) {
-	var seen []string
+	var (
+		mu   sync.Mutex
+		seen []string
+	)
 	prov := &fakeProvider{chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+		if isTitleGeneratorRequest(req) {
+			return titleResponse(req), nil
+		}
 		var texts []string
 		for _, m := range req.Messages {
 			texts = append(texts, m.GetContent().Text())
 		}
+		mu.Lock()
 		seen = texts
+		mu.Unlock()
 		return func(yield func(message.AssistantChunk, error) bool) {
 			yield(message.AssistantChunk{
 				BaseChunk: message.BaseChunk{ID: uuid.NewString()},
@@ -112,10 +137,9 @@ func TestExecCommandPipedStdinBecomesContext(t *testing.T) {
 	if strings.TrimSpace(out) != "ok" {
 		t.Fatalf("stdout = %q", out)
 	}
-	var joined string
-	for _, m := range seen {
-		joined += m + "\n"
-	}
+	mu.Lock()
+	joined := strings.Join(seen, "\n")
+	mu.Unlock()
 	if !strings.Contains(joined, "diff --git a/x b/x") || !strings.Contains(joined, "review this") {
 		t.Fatalf("prompt or piped context missing from model request:\n%s", joined)
 	}
@@ -189,13 +213,21 @@ func TestExecCommandJSONLStream(t *testing.T) {
 }
 
 func TestExecCommandBidirectionalSendAndClose(t *testing.T) {
-	var lastRequest string
+	var (
+		mu          sync.Mutex
+		lastRequest string
+	)
 	prov := &fakeProvider{chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+		if isTitleGeneratorRequest(req) {
+			return titleResponse(req), nil
+		}
 		var texts []string
 		for _, m := range req.Messages {
 			texts = append(texts, m.GetContent().Text())
 		}
+		mu.Lock()
 		lastRequest = strings.Join(texts, "\n")
+		mu.Unlock()
 		return func(yield func(message.AssistantChunk, error) bool) {
 			yield(message.AssistantChunk{
 				BaseChunk: message.BaseChunk{ID: uuid.NewString()},
@@ -251,8 +283,11 @@ func TestExecCommandBidirectionalSendAndClose(t *testing.T) {
 	}
 	// The daemon batches queued sends; whichever turn shape resulted, the
 	// final model request must contain both prompts.
-	if !strings.Contains(lastRequest, "first") || !strings.Contains(lastRequest, "second") {
-		t.Fatalf("both sends must reach the model, last request:\n%s", lastRequest)
+	mu.Lock()
+	gotRequest := lastRequest
+	mu.Unlock()
+	if !strings.Contains(gotRequest, "first") || !strings.Contains(gotRequest, "second") {
+		t.Fatalf("both sends must reach the model, last request:\n%s", gotRequest)
 	}
 }
 
@@ -348,6 +383,9 @@ func TestExecCommandUnknownSlashExitsFailed(t *testing.T) {
 
 func TestExecCommandNeedsInputGuard(t *testing.T) {
 	prov := &fakeProvider{chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+		if isTitleGeneratorRequest(req) {
+			return titleResponse(req), nil
+		}
 		return func(yield func(message.AssistantChunk, error) bool) {
 			yield(message.AssistantChunk{
 				BaseChunk: message.BaseChunk{ID: uuid.NewString()},
@@ -375,16 +413,21 @@ func TestExecCommandNeedsInputGuard(t *testing.T) {
 
 func TestExecGrillMeNeedsInput(t *testing.T) {
 	const topic = "Should task retries use limit=3?"
+	var (
+		mu             sync.Mutex
+		sawTopicPrompt bool
+	)
 	prov := &fakeProvider{chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
-		found := false
+		if isTitleGeneratorRequest(req) {
+			return titleResponse(req), nil
+		}
 		for _, m := range req.Messages {
 			if text := m.GetContent().Text(); strings.Contains(text, topic) && strings.Contains(text, "Interview in dependency order") {
-				found = true
+				mu.Lock()
+				sawTopicPrompt = true
+				mu.Unlock()
 				break
 			}
-		}
-		if !found {
-			t.Error("exec did not forward the interview topic to the built-in command")
 		}
 		return func(yield func(message.AssistantChunk, error) bool) {
 			yield(message.AssistantChunk{
@@ -402,6 +445,12 @@ func TestExecGrillMeNeedsInput(t *testing.T) {
 	out, errOut, code := runExecCLI(t, sockPath, wsDir, "", "/grill-me "+topic)
 	if code != exec.ExitNeedsInput || !strings.Contains(errOut, "1 question(s)") || !strings.Contains(errOut, "--input-format jsonl") {
 		t.Fatalf("exit code = %d (stderr=%q stdout=%q), want needs_input with question and JSONL guidance", code, errOut, out)
+	}
+	mu.Lock()
+	found := sawTopicPrompt
+	mu.Unlock()
+	if !found {
+		t.Error("exec did not forward the interview topic to the built-in command")
 	}
 }
 
@@ -548,13 +597,21 @@ func TestExecExitCodeErrorUnwrap(t *testing.T) {
 }
 
 func TestExecCommandResolvesAtFileMentionsFromPromptOnly(t *testing.T) {
-	var seenRequest string
+	var (
+		mu       sync.Mutex
+		requests []string
+	)
 	prov := &fakeProvider{chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+		if isTitleGeneratorRequest(req) {
+			return titleResponse(req), nil
+		}
 		var parts []string
 		for _, m := range req.Messages {
 			parts = append(parts, m.GetContent().Text())
 		}
-		seenRequest = strings.Join(parts, "\n")
+		mu.Lock()
+		requests = append(requests, strings.Join(parts, "\n"))
+		mu.Unlock()
 		return func(yield func(message.AssistantChunk, error) bool) {
 			yield(message.AssistantChunk{
 				BaseChunk: message.BaseChunk{ID: uuid.NewString()},
@@ -579,6 +636,18 @@ func TestExecCommandResolvesAtFileMentionsFromPromptOnly(t *testing.T) {
 	}
 	if strings.TrimSpace(out) != "reviewed" {
 		t.Fatalf("stdout = %q", out)
+	}
+	mu.Lock()
+	var seenRequest string
+	for _, r := range requests {
+		if strings.Contains(r, "Check @notes.txt") {
+			seenRequest = r
+			break
+		}
+	}
+	mu.Unlock()
+	if seenRequest == "" {
+		t.Fatal("expected user-turn model request containing \"Check @notes.txt\"")
 	}
 	if !strings.Contains(seenRequest, "ATTACHED_PROMPT_FILE_CONTENT") {
 		t.Fatalf("expected @notes.txt from prompt argument to be attached, got:\n%s", seenRequest)
@@ -638,10 +707,18 @@ func TestExecCommandStructuredDataOnLocalCommands(t *testing.T) {
 }
 
 func TestExecCommandSubagentPermissionBubblesAndApprovesByRequestID(t *testing.T) {
-	calls := 0
+	var (
+		callsMu sync.Mutex
+		calls   int
+	)
 	prov := &fakeProvider{chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+		if isTitleGeneratorRequest(req) {
+			return titleResponse(req), nil
+		}
+		callsMu.Lock()
 		calls++
 		callNum := calls
+		callsMu.Unlock()
 		return func(yield func(message.AssistantChunk, error) bool) {
 			if callNum == 1 {
 				// First call runs inside the forked /deploy subagent and triggers a gated write.
@@ -802,6 +879,9 @@ func TestExecAutoModePermissionReviewJSONLApproveAndDefer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			prov := &fakeProvider{
 				chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+					if isTitleGeneratorRequest(req) {
+						return titleResponse(req), nil
+					}
 					hasToolResult := false
 					for _, m := range req.Messages {
 						if _, ok := m.(*message.Tool); ok {

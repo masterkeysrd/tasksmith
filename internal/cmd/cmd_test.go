@@ -72,6 +72,12 @@ func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream
 	}, nil
 }
 
+func (p *fakeProvider) hasDecisionHandler() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.decisionHandler != nil
+}
+
 func (p *fakeProvider) Evaluate(ctx context.Context, req *decision.Request) (*decision.Response, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -100,7 +106,7 @@ func (g *fakeGateway) Decision(ctx context.Context, model models.Model, cfg llm.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if g.provider == nil || g.provider.decisionHandler == nil {
+	if g.provider == nil || !g.provider.hasDecisionHandler() {
 		return nil, gateway.ErrUnsupportedCapability
 	}
 	return decision.NewModel(g.provider, string(model.ID), &decision.ModelConfig{Options: cfg.Options})
