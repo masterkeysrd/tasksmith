@@ -15,7 +15,9 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -327,6 +329,7 @@ func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecutio
 		if msg.GetID() != "" {
 			newMsg.SetID(msg.GetID())
 		}
+		harness.SetUserIntent(newMsg, slashCommandUserIntent(text, cmd.Def.Metadata.Description))
 
 		return &commandExecution{
 			Message:     newMsg,
@@ -390,6 +393,7 @@ func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecutio
 		if msg.GetID() != "" {
 			newMsg.SetID(msg.GetID())
 		}
+		harness.SetUserIntent(newMsg, slashCommandUserIntent(text, sk.Def.Metadata.Description))
 		return &commandExecution{Message: newMsg}, nil
 	}
 
@@ -530,7 +534,21 @@ func (s *Session) resolveMCPPromptCommand(msg message.Message, serverName, promp
 	if msg.GetID() != "" {
 		newMsg.SetID(msg.GetID())
 	}
+	harness.SetUserIntent(newMsg, slashCommandUserIntent(rawText, promptArg.Description))
 	return &commandExecution{Message: newMsg}, nil
+}
+
+// slashCommandUserIntent formats the human's raw "/name ..." invocation with an
+// optional single-line summary from the resource metadata so permission reviews
+// evaluate against what the human invoked rather than expanded rule/skill text.
+func slashCommandUserIntent(rawInvocation, description string) string {
+	rawInvocation = strings.TrimSpace(rawInvocation)
+	desc := strings.Join(strings.Fields(strings.TrimSpace(description)), " ")
+	if desc == "" {
+		return rawInvocation
+	}
+	desc, _ = strutils.TruncateLine(desc, 200, "…")
+	return rawInvocation + " — " + desc
 }
 
 // mcpManifestLabel renders a manifest path for an error message, falling back

@@ -521,7 +521,7 @@ Evaluate the provided pull request diff against the defined criteria.
 | `name` | string | Unique question identifier. |
 | `type` | string | Question kind: `predicate` (boolean), `choice` (categorical), or `score` (ordinal). |
 | `instructions` | string | Specific evaluation instructions for this question. |
-| `threshold` | float | Minimum decision probability threshold (0.0 to 1.0) for `predicate` or target `choice` option (for `permission-reviewer`, clamped to daemon floors of `0.90` native / `0.95` adapted). |
+| `threshold` | float | Minimum decision probability threshold (0.0 to 1.0) for `predicate` or target `choice` option (for `permission-reviewer`, validated in `(0, 1]`, defaulting to `0.85` from the built-in manifest). |
 | `minConfidence` | float | Minimum required model confidence score. |
 | `criteria.true` | string | Explicit positive condition description for `predicate`. |
 | `criteria.false` | string | Explicit negative condition description for `predicate`. |

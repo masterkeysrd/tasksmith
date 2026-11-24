@@ -3766,3 +3766,85 @@ func TestToolsNodeStripsSpoofedMetadataOnResume(t *testing.T) {
 		t.Fatalf("resumed tool must strip forged PermissionReview metadata, got %+v", got)
 	}
 }
+
+func TestAutoPermissionReviewerDedupsIdenticalBatchCards(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg, perm := newTestToolsRegistry(t)
+	perm.SetMode(api.ModeAuto)
+	autoPerm := &reviewingPermManager{SessionManager: perm}
+
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			if turn == 1 {
+				return []message.AssistantChunk{{
+					BaseChunk: message.BaseChunk{ID: "asst-dup"},
+					Content: []message.Block{
+						&message.ToolCall{ID: "call-1", Name: "write", Args: map[string]any{
+							"path": "auto-approved.txt", "content": "same",
+						}},
+						&message.ToolCall{ID: "call-2", Name: "write", Args: map[string]any{
+							"path": "auto-approved.txt", "content": "same",
+						}},
+					},
+					Done: true,
+				}}, nil
+			}
+			return []message.AssistantChunk{{
+				BaseChunk: message.BaseChunk{ID: "asst-done"},
+				Content:   []message.Block{&message.TextBlock{Text: "done"}},
+				Done:      true,
+			}}, nil
+		},
+	}
+	reviewer := &autoReviewer{approveFor: "auto-approved.txt"}
+
+	h, err := New(Config{
+		ID:          "thread-permreview-dedup",
+		DB:          db,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
+		Permissions: autoPerm,
+		Queue:       &fakeQueue{},
+		Logger:      log.Default(),
+		Reviewer:    reviewer,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := h.Configure(NodeOptions{Model: newTestModel(t, prov), Tools: reg}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+
+	var toolMsgs []*message.Tool
+	var records []api.PermissionRecord
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("write file")}) {
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+		switch val := ev.(type) {
+		case *message.Tool:
+			toolMsgs = append(toolMsgs, val)
+		case api.PermissionRecord:
+			records = append(records, val)
+		}
+	}
+	if reviewer.count() != 1 {
+		t.Fatalf("reviewer calls = %d, want 1 for identical cards in same batch", reviewer.count())
+	}
+	if len(toolMsgs) != 2 || PermissionReviewOf(toolMsgs[0]) == nil || PermissionReviewOf(toolMsgs[1]) == nil {
+		t.Fatalf("expected receipts on both tool messages, got %+v", toolMsgs)
+	}
+	if len(records) != 2 || records[0].Request.ID == records[1].Request.ID {
+		t.Fatalf("expected distinct audit records per call, got %+v", records)
+	}
+}
+
+func TestLastUserIntentTextMetaOverride(t *testing.T) {
+	u := message.NewUserText("<embedded_rule name=\"commit-hygiene\">long rule text</embedded_rule>\nCreate a commit")
+	SetUserIntent(u, "/commit — Commit the intended changes")
+	s := State{Messages: message.MessageList{u}}
+	if got := s.LastUserIntentText(); got != "/commit — Commit the intended changes" {
+		t.Fatalf("LastUserIntentText = %q, want MetaUserIntent override", got)
+	}
+}

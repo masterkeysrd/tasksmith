@@ -169,7 +169,7 @@ func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (
 	})
 	child.notifyParentUpdate()
 
-	if err := child.Send(ctx, api.SendRequest{Content: prompt}); err != nil {
+	if err := child.sendWithUserIntent(ctx, api.SendRequest{Content: prompt}, s.lastTurnUserIntent()); err != nil {
 		return api.InvokeAgentOutput{}, err
 	}
 
@@ -463,8 +463,12 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 		content := make(message.Content, 0, len(exec.Resolved.Tools)+1)
 		content = append(content, &message.TextBlock{Text: exec.Message.GetContent().Text()})
 		content = append(content, tools.ActivationBlocks(child.Tools, s.workspace.Catalog(), exec.Resolved.Tools)...)
-		cmdMsg = message.NewUser(content...)
-		cmdMsg.SetID(uuid.NewString())
+		rebuilt := message.NewUser(content...)
+		rebuilt.SetID(uuid.NewString())
+		if intent := harness.UserIntentOf(exec.Message); intent != "" {
+			harness.SetUserIntent(rebuilt, intent)
+		}
+		cmdMsg = rebuilt
 	}
 
 	// Apply a per-turn model override when the command declares a model that
@@ -551,7 +555,7 @@ func (s *Session) ManageSubagents(ctx context.Context, in api.ManageAgentsInput)
 		if !ok {
 			return api.ManageAgentsOutput{}, ErrSessionNotFound
 		}
-		if err := child.Send(ctx, api.SendRequest{Content: in.Message}); err != nil {
+		if err := child.sendWithUserIntent(ctx, api.SendRequest{Content: in.Message}, s.lastTurnUserIntent()); err != nil {
 			return api.ManageAgentsOutput{}, err
 		}
 		child.Lock()

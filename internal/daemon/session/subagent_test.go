@@ -1777,3 +1777,81 @@ func TestResolveConfigRejectsInherit(t *testing.T) {
 		t.Fatalf("Preview(@inherit) err = %v, want ErrInvalidConfig", err)
 	}
 }
+
+func TestUserIntentPreservedAcrossSlashCommandAndSubagent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	cmdDir := filepath.Join(ws.RootDir(), ".agents", "commands")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmdManifest := "---\napiVersion: warp/v1alpha1\nkind: Command\nmetadata:\n  name: ship\n  description: Commit staged work\nspec:\n  context: clean\n---\nExpanded instructions body that should not replace user_intent.\n"
+	if err := os.WriteFile(filepath.Join(cmdDir, "ship.command.md"), []byte(cmdManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	parent, err := New(ctx, Config{
+		ID:          uuid.NewString(),
+		Title:       "Parent Session",
+		Session:     api.SessionConfig{Mode: api.ModeAuto},
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New parent: %v", err)
+	}
+	defer func() { _ = parent.Close() }()
+
+	// 1. Slash command execution stamps raw human "/ship ..." invocation instead of rendered body.
+	execPlan, err := parent.resolveCommandExecution(message.NewUserText("/ship"))
+	if err != nil || execPlan == nil {
+		t.Fatalf("resolveCommandExecution(/ship) = %+v, %v", execPlan, err)
+	}
+	if got := harness.UserIntentOf(execPlan.Message); got != "/ship — Commit staged work" {
+		t.Fatalf("command UserIntent = %q, want %q", got, "/ship — Commit staged work")
+	}
+
+	// 2. Parent human prompt propagates to an invoke_agent subagent instead of the LLM's subagent prompt.
+	if err := parent.Send(ctx, api.SendRequest{Content: "Format and verify the repository"}); err != nil {
+		t.Fatalf("parent.Send: %v", err)
+	}
+	if err := parent.Wait(ctx); err != nil {
+		t.Fatalf("parent.Wait: %v", err)
+	}
+
+	inv, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+		Agent:  "general",
+		Title:  "Run helper task",
+		Prompt: "Internal delegated instructions written by parent LLM",
+	})
+	if err != nil {
+		t.Fatalf("InvokeSubagent: %v", err)
+	}
+	child, ok := parent.Child(inv.SessionID)
+	if !ok {
+		t.Fatal("child session not registered")
+	}
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+	_ = parent.Wait(ctx)
+
+	if got := child.lastTurnUserIntent(); got != "Format and verify the repository" {
+		t.Fatalf("child lastTurnUserIntent = %q, want parent human prompt", got)
+	}
+}

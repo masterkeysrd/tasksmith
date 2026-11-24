@@ -29,7 +29,40 @@ const (
 	// to a tool result message when the auto-mode permission reviewer
 	// approved the card instead of interrupting the human.
 	MetaPermissionReview = "tasksmith.permission_review"
+	// MetaUserIntent records the originating human prompt on a user message
+	// whose body was expanded from a slash command or synthesized for an
+	// autonomous subagent, so permission reviews evaluate against what the
+	// human actually asked for.
+	MetaUserIntent = "tasksmith.user_intent"
 )
+
+// SetUserIntent stamps the originating human intent string on msg. Passing an
+// empty or whitespace-only string clears any stored override.
+func SetUserIntent(msg *message.User, intent string) {
+	if msg == nil {
+		return
+	}
+	intent = strings.TrimSpace(intent)
+	meta := msg.GetMetadata()
+	if intent == "" {
+		delete(meta, MetaUserIntent)
+		return
+	}
+	if meta == nil {
+		meta = make(map[string]any)
+	}
+	meta[MetaUserIntent] = intent
+	msg.SetMetadata(meta)
+}
+
+// UserIntentOf returns the MetaUserIntent string recorded on msg, or "".
+func UserIntentOf(msg message.Message) string {
+	if msg == nil {
+		return ""
+	}
+	val, _ := msg.GetMetadata()[MetaUserIntent].(string)
+	return strings.TrimSpace(val)
+}
 
 // SetPermissionReview attaches the reviewer receipt to a tool result message.
 // Any pre-existing value (e.g. a forged key echoed through structured tool
@@ -332,6 +365,9 @@ func (s State) LastUserIntentText() string {
 		u, ok := m.(*message.User)
 		if !ok || u == nil || SystemKindOf(u) != "" {
 			continue
+		}
+		if intent := UserIntentOf(u); intent != "" {
+			return intent
 		}
 		var parts []string
 		for _, b := range u.Content {

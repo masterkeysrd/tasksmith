@@ -292,8 +292,8 @@ func TestReviewApproveOnceNative(t *testing.T) {
 	if res.Receipt.Model != "fake/decider" || res.Receipt.DecisionScope != "system" || res.Receipt.RubricDigest == "" {
 		t.Fatalf("receipt provenance = %+v", res.Receipt)
 	}
-	if res.Receipt.Threshold != FloorNative {
-		t.Fatalf("threshold = %v, want floor %v", res.Receipt.Threshold, FloorNative)
+	if res.Receipt.Threshold != 0.85 {
+		t.Fatalf("threshold = %v, want built-in manifest threshold 0.85", res.Receipt.Threshold)
 	}
 	if gw.native.count() != 1 {
 		t.Fatalf("expected 1 native call, got %d", gw.native.count())
@@ -325,27 +325,27 @@ func TestReviewRefusedDefers(t *testing.T) {
 	}
 }
 
-func TestReviewThresholdClamp(t *testing.T) {
-	// A workspace manifest with threshold 0.85 must clamp up to the native
-	// floor 0.90; 0.98 tightens above the floor.
+func TestReviewManifestThresholdIsSourceOfTruth(t *testing.T) {
 	for _, tc := range []struct {
-		manifestThreshold float64
+		manifestThreshold string
 		prob              float64
 		wantApproved      bool
 		wantThreshold     float64
 	}{
-		{0.85, 0.92, true, FloorNative},
-		{0.85, 0.88, false, 0},
-		{0.98, 0.92, false, 0},
-		{0.98, 0.99, true, 0.98},
+		{"threshold: 0.75\n", 0.78, true, 0.75},
+		{"threshold: 0.75\n", 0.72, false, 0},
+		{"threshold: 0.98\n", 0.92, false, 0},
+		{"threshold: 0.98\n", 0.99, true, 0.98},
+		{"", 0.88, true, 0.85},
+		{"", 0.80, false, 0},
 	} {
-		t.Run(fmt.Sprintf("t=%.2f_p=%.2f", tc.manifestThreshold, tc.prob), func(t *testing.T) {
+		t.Run(fmt.Sprintf("spec=%q_p=%.2f", strings.TrimSpace(tc.manifestThreshold), tc.prob), func(t *testing.T) {
 			wsDir := t.TempDir()
 			decDir := wsDir + "/.agents/decisions"
 			if err := mkdirAll(decDir); err != nil {
 				t.Fatal(err)
 			}
-			manifest := fmt.Sprintf("---\napiVersion: warp/v1alpha1\nkind: Decision\nmetadata:\n  name: permission-reviewer\nspec:\n  models: [\"fake/decider\"]\n  questions:\n    - name: verdict\n      type: choice\n      threshold: %.2f\n      options:\n        - value: approve_once\n          description: allow once\n        - value: defer_to_user\n          description: ask human\n---\nrubric\n", tc.manifestThreshold)
+			manifest := fmt.Sprintf("---\napiVersion: warp/v1alpha1\nkind: Decision\nmetadata:\n  name: permission-reviewer\nspec:\n  models: [\"fake/decider\"]\n  questions:\n    - name: verdict\n      type: choice\n      %s      options:\n        - value: approve_once\n          description: allow once\n        - value: defer_to_user\n          description: ask human\n---\nrubric\n", tc.manifestThreshold)
 			if err := writeFile(decDir+"/permission-reviewer.decision.md", manifest); err != nil {
 				t.Fatal(err)
 			}
@@ -366,9 +366,7 @@ func TestReviewThresholdClamp(t *testing.T) {
 	}
 }
 
-func TestReviewAdaptedFloor(t *testing.T) {
-	// A completion-only model adapts through decision.NewFromLLM; the floor
-	// rises to 0.95 so a 0.92 verdict defers.
+func TestReviewAdaptedUsesSameManifestThreshold(t *testing.T) {
 	wsDir := t.TempDir()
 	decDir := wsDir + "/.agents/decisions"
 	if err := mkdirAll(decDir); err != nil {
@@ -379,21 +377,43 @@ func TestReviewAdaptedFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc, gw, _, _ := newTestService(t, api.ModeAuto, wsDir, false)
-	gw.llm.raw = `{"answers":{"verdict":{"choice":"approve_once","probabilities":{"approve_once":0.92,"defer_to_user":0.08}}}}`
+	gw.llm.raw = `{"answers":{"verdict":{"choice":"approve_once","probabilities":{"approve_once":0.80,"defer_to_user":0.20}}}}`
 	res := svc.Review(context.Background(), ReviewRequest{Request: testCard(), UserIntent: "clean"})
 	if res.Verdict != VerdictDefer {
-		t.Fatalf("verdict = %s, want defer under 0.95 adapter floor", res.Verdict)
+		t.Fatalf("verdict = %s, want defer below 0.85 manifest threshold", res.Verdict)
 	}
 	if gw.llm.calls != 1 {
 		t.Fatalf("expected 1 adapted llm call, got %d", gw.llm.calls)
 	}
-	gw.llm.raw = `{"answers":{"verdict":{"choice":"approve_once","probabilities":{"approve_once":0.98,"defer_to_user":0.02}}}}`
+	gw.llm.raw = `{"answers":{"verdict":{"choice":"approve_once","probabilities":{"approve_once":0.88,"defer_to_user":0.12}}}}`
 	res = svc.Review(context.Background(), ReviewRequest{Request: testCard(), UserIntent: "clean"})
 	if res.Verdict != VerdictApproveOnce {
-		t.Fatalf("verdict = %s (%s), want approve_once at 0.98", res.Verdict, res.ReasonCode)
+		t.Fatalf("verdict = %s (%s), want approve_once at 0.88 using manifest threshold", res.Verdict, res.ReasonCode)
 	}
-	if res.Receipt.Threshold != FloorLLMAdapter {
-		t.Fatalf("threshold = %v, want adapter floor %v", res.Receipt.Threshold, FloorLLMAdapter)
+	if res.Receipt.Threshold != 0.85 {
+		t.Fatalf("threshold = %v, want manifest threshold 0.85", res.Receipt.Threshold)
+	}
+}
+
+func TestReviewInvalidThresholdDefers(t *testing.T) {
+	for _, bad := range []string{"0", "-0.2", "1.5"} {
+		wsDir := t.TempDir()
+		decDir := wsDir + "/.agents/decisions"
+		if err := mkdirAll(decDir); err != nil {
+			t.Fatal(err)
+		}
+		manifest := fmt.Sprintf("---\napiVersion: warp/v1alpha1\nkind: Decision\nmetadata:\n  name: permission-reviewer\nspec:\n  models: [\"fake/decider\"]\n  questions:\n    - name: verdict\n      type: choice\n      threshold: %s\n      options:\n        - value: approve_once\n          description: allow once\n        - value: defer_to_user\n          description: ask human\n---\nrubric\n", bad)
+		if err := writeFile(decDir+"/permission-reviewer.decision.md", manifest); err != nil {
+			t.Fatal(err)
+		}
+		svc, gw, _, _ := newTestService(t, api.ModeAuto, wsDir, true)
+		res := svc.Review(context.Background(), ReviewRequest{Request: testCard(), UserIntent: "clean"})
+		if res.Verdict != VerdictDefer || res.ReasonCode != ReasonInvalidManifest {
+			t.Fatalf("threshold %s: verdict = %s/%s, want defer/invalid_manifest", bad, res.Verdict, res.ReasonCode)
+		}
+		if gw.native.count() != 0 {
+			t.Fatalf("threshold %s: expected 0 model calls", bad)
+		}
 	}
 }
 
@@ -455,10 +475,10 @@ func TestReviewPayloadAllowlist(t *testing.T) {
 		t.Fatalf("questions = %+v", req.Questions)
 	}
 	q := req.Questions[0]
-	if !strings.Contains(q.Instructions, "strict, calibrated permission reviewer") || !strings.Contains(q.Instructions, "Choose the single verdict") {
+	if !strings.Contains(q.Instructions, "calibrated permission reviewer") || !strings.Contains(q.Instructions, "Choose the single verdict") {
 		t.Fatalf("instructions missing rendered rubric or question instructions:\n%s", q.Instructions)
 	}
-	if strings.Count(q.Instructions, "untrusted data") != 1 && strings.Count(strings.ToLower(q.Instructions), "untrusted data") < 1 {
+	if strings.Count(strings.ToLower(q.Instructions), "untrusted data") < 1 {
 		t.Fatalf("instructions missing untrusted data framing:\n%s", q.Instructions)
 	}
 	raw, err := json.Marshal(req.Input.State)
@@ -473,12 +493,12 @@ func TestReviewPayloadAllowlist(t *testing.T) {
 		t.Fatalf("payload keys = %v, want exactly card+user_intent", decoded)
 	}
 	card, ok := decoded["card"].(map[string]any)
-	if !ok || len(card) != 8 {
+	if !ok || len(card) != 9 {
 		t.Fatalf("card keys = %v", decoded["card"])
 	}
 	for k := range card {
 		switch k {
-		case "tool_name", "action", "safety", "target", "summary", "diff", "unsandboxed", "bypass_sandbox":
+		case "tool_name", "action", "safety", "target", "summary", "diff", "sandbox_enforced", "unsandboxed", "bypass_sandbox":
 		default:
 			t.Fatalf("unexpected card field %q in outbound payload", k)
 		}
@@ -486,6 +506,92 @@ func TestReviewPayloadAllowlist(t *testing.T) {
 	ui, _ := decoded["user_intent"].(string)
 	if !strings.HasSuffix(ui, "…[user prompt truncated]") || len(ui) > maxUserIntentBytes+40 {
 		t.Fatalf("user_intent not truncated to budget: len=%d", len(ui))
+	}
+}
+
+func TestReviewPayloadSandboxPostureAndScriptPreview(t *testing.T) {
+	wsDir := t.TempDir()
+	scriptsDir := wsDir + "/scripts"
+	if err := mkdirAll(scriptsDir); err != nil {
+		t.Fatal(err)
+	}
+	scriptBody := "#!/usr/bin/env sh\ngofmt -w .\n"
+	if err := writeFile(scriptsDir+"/format.sh", scriptBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(wsDir+"/.env", "SECRET=1\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, gw, sess, _ := newTestService(t, api.ModeAuto, wsDir, true)
+	sess.SetRuntimePolicy(&permissions.RuntimePolicy{SandboxNative: true})
+
+	card := api.PermissionRequest{
+		ID:       "req-script",
+		ToolName: "bash",
+		Action:   api.ActionExec,
+		Safety:   api.SafetyUnknown,
+		Target:   "./scripts/format.sh",
+		Summary:  "Format Go files",
+	}
+	res := svc.Review(context.Background(), ReviewRequest{Request: card, UserIntent: "fix formatting"})
+	if res.Verdict != VerdictApproveOnce {
+		t.Fatalf("verdict = %s (%s), want approve_once", res.Verdict, res.ReasonCode)
+	}
+	gw.native.mu.Lock()
+	raw, err := json.Marshal(gw.native.calls[len(gw.native.calls)-1].Input.State)
+	gw.native.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Card struct {
+			SandboxEnforced bool   `json:"sandbox_enforced"`
+			ScriptPreview   string `json:"script_preview"`
+		} `json:"card"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Card.SandboxEnforced {
+		t.Fatal("expected sandbox_enforced=true when native sandbox is active and command is confined")
+	}
+	if !strings.Contains(payload.Card.ScriptPreview, "# scripts/format.sh\n"+scriptBody) {
+		t.Fatalf("unexpected script_preview:\n%s", payload.Card.ScriptPreview)
+	}
+
+	// Secret .env files must never be attached to script_preview, and bypass_sandbox clears sandbox_enforced.
+	envCard := api.PermissionRequest{
+		ID:            "req-env",
+		ToolName:      "bash",
+		Action:        api.ActionExec,
+		Safety:        api.SafetyUnsafe,
+		Target:        "sh .env",
+		Summary:       "Run .env",
+		Unsandboxed:   true,
+		BypassSandbox: true,
+	}
+	_ = svc.Review(context.Background(), ReviewRequest{Request: envCard, UserIntent: "run"})
+	gw.native.mu.Lock()
+	rawEnv, err := json.Marshal(gw.native.calls[len(gw.native.calls)-1].Input.State)
+	gw.native.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = struct {
+		Card struct {
+			SandboxEnforced bool   `json:"sandbox_enforced"`
+			ScriptPreview   string `json:"script_preview"`
+		} `json:"card"`
+	}{}
+	if err := json.Unmarshal(rawEnv, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Card.SandboxEnforced {
+		t.Fatal("expected sandbox_enforced=false when bypass_sandbox=true")
+	}
+	if payload.Card.ScriptPreview != "" {
+		t.Fatalf("secret .env leaked into script_preview: %q", payload.Card.ScriptPreview)
 	}
 }
 

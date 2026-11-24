@@ -29,6 +29,10 @@ const minTurnSummary = 5 * time.Second
 // Send initiates an asynchronous conversational turn with a user message or resolves
 // a pending permission decision.
 func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
+	return s.sendWithUserIntent(ctx, req, "")
+}
+
+func (s *Session) sendWithUserIntent(ctx context.Context, req api.SendRequest, userIntentOverride string) error {
 	if s == nil {
 		return errors.New("session: uninitialized session")
 	}
@@ -138,6 +142,9 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 	if id != "" {
 		userMsg.SetID(id)
 	}
+	if strings.TrimSpace(userIntentOverride) != "" {
+		harness.SetUserIntent(userMsg, userIntentOverride)
+	}
 
 	s.Lock()
 	attResolver := s.attachments
@@ -161,8 +168,13 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 	}
 
 	if exec != nil && exec.Message != nil {
-		if execUser, ok := exec.Message.(*message.User); ok && len(normalizedAtts) > 0 {
-			harness.SetAttachments(execUser, normalizedAtts)
+		if execUser, ok := exec.Message.(*message.User); ok {
+			if len(normalizedAtts) > 0 {
+				harness.SetAttachments(execUser, normalizedAtts)
+			}
+			if strings.TrimSpace(userIntentOverride) != "" {
+				harness.SetUserIntent(execUser, userIntentOverride)
+			}
 		}
 	}
 

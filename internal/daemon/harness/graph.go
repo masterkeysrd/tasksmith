@@ -573,19 +573,48 @@ func NewToolsNode(cfg ToolsNodeConfig) *ToolsNode {
 	}
 }
 
-// permissionReviewTimeout bounds one auto-mode permission review so inference
-// never dominates the human approval budget that follows a deferral.
-const permissionReviewTimeout = 10 * time.Second
+// permissionReviewTimeout bounds one auto-mode permission review so slow or
+// cold-stalled inference falls back promptly to the human approval flow.
+const permissionReviewTimeout = 3 * time.Second
+
+type cachedAutoReview struct {
+	res      permreview.Result
+	approved bool
+}
+
+func autoReviewBatchKey(req *api.PermissionRequest) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s",
+		req.ToolName, req.Action, req.Safety, req.Unsandboxed, req.BypassSandbox,
+		req.Target, req.Summary, req.Diff)
+}
 
 // reviewAutoAsk consults the permission reviewer for a risky card that the
-// deterministic engine would otherwise interrupt for. It returns the review
+// deterministic engine would otherwise interrupt for (reusing an identical
+// review already evaluated in the same tool-call batch). It returns the review
 // result only when the verdict survives post-inference liveness and policy
 // re-checks; every other path (nil reviewer, non-auto mode, defer, cancel,
 // mode flip, or a policy that turned to deny while inference ran) returns
 // false so the caller keeps the human permission flow.
-func (n *ToolsNode) reviewAutoAsk(ctx context.Context, req *api.PermissionRequest, plan *tools.Plan, userIntent string) (permreview.Result, bool) {
+func (n *ToolsNode) reviewAutoAsk(ctx context.Context, req *api.PermissionRequest, plan *tools.Plan, userIntent string, batchCache map[string]cachedAutoReview) (permreview.Result, bool) {
 	if n.reviewer == nil || n.permissions.Mode() != api.ModeAuto {
 		return permreview.Result{}, false
+	}
+	key := autoReviewBatchKey(req)
+	if cached, ok := batchCache[key]; ok {
+		if !cached.approved || cached.res.Receipt == nil {
+			return cached.res, false
+		}
+		if ctx.Err() != nil || n.permissions.Mode() != api.ModeAuto {
+			return permreview.Result{}, false
+		}
+		if recheck, _, err := n.permissions.Evaluate(plan); err != nil || recheck == tools.AccessDeny {
+			return permreview.Result{}, false
+		}
+		cloned := *cached.res.Receipt
+		cloned.RequestID = req.ID
+		out := cached.res
+		out.Receipt = &cloned
+		return out, true
 	}
 	reviewCtx, cancel := context.WithTimeout(ctx, permissionReviewTimeout)
 	defer cancel()
@@ -594,6 +623,9 @@ func (n *ToolsNode) reviewAutoAsk(ctx context.Context, req *api.PermissionReques
 		n.logger.Warn(res.WarnOnce)
 	}
 	if res.Verdict != permreview.VerdictApproveOnce || res.Receipt == nil {
+		if batchCache != nil && ctx.Err() == nil {
+			batchCache[key] = cachedAutoReview{res: res, approved: false}
+		}
 		return res, false
 	}
 	if ctx.Err() != nil || n.permissions.Mode() != api.ModeAuto {
@@ -601,6 +633,9 @@ func (n *ToolsNode) reviewAutoAsk(ctx context.Context, req *api.PermissionReques
 	}
 	if recheck, _, err := n.permissions.Evaluate(plan); err != nil || recheck == tools.AccessDeny {
 		return permreview.Result{}, false
+	}
+	if batchCache != nil {
+		batchCache[key] = cachedAutoReview{res: res, approved: true}
 	}
 	return res, true
 }
@@ -751,6 +786,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 	var hasTodos bool
 	var newTools []string
 	plans := make(map[string]*tools.Plan)
+	reviewCache := make(map[string]cachedAutoReview)
 
 	dedupState := State{LoadedTools: loadedTools}
 
@@ -766,7 +802,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 					case tools.AccessAsk:
 						if req == nil {
 							err = tools.ErrPermissionDenied
-						} else if res, approved := n.reviewAutoAsk(ctx, req, plan, userIntent); approved {
+						} else if res, approved := n.reviewAutoAsk(ctx, req, plan, userIntent, reviewCache); approved {
 							// A reviewer approval only clears the permission
 							// gate to ask: the question or plan review below
 							// still interrupts for the human.
@@ -809,7 +845,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 			toolMsgs = append(toolMsgs, msg)
 			continue
 		}
-		toolMsg, req, review, err := n.evaluateSingleCall(ctx, tc, plans, userIntent)
+		toolMsg, req, review, err := n.evaluateSingleCall(ctx, tc, plans, userIntent, reviewCache)
 		if err != nil {
 			return nil, err
 		}
@@ -921,7 +957,7 @@ func newQuestionRequest(tc *message.ToolCall) (api.QuestionRequest, error) {
 	}, nil
 }
 
-func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall, plans map[string]*tools.Plan, userIntent string) (*message.Tool, *api.PermissionRequest, *api.PermissionReview, error) {
+func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall, plans map[string]*tools.Plan, userIntent string, reviewCache map[string]cachedAutoReview) (*message.Tool, *api.PermissionRequest, *api.PermissionReview, error) {
 	plan, err := n.tools.Prepare(ctx, tc)
 	if err != nil {
 		n.recordFailure(ctx, tc, err)
@@ -940,7 +976,7 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 	}
 	var receipt *api.PermissionReview
 	if access == tools.AccessAsk && req != nil {
-		res, approved := n.reviewAutoAsk(ctx, req, plan, userIntent)
+		res, approved := n.reviewAutoAsk(ctx, req, plan, userIntent, reviewCache)
 		if !approved {
 			if err := ctx.Err(); err != nil {
 				return nil, nil, nil, err

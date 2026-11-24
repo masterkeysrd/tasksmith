@@ -1,6 +1,7 @@
 package permreview
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,14 +9,21 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
@@ -57,6 +65,9 @@ const DecisionReviewSource = "decision_model"
 const (
 	// verdictQuestionName is the fixed name of the reviewer's choice question.
 	verdictQuestionName = "verdict"
+	// systemDecisionQualifiedName identifies the built-in system Decision used
+	// when a higher-tier override omits an explicit threshold.
+	systemDecisionQualifiedName = "system/Decision/" + workspace.PermissionReviewerDecisionName
 	// defaultModelRefs mirrors the built-in manifest's spec.models preference
 	// order: a dedicated reviewer alias, the workspace decision-role default,
 	// then the fast completion tier (adapted through the gateway).
@@ -64,24 +75,12 @@ const (
 	// maxUserIntentBytes bounds the outbound user prompt text; conversational
 	// preamble beyond the budget is truncated with an explicit marker.
 	maxUserIntentBytes = 4096
-	// maxCardEvidenceBytes bounds summary+diff+target. Oversize cards defer
-	// locally with zero model calls — approving on a truncated diff is not an
-	// option, so the evidence is never cut to fit.
+	// maxCardEvidenceBytes bounds summary+diff+target+script_preview. Oversize
+	// cards defer locally with zero model calls — approving on truncated
+	// evidence is not an option, so evidence is never cut to fit.
 	maxCardEvidenceBytes = 16384
 	// rubricDigestLen is the hex length of the rubric fingerprint.
 	rubricDigestLen = 12
-)
-
-// Daemon floors on P(approve_once). A resolved Decision may tighten the
-// threshold (e.g. 0.98) but can never lower these values, and manifests
-// cannot mint new verdict powers.
-const (
-	// FloorNative applies to native decision.Provider models (typesafe,
-	// openai, ollama).
-	FloorNative = 0.90
-	// FloorLLMAdapter applies to completion models adapted via
-	// decision.NewFromLLM, whose structured-output calibration is weaker.
-	FloorLLMAdapter = 0.95
 )
 
 // ReviewRequest carries the pending permission card and the plain text of the
@@ -118,7 +117,7 @@ type Reviewer interface {
 // review, so /workspace reload, /model, .agents/decisions edits, and alias
 // changes apply immediately.
 type Deps struct {
-	// Permissions supplies the live permission mode gate.
+	// Permissions supplies the live permission mode gate and runtime sandbox posture.
 	Permissions permissions.SessionManager
 	Workspace   *workspace.Workspace
 	// Catalog resolves models through workspace role/alias rules.
@@ -149,23 +148,25 @@ func New(deps Deps) *Service {
 }
 
 // reviewPayload is the complete outbound inference payload: an allowlisted
-// projection of the card plus the user's initiating prompt text. Repository
-// files, environment variables, prior tool outputs, and assistant messages
-// are excluded by construction.
+// projection of the card plus the user's initiating prompt text. Secrets,
+// environment variables, prior tool outputs, and assistant messages are
+// excluded by construction.
 type reviewPayload struct {
 	Card       cardView `json:"card"`
 	UserIntent string   `json:"user_intent"`
 }
 
 type cardView struct {
-	ToolName      string `json:"tool_name"`
-	Action        string `json:"action"`
-	Safety        string `json:"safety"`
-	Target        string `json:"target"`
-	Summary       string `json:"summary"`
-	Diff          string `json:"diff"`
-	Unsandboxed   bool   `json:"unsandboxed"`
-	BypassSandbox bool   `json:"bypass_sandbox"`
+	ToolName        string `json:"tool_name"`
+	Action          string `json:"action"`
+	Safety          string `json:"safety"`
+	Target          string `json:"target"`
+	Summary         string `json:"summary"`
+	Diff            string `json:"diff"`
+	ScriptPreview   string `json:"script_preview,omitempty"`
+	SandboxEnforced bool   `json:"sandbox_enforced"`
+	Unsandboxed     bool   `json:"unsandboxed"`
+	BypassSandbox   bool   `json:"bypass_sandbox"`
 }
 
 // Review evaluates req once. It never denies: every non-approval path returns
@@ -189,13 +190,13 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) Result {
 	if dec == nil {
 		return deferred(ReasonInvalidManifest, warn)
 	}
-	question, threshold, ok := validateVerdictQuestion(dec)
+	question, threshold, ok := validateVerdictQuestion(dec, s.systemDefaultThreshold())
 	if !ok {
 		return deferred(ReasonInvalidManifest,
-			fmt.Sprintf("permission reviewer Decision %q is malformed: verdict question must offer exactly approve_once and defer_to_user; falling back to human prompts", workspace.PermissionReviewerDecisionName))
+			fmt.Sprintf("permission reviewer Decision %q is malformed: verdict question must offer approve_once and defer_to_user with a threshold in (0, 1]; falling back to human prompts", workspace.PermissionReviewerDecisionName))
 	}
 
-	payload, oversize := buildPayload(req)
+	payload, oversize := s.buildPayload(req)
 	if oversize {
 		return deferred(ReasonOversize, "")
 	}
@@ -205,22 +206,16 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) Result {
 		return deferred(ReasonError, fmt.Sprintf("permission reviewer rubric failed to render: %v", err))
 	}
 
-	model, adapted, modelID, modelWarn := s.resolveModel(ctx, dec)
+	model, modelID, modelWarn := s.resolveModel(ctx, dec)
 	if model == nil {
 		return deferred(ReasonNoModel, modelWarn)
 	}
-
-	floor := FloorNative
-	if adapted {
-		floor = FloorLLMAdapter
-	}
-	effective := math.Max(threshold, floor)
 
 	instructions := strings.TrimSpace(rendered)
 	if qi := strings.TrimSpace(question.Instructions); qi != "" {
 		instructions += "\n\n" + qi
 	}
-	digest := rubricDigest(instructions, question)
+	digest := rubricDigest(instructions, question, threshold)
 	q := decision.Choice(verdictQuestionName, instructions,
 		decision.Opt(string(VerdictApproveOnce), optionDescription(question, string(VerdictApproveOnce))),
 		decision.Opt(string(VerdictDefer), optionDescription(question, string(VerdictDefer))),
@@ -245,11 +240,11 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) Result {
 
 	probApprove := ans.Prob(string(VerdictApproveOnce))
 	approved := ans.Choice == string(VerdictApproveOnce) &&
-		!math.IsNaN(probApprove) && !math.IsInf(probApprove, 0) && probApprove >= effective &&
+		!math.IsNaN(probApprove) && !math.IsInf(probApprove, 0) && probApprove >= threshold &&
 		(question.MinConfidence == nil || ans.Confidence >= *question.MinConfidence)
 	if !approved {
 		reason := ReasonDeferred
-		if ans.Choice == string(VerdictApproveOnce) || probApprove >= threshold {
+		if ans.Choice == string(VerdictApproveOnce) {
 			reason = ReasonBelowThreshold
 		}
 		res := Result{Verdict: VerdictDefer, ReasonCode: reason}
@@ -266,7 +261,7 @@ func (s *Service) Review(ctx context.Context, req ReviewRequest) Result {
 		RubricDigest:  digest,
 		Probability:   probApprove,
 		Confidence:    ans.Confidence,
-		Threshold:     effective,
+		Threshold:     threshold,
 		LatencyMs:     latency.Milliseconds(),
 	}
 	res := Result{Verdict: VerdictApproveOnce, Receipt: receipt, ReasonCode: ReasonApproved}
@@ -290,10 +285,27 @@ func (s *Service) resolveDecision() (*warp.Decision, string, string) {
 	return snap.Def, scopeName, ""
 }
 
-// validateVerdictQuestion enforces the immutable verdict contract: exactly one
-// choice question named "verdict" exposing exactly approve_once and
-// defer_to_user. Malformed manifests defer with a validation warning.
-func validateVerdictQuestion(dec *warp.Decision) (warp.DecisionQuestion, float64, bool) {
+// systemDefaultThreshold reads the threshold declared on the built-in system
+// permission-reviewer Decision so higher-tier overrides that omit threshold
+// inherit from permission-reviewer.decision.md as the single source of truth.
+func (s *Service) systemDefaultThreshold() float64 {
+	snap, ok := s.deps.Workspace.Catalog().GetDecision(systemDecisionQualifiedName)
+	if !ok || snap.Def == nil {
+		return 0
+	}
+	for i := range snap.Def.Spec.Questions {
+		q := &snap.Def.Spec.Questions[i]
+		if q.Name == verdictQuestionName && q.Threshold != nil {
+			return *q.Threshold
+		}
+	}
+	return 0
+}
+
+// validateVerdictQuestion enforces the verdict contract: exactly one choice
+// question named "verdict" exposing approve_once and defer_to_user, with a
+// valid probability threshold in (0, 1] sourced from the Decision manifest.
+func validateVerdictQuestion(dec *warp.Decision, fallbackThreshold float64) (warp.DecisionQuestion, float64, bool) {
 	var found *warp.DecisionQuestion
 	for i := range dec.Spec.Questions {
 		if dec.Spec.Questions[i].Name == verdictQuestionName {
@@ -311,9 +323,12 @@ func validateVerdictQuestion(dec *warp.Decision) (warp.DecisionQuestion, float64
 	if len(found.Options) != 2 || !seen[string(VerdictApproveOnce)] || !seen[string(VerdictDefer)] {
 		return warp.DecisionQuestion{}, 0, false
 	}
-	threshold := 0.0
+	threshold := fallbackThreshold
 	if found.Threshold != nil {
 		threshold = *found.Threshold
+	}
+	if math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold <= 0 || threshold > 1 {
+		return warp.DecisionQuestion{}, 0, false
 	}
 	return *found, threshold, true
 }
@@ -335,8 +350,10 @@ func renderRubric(ws *workspace.Workspace, dec *warp.Decision) (string, error) {
 	})
 }
 
-func rubricDigest(instructions string, q warp.DecisionQuestion) string {
-	spec, err := json.Marshal(q)
+func rubricDigest(instructions string, q warp.DecisionQuestion, effectiveThreshold float64) string {
+	normalized := q
+	normalized.Threshold = &effectiveThreshold
+	spec, err := json.Marshal(normalized)
 	if err != nil {
 		spec = []byte(q.Name)
 	}
@@ -344,25 +361,171 @@ func rubricDigest(instructions string, q warp.DecisionQuestion) string {
 	return hex.EncodeToString(sum[:])[:rubricDigestLen]
 }
 
-// buildPayload projects the card onto the allowlisted outbound fields and
-// enforces the input byte budgets. Oversize card evidence is never truncated
-// to fit: it defers locally with zero model calls.
-func buildPayload(req ReviewRequest) (reviewPayload, bool) {
-	card := cardView{
-		ToolName:      req.Request.ToolName,
-		Action:        string(req.Request.Action),
-		Safety:        string(req.Request.Safety),
-		Target:        req.Request.Target,
-		Summary:       req.Request.Summary,
-		Diff:          req.Request.Diff,
-		Unsandboxed:   req.Request.Unsandboxed,
-		BypassSandbox: req.Request.BypassSandbox,
+// buildPayload projects the card onto the allowlisted outbound fields, attaches
+// sandbox posture and any bounded workspace script preview, and enforces input
+// byte budgets. Oversize card evidence is never truncated to fit: it defers
+// locally with zero model calls.
+func (s *Service) buildPayload(req ReviewRequest) (reviewPayload, bool) {
+	sandboxEnforced := false
+	if rt := s.deps.Permissions.RuntimePolicy(); rt != nil && rt.SandboxNative &&
+		!req.Request.Unsandboxed && !req.Request.BypassSandbox &&
+		(req.Request.Action != api.ActionNet || req.Request.ToolName != "net") {
+		sandboxEnforced = true
 	}
-	if len(card.Summary)+len(card.Diff)+len(card.Target) > maxCardEvidenceBytes {
+
+	scriptPreview, scriptOversize := extractWorkspaceScriptPreview(s.deps.Workspace, req.Request)
+	if scriptOversize {
+		return reviewPayload{}, true
+	}
+
+	card := cardView{
+		ToolName:        req.Request.ToolName,
+		Action:          string(req.Request.Action),
+		Safety:          string(req.Request.Safety),
+		Target:          req.Request.Target,
+		Summary:         req.Request.Summary,
+		Diff:            req.Request.Diff,
+		ScriptPreview:   scriptPreview,
+		SandboxEnforced: sandboxEnforced,
+		Unsandboxed:     req.Request.Unsandboxed,
+		BypassSandbox:   req.Request.BypassSandbox,
+	}
+	if len(card.Summary)+len(card.Diff)+len(card.Target)+len(card.ScriptPreview) > maxCardEvidenceBytes {
 		return reviewPayload{}, true
 	}
 	intent, _ := strutils.TruncateLine(strings.TrimSpace(req.UserIntent), maxUserIntentBytes, "\n…[user prompt truncated]")
 	return reviewPayload{Card: card, UserIntent: intent}, false
+}
+
+var scriptInterpreters = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
+	"python": true, "python2": true, "python3": true,
+	"node": true, "nodejs": true, "bun": true, "deno": true,
+	"ruby": true, "perl": true, "awk": true,
+}
+
+// extractWorkspaceScriptPreview inspects bash commands for workspace-confined
+// script files (e.g. ./scripts/format.sh or python3 tools/gen.py) and returns
+// their full UTF-8 text so the reviewer can see whether a local script merely
+// reads or formats files instead of deferring blindly on an opaque filename.
+// Secret/sensitive files, symlink escapes, and binary files are excluded;
+// scripts exceeding maxCardEvidenceBytes return oversize=true.
+func extractWorkspaceScriptPreview(ws *workspace.Workspace, req api.PermissionRequest) (string, bool) {
+	if ws == nil || req.ToolName != "bash" {
+		return "", false
+	}
+	wsRoot := strings.TrimSpace(ws.RootDir())
+	cmdStr := strings.TrimSpace(req.Target)
+	if wsRoot == "" || cmdStr == "" {
+		return "", false
+	}
+	chain, err := shellguard.Parse(cmdStr)
+	if err != nil {
+		return "", false
+	}
+
+	wsClean := filepath.Clean(wsRoot)
+	homeDir, _ := os.UserHomeDir()
+
+	var candidates []string
+	var collect func(ch shellguard.CommandChain)
+	collect = func(ch shellguard.CommandChain) {
+		for _, p := range ch.Pipelines {
+			for _, cmd := range p.Commands {
+				if cmd.Subshell != nil {
+					collect(*cmd.Subshell)
+					continue
+				}
+				if cmd.SubChain != nil {
+					collect(*cmd.SubChain)
+				}
+				if cand := scriptCandidateFromCommand(cmd); cand != "" && !slices.Contains(candidates, cand) {
+					candidates = append(candidates, cand)
+				}
+			}
+		}
+	}
+	collect(chain)
+
+	if len(candidates) == 0 {
+		return "", false
+	}
+
+	var sections []string
+	totalBytes := 0
+	for _, cand := range candidates {
+		resolved := fsutils.ExpandAndCleanPath(cand, wsClean, homeDir)
+		if !fsutils.IsConfinedInsideDir(resolved, wsClean) {
+			continue
+		}
+		if guard.IsSecretEnvFile(filepath.Base(resolved)) || guard.IsSensitivePath(resolved, homeDir) {
+			continue
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if info.Size() > maxCardEvidenceBytes {
+			return "", true
+		}
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			continue
+		}
+		if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
+			continue
+		}
+		rel, err := filepath.Rel(wsClean, resolved)
+		if err != nil {
+			rel = filepath.Base(resolved)
+		}
+		section := "# " + filepath.ToSlash(rel) + "\n" + string(data)
+		totalBytes += len(section)
+		if totalBytes > maxCardEvidenceBytes {
+			return "", true
+		}
+		sections = append(sections, section)
+	}
+	return strings.Join(sections, "\n\n"), false
+}
+
+func scriptCandidateFromCommand(cmd shellguard.ParsedCommand) string {
+	curr := &cmd
+	for curr.SubCommand != nil {
+		curr = curr.SubCommand
+	}
+	execName := strings.TrimSpace(curr.Executable)
+	if execName == "" || curr.HasCmdSubst {
+		return ""
+	}
+	if strings.Contains(execName, "/") || strings.HasPrefix(execName, ".") {
+		return execName
+	}
+	base := filepath.Base(execName)
+	if !scriptInterpreters[base] {
+		return ""
+	}
+	for i := 0; i < len(curr.Args); i++ {
+		arg := curr.Args[i]
+		dyn := i < len(curr.ArgsIsDynamic) && curr.ArgsIsDynamic[i]
+		if arg == "-c" || arg == "-e" || arg == "--eval" {
+			return ""
+		}
+		if base == "awk" && arg == "-f" && i+1 < len(curr.Args) {
+			if i+1 < len(curr.ArgsIsDynamic) && curr.ArgsIsDynamic[i+1] {
+				return ""
+			}
+			return curr.Args[i+1]
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if dyn {
+			return ""
+		}
+		return arg
+	}
+	return ""
 }
 
 // resolveModel walks the resolved Decision's spec.models preferences in
@@ -372,11 +535,11 @@ func buildPayload(req ReviewRequest) (reviewPayload, bool) {
 // Once card data would be sent to a model, the service never fails over to a
 // second model: resolution failures happen before any inference call, so
 // trying the next preference stays safe.
-func (s *Service) resolveModel(ctx context.Context, dec *warp.Decision) (*decision.Model, bool, string, string) {
+func (s *Service) resolveModel(ctx context.Context, dec *warp.Decision) (*decision.Model, string, string) {
 	cat := s.deps.Catalog()
 	gw := s.deps.Gateway()
 	if cat == nil || gw == nil {
-		return nil, false, "", "permission reviewer has no model catalog or gateway configured"
+		return nil, "", "permission reviewer has no model catalog or gateway configured"
 	}
 	refs := dec.Spec.Models
 	if len(refs) == 0 {
@@ -410,14 +573,13 @@ func (s *Service) resolveModel(ctx context.Context, dec *warp.Decision) (*decisi
 			lastErr = fmt.Sprintf("model %q failed to initialize: %v", m.ID, err)
 			continue
 		}
-		_, adapted := dm.Provider().(*decision.LLMAdapter)
-		return dm, adapted, string(m.ID), ""
+		return dm, string(m.ID), ""
 	}
 	warn := "no eligible model configured for permission review; risky auto-mode requests will keep prompting"
 	if lastErr != "" {
 		warn = fmt.Sprintf("permission reviewer could not initialize a model (%s); risky auto-mode requests will keep prompting", lastErr)
 	}
-	return nil, false, "", warn
+	return nil, "", warn
 }
 
 // requestClass buckets a card into the bounded telemetry class.

@@ -83,7 +83,7 @@ func (s *Session) interactive() bool {
 // hostApprovalReviewTimeout bounds the silent decision-model review that
 // precedes a human host prompt in auto mode. The full hostApprovalTimeout
 // still applies to the human prompt after a deferral.
-const hostApprovalReviewTimeout = 8 * time.Second
+const hostApprovalReviewTimeout = 3 * time.Second
 
 // requestHostApproval is the sandbox proxy's OnUnlistedHost callback. It runs
 // the synthetic net(host) plan through the session permission engine: rules
