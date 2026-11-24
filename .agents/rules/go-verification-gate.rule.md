@@ -4,19 +4,22 @@ kind: Rule
 metadata:
   name: go-verification-gate
   displayName: Go Verification Gate Before Completion
-  description: Requires tests, vet, go fix, gofmt, and lint to pass before any task is declared complete
+  description: Requires tests, vet, go fix, gofmt, and lint for Go source and module changes
   labels:
     category: quality
 spec:
   priority: 60
   triggers:
-    always: true
+    globs: ["**/*.go", "go.mod", "go.sum"]
+    useWhen: Adding, modifying, or deleting Go source or module files
 ---
 
 # Go Verification Gate Before Completion
 
-No task in this workspace is finished until every check below passes. Run them from the
-repository root **after your last edit**, then report the results honestly.
+Run the checks below only if your task adds, modifies, or deletes a `.go` file, `go.mod`, or
+`go.sum`. Documentation-only and other non-Go changes do not require this gate, even if you
+read Go files during the task. For Go changes, run all checks from the repository root
+**after your last edit**, then report the results honestly.
 
 ## Required checks (in order)
 
