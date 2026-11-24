@@ -7,7 +7,16 @@ spec:
   endpoint: http://localhost:11434
   defaultModels:
     completion: qwen3.8
+    decision: nimble-v3
   models:
+    - id: nimble-v3
+      name: nimble-v3
+      label: Nimble v3 Decision
+      limits:
+        context: 32768
+      capabilities:
+        completion: false
+        decision: true
     - id: qwen3.8
       name: qwen3.8
       label: Qwen 3.8

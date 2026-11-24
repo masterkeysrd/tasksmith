@@ -84,7 +84,7 @@ var ToolSearchToolWidget = trail.FC("ToolSearchToolWidget", func(props ToolSearc
 		headerNodes = append(headerNodes, stateSuffix)
 	}
 
-	return wrapToolWidget(headerNodes, toolErrorSubline(tool, scheme))
+	return wrapToolWidget(tool, scheme, headerNodes)
 })
 
 func ToolSearchToolRenderer(tool store.ToolPart) trail.Node {

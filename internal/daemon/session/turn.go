@@ -668,8 +668,8 @@ func (s *Session) reevaluatePendingPermissions(ctx context.Context, mode api.Per
 	var changed, ready bool
 	for _, req := range pending {
 		plan, ok := state.PendingToolPlans[req.ID]
-		if !ok || req.Safety == api.SafetyUnsafe || plan.Safety == api.SafetyUnsafe || plan.BypassSandbox ||
-			(plan.Action == api.ActionNet && plan.ToolName == "net") {
+		if !ok || req.Safety == api.SafetyUnsafe || plan.Safety == api.SafetyUnsafe ||
+			plan.BypassSandbox || (plan.Action == api.ActionNet && plan.ToolName == "net") {
 			continue
 		}
 		access, _, err := manager.Evaluate(&plan)
@@ -1151,6 +1151,14 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 
 		case api.CacheBrokenRecord:
 			if err := s.appendTimeline(ctx, timeline.NewCacheBrokenEntry(ev)); err != nil {
+				return nil, err
+			}
+
+		case api.PermissionRecord:
+			// Reviewer-approved auto-mode cards arrive from the harness with
+			// their receipt attached; human decisions are recorded through the
+			// resolve path instead.
+			if err := s.appendTimeline(ctx, timeline.NewPermissionEntry(ev)); err != nil {
 				return nil, err
 			}
 

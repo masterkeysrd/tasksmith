@@ -25,7 +25,61 @@ const (
 	// the rules they reference.
 	MetaRuleNames   = "tasksmith.rule.names"
 	MetaAttachments = "tasksmith.attachments"
+	// MetaPermissionReview carries the *api.PermissionReview receipt attached
+	// to a tool result message when the auto-mode permission reviewer
+	// approved the card instead of interrupting the human.
+	MetaPermissionReview = "tasksmith.permission_review"
 )
+
+// SetPermissionReview attaches the reviewer receipt to a tool result message.
+// Any pre-existing value (e.g. a forged key echoed through structured tool
+// content) is replaced, so a tool can never fabricate its own approval.
+func SetPermissionReview(msg *message.Tool, review *api.PermissionReview) {
+	if msg == nil {
+		return
+	}
+	meta := msg.GetMetadata()
+	if review == nil {
+		delete(meta, MetaPermissionReview)
+		return
+	}
+	if meta == nil {
+		meta = make(map[string]any)
+	}
+	meta[MetaPermissionReview] = review
+	msg.SetMetadata(meta)
+}
+
+// PermissionReviewOf retrieves the reviewer receipt from a message, handling
+// both the in-memory *api.PermissionReview and the JSON-deserialized
+// map[string]any form restored from the SQLite journal.
+func PermissionReviewOf(msg message.Message) *api.PermissionReview {
+	if msg == nil {
+		return nil
+	}
+	raw, ok := msg.GetMetadata()[MetaPermissionReview]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case *api.PermissionReview:
+		return v
+	case api.PermissionReview:
+		return &v
+	case map[string]any:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		var out api.PermissionReview
+		if err := json.Unmarshal(b, &out); err != nil {
+			return nil
+		}
+		return &out
+	default:
+		return nil
+	}
+}
 
 // SetAttachments attaches structured api.Attachment references to a user message.
 func SetAttachments(msg *message.User, atts []api.Attachment) {
@@ -264,6 +318,37 @@ func (s State) LastUserMessageID() string {
 		if u, ok := m.(*message.User); ok && u != nil && SystemKindOf(u) != SystemKindReminder && u.GetID() != "" {
 			return u.GetID()
 		}
+	}
+	return ""
+}
+
+// LastUserIntentText returns the plain text of the most recent genuine user
+// prompt: synthetic system messages (reminders, !cmd outputs, tasks,
+// compactions, subagent traffic) are skipped, and injected <system_reminders>
+// blocks inside real user messages are stripped. It backs the permission
+// reviewer's user_intent field.
+func (s State) LastUserIntentText() string {
+	for _, m := range slices.Backward(s.Messages) {
+		u, ok := m.(*message.User)
+		if !ok || u == nil || SystemKindOf(u) != "" {
+			continue
+		}
+		var parts []string
+		for _, b := range u.Content {
+			tb, ok := b.(*message.TextBlock)
+			if !ok {
+				continue
+			}
+			text := strings.TrimSpace(tb.Text)
+			if text == "" || strings.HasPrefix(text, "<system_reminders>") {
+				continue
+			}
+			parts = append(parts, text)
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		return strings.Join(parts, "\n")
 	}
 	return ""
 }

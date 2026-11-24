@@ -66,6 +66,9 @@ type ModeChange struct {
 type PermissionRecord struct {
 	Request  PermissionRequest  `json:"request"`
 	Decision PermissionDecision `json:"decision"`
+	// Review carries the decision-model review receipt when the request was
+	// approved once by the auto-mode permission reviewer instead of a human.
+	Review *PermissionReview `json:"review,omitempty"`
 }
 
 type QuestionRecord struct {

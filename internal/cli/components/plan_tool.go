@@ -30,17 +30,7 @@ var enterPlanToolWidget = trail.FC("EnterPlanToolWidget", func(props planToolPro
 	if suffix := toolStateSuffix(tool.Status, scheme); suffix != nil {
 		headerNodes = append(headerNodes, suffix)
 	}
-	headerRow := trail.Box(trail.BoxProps{
-		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Width(style.Percent(100)).MinWidth(style.Cells(0)),
-	}, headerNodes...)
-
-	children := []trail.Node{headerRow}
-	if errNode := toolErrorSubline(tool, scheme); errNode != nil {
-		children = append(children, errNode)
-	}
-	return trail.Box(trail.BoxProps{
-		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Width(style.Percent(100)).MinWidth(style.Cells(0)),
-	}, children...)
+	return wrapToolWidget(tool, scheme, headerNodes)
 })
 
 var exitPlanToolWidget = trail.FC("ExitPlanToolWidget", func(props planToolProps) trail.Node {
@@ -86,13 +76,9 @@ var exitPlanToolWidget = trail.FC("ExitPlanToolWidget", func(props planToolProps
 		headerNodes = append(headerNodes, suffix)
 	}
 
-	headerRow := trail.Box(trail.BoxProps{
-		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Width(style.Percent(100)).MinWidth(style.Cells(0)),
-	}, headerNodes...)
-
-	children := []trail.Node{headerRow}
+	var planSubline trail.Node
 	if subline != "" {
-		children = append(children, trail.Box(trail.BoxProps{
+		planSubline = trail.Box(trail.BoxProps{
 			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Width(style.Percent(100)).MinWidth(style.Cells(0)),
 		},
 			trail.Span(trail.SpanProps{
@@ -101,15 +87,9 @@ var exitPlanToolWidget = trail.FC("ExitPlanToolWidget", func(props planToolProps
 			trail.Span(trail.SpanProps{
 				Style: style.S().Flex(1, 1).MinWidth(style.Cells(0)).WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere).Foreground(scheme.Color.Text.Secondary),
 			}, trail.Text(subline)),
-		))
+		)
 	}
-	if errNode := toolErrorSubline(tool, scheme); errNode != nil {
-		children = append(children, errNode)
-	}
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Width(style.Percent(100)).MinWidth(style.Cells(0)),
-	}, children...)
+	return wrapToolWidget(tool, scheme, headerNodes, planSubline)
 })
 
 // PlanToolRenderer renders enter_plan_mode and exit_plan_mode tool invocations.

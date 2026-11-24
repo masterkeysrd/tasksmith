@@ -23,6 +23,7 @@ type Usage struct {
 	tools     map[string]*api.ToolUsage
 	changes   api.UsageChanges
 	cache     api.UsageCache
+	review    *api.UsagePermissionReview
 	firstAt   time.Time
 	lastAt    time.Time
 
@@ -90,7 +91,7 @@ func (u *Usage) tool(name string) *api.ToolUsage {
 // Apply adds one record to the accumulator. Kinds it does not know are ignored.
 func (u *Usage) Apply(e Entry) {
 	switch e.Kind {
-	case KindLLMCall, KindToolCall, KindFileChange:
+	case KindLLMCall, KindToolCall, KindFileChange, KindPermissionReview:
 		if u.firstAt.IsZero() || e.CreatedAt.Before(u.firstAt) {
 			u.firstAt = e.CreatedAt
 		}
@@ -109,6 +110,22 @@ func (u *Usage) Apply(e Entry) {
 		addLLM(group(u.tiers, tier), e.Record)
 		addLLM(group(u.purposes, e.Attr(AttrPurpose)), e.Record)
 		u.applyCache(e)
+	case KindPermissionReview:
+		if u.review == nil {
+			u.review = &api.UsagePermissionReview{Outcomes: map[string]int64{}}
+		}
+		u.review.Reviews++
+		outcome := e.Attr(AttrOutcome)
+		if outcome == "" {
+			outcome = "error"
+		}
+		u.review.Outcomes[outcome]++
+		if outcome == ReviewOutcomeApproved {
+			u.review.Approved++
+		} else {
+			u.review.Deferred++
+		}
+		u.review.DurationMS += e.Value(LatencyDuration)
 	case KindToolCall:
 		t := u.tool(e.Attr(AttrTool))
 		t.Calls++
@@ -178,6 +195,7 @@ func (u *Usage) Snapshot() api.SessionUsage {
 		Tools:     sortedTools(u.tools),
 		Changes:   u.changes,
 		Cache:     u.cache,
+		Review:    u.review,
 		FirstAt:   u.firstAt,
 		LastAt:    u.lastAt,
 	}

@@ -2029,3 +2029,208 @@ func TestSubagentConversationLoadTimelineSnapshotSeedsTurnStart(t *testing.T) {
 		t.Fatalf("SubagentConversation TurnStats startedAt = %v, want %v", startedAt, subStart)
 	}
 }
+
+func TestConversationPermissionReviewProjectionAndNetTimeline(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	review := &api.PermissionReview{
+		RequestID:     "perm-tool-1",
+		Source:        "decision_model",
+		Verdict:       "approve_once",
+		Model:         "typesafe/jev-latest",
+		DecisionScope: "system",
+		RubricDigest:  "deadbeef",
+		Probability:   0.96,
+		Threshold:     0.90,
+		LatencyMs:     42,
+	}
+	netReview := &api.PermissionReview{
+		RequestID:     "perm-net-1",
+		Source:        "decision_model",
+		Verdict:       "approve_once",
+		Model:         "typesafe/jev-latest",
+		DecisionScope: "system",
+		Probability:   0.97,
+		Threshold:     0.90,
+		LatencyMs:     18,
+	}
+
+	entries := []api.TimelineEntry{
+		{
+			ID:   "e-asst",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:   "m-asst",
+				Role: api.RoleAssistant,
+				Content: []api.Block{{
+					Type: api.BlockToolCall,
+					ToolCall: &api.ToolCall{
+						ID:   "tc-1",
+						Name: "bash",
+						Args: map[string]any{"command": "rm -rf build"},
+					},
+				}},
+			},
+		},
+		{
+			ID:   "e-net",
+			Kind: api.TimelineKindPermission,
+			Permission: &api.PermissionRecord{
+				Request: api.PermissionRequest{
+					ID:       "perm-net-1",
+					ToolName: "net",
+					Action:   api.ActionNet,
+					Target:   "registry.npmjs.org",
+				},
+				Decision: api.PermissionDecision{RequestID: "perm-net-1", Kind: api.DecisionAllowOnce},
+				Review:   netReview,
+			},
+		},
+		{
+			ID:   "e-tool",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:               "m-tool",
+				Role:             api.RoleTool,
+				ToolCallID:       "tc-1",
+				Name:             "bash",
+				Content:          []api.Block{{Type: api.BlockText, Text: "ok"}},
+				PermissionReview: review,
+			},
+		},
+	}
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-review")
+	acc.loadTimelineSnapshot(&api.Session{ID: "sess-review", Status: api.StatusIdle}, entries, nil)
+
+	tr := GetTranscript()
+	if tr.Items == nil {
+		t.Fatal("expected transcript items")
+	}
+	var sawNetTimeline bool
+	var sawToolReview *api.PermissionReview
+	for _, item := range *tr.Items {
+		if item.Kind == TranscriptKindTimeline {
+			if e, ok := item.Data.(api.TimelineEntry); ok && e.ID == "e-net" {
+				sawNetTimeline = true
+			}
+		}
+		if item.Kind == TranscriptKindMessage {
+			if m, ok := item.Data.(Message); ok {
+				for _, p := range m.Parts {
+					if p.Tool != nil && p.Tool.ID == "tc-1" {
+						sawToolReview = p.Tool.PermissionReview
+					}
+				}
+			}
+		}
+	}
+	if !sawNetTimeline {
+		t.Fatal("expected TimelineKindPermission for net with Review to be appended to transcript")
+	}
+	if sawToolReview == nil || sawToolReview.Model != "typesafe/jev-latest" || sawToolReview.Probability != 0.96 {
+		t.Fatalf("expected ToolPart.PermissionReview preserved, got %+v", sawToolReview)
+	}
+
+	// Also verify live EventEntryAdded for net auto-approval appends to transcript.
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-review",
+			Entry: api.TimelineEntry{
+				ID:   "e-net-live",
+				Kind: api.TimelineKindPermission,
+				Permission: &api.PermissionRecord{
+					Request: api.PermissionRequest{
+						ID:       "perm-net-2",
+						ToolName: "net",
+						Action:   api.ActionNet,
+						Target:   "proxy.golang.org",
+					},
+					Decision: api.PermissionDecision{RequestID: "perm-net-2", Kind: api.DecisionAllowOnce},
+					Review:   netReview,
+				},
+			},
+		},
+	})
+	var sawLiveNet bool
+	for _, item := range *GetTranscript().Items {
+		if item.Kind == TranscriptKindTimeline {
+			if e, ok := item.Data.(api.TimelineEntry); ok && e.ID == "e-net-live" {
+				sawLiveNet = true
+			}
+		}
+	}
+	if !sawLiveNet {
+		t.Fatal("expected live TimelineKindPermission for net with Review to append to transcript")
+	}
+
+	// Verify TimelineKindPermission with ToolCallID + Review populates ToolPart.PermissionReview
+	// even when the subsequent tool message (e.g. exit_plan_mode) omits PermissionReview.
+	ClearTranscript()
+	ResetStream()
+	planAcc := newConversationAccumulator()
+	planAcc.setSessionID("sess-plan-review")
+	planRev := &api.PermissionReview{
+		RequestID:     "perm-plan-1",
+		Source:        "decision_model",
+		Verdict:       "approve_once",
+		Model:         "typesafe/jev-latest",
+		DecisionScope: "system",
+		Probability:   0.95,
+		Threshold:     0.90,
+	}
+	planAcc.loadTimelineSnapshot(&api.Session{ID: "sess-plan-review", Status: api.StatusIdle}, []api.TimelineEntry{
+		{
+			ID:   "e-p-asst",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:   "m-p-asst",
+				Role: api.RoleAssistant,
+				Content: []api.Block{{
+					Type:     api.BlockToolCall,
+					ToolCall: &api.ToolCall{ID: "tc-exit-plan", Name: "exit_plan_mode"},
+				}},
+			},
+		},
+		{
+			ID:   "e-p-perm",
+			Kind: api.TimelineKindPermission,
+			Permission: &api.PermissionRecord{
+				Request:  api.PermissionRequest{ID: "perm-plan-1", ToolCallID: "tc-exit-plan", ToolName: "exit_plan_mode"},
+				Decision: api.PermissionDecision{RequestID: "perm-plan-1", ToolCallID: "tc-exit-plan", Kind: api.DecisionAllowOnce},
+				Review:   planRev,
+			},
+		},
+		{
+			ID:   "e-p-tool",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:         "m-p-tool",
+				Role:       api.RoleTool,
+				ToolCallID: "tc-exit-plan",
+				Name:       "exit_plan_mode",
+				Content:    []api.Block{{Type: api.BlockText, Text: "approved"}},
+			},
+		},
+	}, nil)
+	var gotPlanReview *api.PermissionReview
+	for _, item := range *GetTranscript().Items {
+		if item.Kind == TranscriptKindMessage {
+			if m, ok := item.Data.(Message); ok {
+				for _, p := range m.Parts {
+					if p.Tool != nil && p.Tool.ID == "tc-exit-plan" {
+						gotPlanReview = p.Tool.PermissionReview
+					}
+				}
+			}
+		}
+	}
+	if gotPlanReview == nil || gotPlanReview.RequestID != "perm-plan-1" {
+		t.Fatalf("expected ToolPart.PermissionReview populated from TimelineKindPermission, got %+v", gotPlanReview)
+	}
+}

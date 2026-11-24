@@ -301,6 +301,8 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 		model = model.WithMiddleware(antigravitySessionMiddleware())
 	case "anthropic":
 		model = model.WithMiddleware(anthropicCachingMiddleware())
+	case "openai", providers.CodexName:
+		model = model.WithMiddleware(providers.OpenAIStrictResponseSchemaMiddleware())
 	}
 	model = model.WithMiddleware(llm.DeferredToolsMiddleware(nil), llm.InlineToolsMiddleware(nil))
 	model = model.WithMiddleware(metricsLLMMiddleware(m, g.cfg.Metrics, inst.quotaBilled(m)))
@@ -340,7 +342,11 @@ func (g *gatewayImpl) Decision(ctx context.Context, m models.Model, cfg llm.Mode
 			return nil, fmt.Errorf("gateway: failed to create decision model: %w", err)
 		}
 		p := m.Profile()
-		return model.WithProfile(&p).WithMiddleware(errorEnrichingDecisionMiddleware()), nil
+		return model.WithProfile(&p).
+			WithMiddleware(
+				errorEnrichingDecisionMiddleware(),
+				metricsDecisionMiddleware(m, g.cfg.Metrics, inst.quotaBilled(m)),
+			), nil
 	}
 	completion, err := g.LLM(ctx, m, cfg)
 	if err != nil {

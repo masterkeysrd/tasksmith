@@ -80,6 +80,7 @@ type TrustStatus struct {
 type ExecutableConfigSummary struct {
 	MCPServers  []string `json:"mcp_servers,omitempty"`
 	CustomTools []string `json:"custom_tools,omitempty"`
+	Decisions   []string `json:"decisions,omitempty"`
 	HasEnv      bool     `json:"has_env,omitempty"`
 }
 
@@ -1093,6 +1094,9 @@ type Message struct {
 	IsError           bool            `json:"is_error,omitempty"`
 	CreatedAt         time.Time       `json:"created_at,omitzero"`
 	Attachments       []Attachment    `json:"attachments,omitempty"`
+	// PermissionReview carries the decision-model review receipt when a
+	// risky tool plan was auto-approved once in auto mode.
+	PermissionReview *PermissionReview `json:"permission_review,omitempty"`
 }
 
 // Chunk represents an incremental streaming assistant delta.
@@ -1329,6 +1333,22 @@ type PermissionRequest struct {
 	// trusted excludedCommands match (which keeps ordinary tool(...) rules).
 	// Both variants set Unsandboxed so the UI warning badge shows for either.
 	BypassSandbox bool `json:"bypass_sandbox,omitempty"`
+}
+
+// PermissionReview is the audit receipt of a calibrated decision-model review
+// that approved a permission card once in auto mode. It never represents a
+// standing grant: the approval applies exactly once to the reviewed request.
+type PermissionReview struct {
+	RequestID     string  `json:"request_id"`
+	Source        string  `json:"source"` // "decision_model"
+	Verdict       string  `json:"verdict"`
+	Model         string  `json:"model"`          // "<provider>/<model>"
+	DecisionScope string  `json:"decision_scope"` // "system" | "user" | "workspace" | "local"
+	RubricDigest  string  `json:"rubric_digest"`  // short SHA-256 of the rendered rubric + question spec
+	Probability   float64 `json:"probability"`    // P(approve_once) in [0,1]
+	Confidence    float64 `json:"confidence"`     // normalized entropy 1 - H(p)/ln(2)
+	Threshold     float64 `json:"threshold"`      // effective P(approve_once) threshold applied
+	LatencyMs     int64   `json:"latency_ms"`
 }
 
 // PermissionDecision submits a user's resolution for a pending [PermissionRequest].

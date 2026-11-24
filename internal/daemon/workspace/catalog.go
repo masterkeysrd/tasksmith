@@ -51,6 +51,14 @@ type RuleSnapshot struct {
 	Def *warp.Rule
 }
 
+// DecisionSnapshot pairs a Decision manifest with the namespace scope it was
+// resolved from. Decisions have no API presentation surface yet, so the
+// snapshot carries the raw definition plus its normalized scope.
+type DecisionSnapshot struct {
+	Def   *warp.Decision
+	Scope string
+}
+
 // ToolSnapshot pairs an API Tool presentation with its defining warp.Tool.
 type ToolSnapshot struct {
 	api.Tool
@@ -764,20 +772,34 @@ func (c *Catalog) populate() {
 	c.state.Store(st.clone())
 }
 
-// isToleratedSystemTierIssue reports whether issue is a missing-alias diagnostic
-// for a standardized tier alias ("@fast", "@balanced", "@smart", "@flagship")
-// on a built-in system agent. Workspaces driven by custom providers without tier
-// aliases intentionally fall back to subsequent spec.models entries instead of
-// surfacing spurious startup warnings, while user-authored agents keep strict
-// validation.
+// isToleratedSystemTierIssue reports whether issue is an unresolvable-model-ref
+// diagnostic on a built-in system resource. For system agents, a missing tier
+// alias ("@fast", "@balanced", "@smart", "@flagship") is tolerated; for the
+// built-in permission-reviewer Decision, any alias-resolution failure on its
+// spec.models references is tolerated (an unmatched "@permission-reviewer"
+// alias, or "@default"/"@fast" in workspaces without decision models or tier
+// aliases). Both cases intentionally fall back to subsequent spec.models
+// entries — the permission reviewer degrades to a local defer with a warning
+// instead of surfacing spurious startup noise — while user-authored resources
+// keep strict validation.
 func isToleratedSystemTierIssue(issue warp.ValidationIssue) bool {
-	if issue.Namespace != warp.NamespaceSystem || issue.Kind != warp.KindAgent || issue.Field != "spec.models" {
+	if issue.Namespace != warp.NamespaceSystem || issue.Field != "spec.models" {
 		return false
 	}
-	for _, tier := range TierAliases {
-		if strings.HasSuffix(issue.Message, fmt.Sprintf("unknown model alias %q", tier)) {
-			return true
+	switch issue.Kind {
+	case warp.KindAgent:
+		for _, tier := range TierAliases {
+			if strings.HasSuffix(issue.Message, fmt.Sprintf("unknown model alias %q", tier)) {
+				return true
+			}
 		}
+	case warp.KindDecision:
+		if !strings.HasSuffix(issue.QualifiedName, "/"+PermissionReviewerDecisionName) {
+			return false
+		}
+		return strings.Contains(issue.Message, "unknown model alias") ||
+			strings.Contains(issue.Message, "cannot resolve @default") ||
+			strings.Contains(issue.Message, "has no default or decision model for @default")
 	}
 	return false
 }
@@ -1474,6 +1496,25 @@ func (c *Catalog) GetRule(name string) (RuleSnapshot, bool) {
 		}
 	}
 	return RuleSnapshot{}, false
+}
+
+// GetDecision resolves an effective Decision by name or qualified name across
+// the standard 4-tier WARP hierarchy (local > workspace > user > system), so a
+// workspace-committed .agents/decisions/<name>.decision.md overrides the
+// built-in system manifest of the same name.
+func (c *Catalog) GetDecision(name string) (DecisionSnapshot, bool) {
+	res, ok := c.resolveByKind(warp.KindDecision, name)
+	if !ok {
+		return DecisionSnapshot{}, false
+	}
+	dec, ok := res.(*warp.Decision)
+	if !ok {
+		return DecisionSnapshot{}, false
+	}
+	return DecisionSnapshot{
+		Def:   dec,
+		Scope: c.ScopeNamespace(dec.BaseResource),
+	}, true
 }
 
 // HasConditionalRules reports whether the resolved agent has at least one rule

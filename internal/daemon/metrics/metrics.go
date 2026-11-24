@@ -58,6 +58,9 @@ const (
 	PurposeChat       Purpose = "chat"
 	PurposeCompaction Purpose = "compaction"
 	PurposeTitle      Purpose = "title"
+	// PurposePermissionReview labels inference performed by the auto-mode
+	// permission reviewer rather than the conversational agent.
+	PurposePermissionReview Purpose = "permission_review"
 )
 
 // Kinds written by TaskSmith.
@@ -65,6 +68,9 @@ const (
 	KindLLMCall    Kind = "llm_call"
 	KindToolCall   Kind = "tool_call"
 	KindFileChange Kind = "file_change"
+	// KindPermissionReview records one auto-mode permission-reviewer outcome
+	// (including deferrals), separate from the llm_call inference record.
+	KindPermissionReview Kind = "permission_review"
 )
 
 // Attribute keys written by TaskSmith.
@@ -82,6 +88,11 @@ const (
 	AttrSource     = "source"
 	AttrChange     = "change"
 	AttrRevert     = "revert"
+
+	AttrOutcome      = "outcome"
+	AttrRequestClass = "request_class"
+	AttrDecision     = "decision_scope"
+	AttrRubricDigest = "rubric_digest"
 )
 
 // Billing modes recorded on llm_call records. A quota-billed call has no price
@@ -91,6 +102,52 @@ const (
 	BillingToken = "token"
 	BillingQuota = "quota"
 )
+
+// Review outcomes recorded on permission_review records. Everything other
+// than ReviewOutcomeApproved fell back to the human permission flow.
+const (
+	ReviewOutcomeApproved        = "approved"
+	ReviewOutcomeDeferred        = "deferred"
+	ReviewOutcomeBelowThreshold  = "below_threshold"
+	ReviewOutcomeNoModel         = "no_model"
+	ReviewOutcomeOversize        = "oversize"
+	ReviewOutcomeInvalidManifest = "invalid_manifest"
+	ReviewOutcomeTimeout         = "timeout"
+	ReviewOutcomeCanceled        = "canceled"
+	ReviewOutcomeError           = "error"
+)
+
+// PermissionReview describes one auto-mode permission-reviewer outcome for
+// [RecordPermissionReview]. Only bounded classification attributes are
+// recorded; raw commands, paths, summaries, and diffs never are.
+type PermissionReview struct {
+	Outcome      string // one of the ReviewOutcome* constants
+	RequestClass string // bypass_sandbox | net | unsafe | outside | delete
+	Model        string // "<provider>/<model>" when inference ran
+	Decision     string // decision manifest scope (system/user/workspace/local)
+	RubricDigest string // short rubric fingerprint
+	Duration     time.Duration
+}
+
+// RecordPermissionReview records a permission_review outcome. A nil recorder
+// disables recording.
+func RecordPermissionReview(ctx context.Context, r Recorder, c PermissionReview) error {
+	if r == nil {
+		return nil
+	}
+	return r.Record(ctx, Record{
+		Kind:   KindPermissionReview,
+		Status: StatusOK,
+		Attrs: attrs(
+			AttrOutcome, c.Outcome,
+			AttrRequestClass, c.RequestClass,
+			AttrModel, c.Model,
+			AttrDecision, c.Decision,
+			AttrRubricDigest, c.RubricDigest,
+		),
+		Measurements: []Measurement{{Metric: LatencyDuration, Value: c.Duration.Milliseconds()}},
+	})
+}
 
 // Metric names written by TaskSmith.
 const (

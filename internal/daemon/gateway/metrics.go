@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -123,5 +124,70 @@ func errorKind(err error) string {
 		return "timeout"
 	default:
 		return "provider_error"
+	}
+}
+
+// metricsDecisionMiddleware records one llm_call metric record for every
+// native decision.Provider inference attempt (the adapted LLMAdapter path is
+// already accounted for by metricsLLMMiddleware inside Gateway.LLM). Cost is
+// estimated here because loom attaches it outside the middleware chain.
+// Providers that omit usage leave token counts at zero rather than fabricating
+// them.
+func metricsDecisionMiddleware(m models.Model, rec metrics.Recorder, quotaBilled bool) decision.Middleware {
+	profile := m.Profile()
+	billing := metrics.BillingToken
+	if quotaBilled {
+		billing = metrics.BillingQuota
+	}
+	return func(next decision.Evaluator) decision.Evaluator {
+		return func(ctx context.Context, req *decision.Request) (*decision.Response, error) {
+			start := time.Now()
+			sc, _ := scope.From(ctx)
+			resp, err := next(ctx, req)
+
+			call := metrics.LLMCall{
+				Provider: m.ID.Provider(),
+				Model:    m.ID.Name(),
+				Purpose:  metrics.Purpose(sc.Purpose),
+				Status:   metrics.StatusOK,
+				Duration: time.Since(start),
+			}
+			switch {
+			case errors.Is(ctx.Err(), context.Canceled):
+				call.Status = metrics.StatusCanceled
+			case err != nil:
+				call.Status = metrics.StatusError
+				call.ErrorKind = errorKind(err)
+			}
+			var details message.TokenDetails
+			if resp != nil && resp.Metrics != nil {
+				details = resp.Metrics.Tokens
+				call.Processing = resp.Metrics.Timing.Processing
+				call.Generation = resp.Metrics.Timing.Generation
+			}
+			est := profile.Estimate(details)
+			call.Tokens = api.UsageTokens{
+				Input:      int64(details.Input),
+				Output:     int64(details.Output),
+				CacheRead:  int64(details.CacheRead),
+				CacheWrite: int64(details.CacheWrite),
+				Reasoning:  int64(details.Reasoning),
+			}
+			call.Cost = metrics.Cost{
+				Input:      int64(est.Details.Input),
+				Output:     int64(est.Details.Output),
+				CacheRead:  int64(est.Details.CacheRead),
+				CacheWrite: int64(est.Details.CacheWrite),
+				Reasoning:  int64(est.Details.Reasoning),
+				Total:      int64(est.Total),
+			}
+			call.CostTier = est.Tier
+			call.Priced = m.Pricing != nil && est.Priced
+			call.Billing = billing
+			if rErr := metrics.RecordLLMCall(ctx, rec, call); rErr != nil {
+				log.Warn("failed to record decision call metrics", log.String("error", rErr.Error()))
+			}
+			return resp, err
+		}
 	}
 }

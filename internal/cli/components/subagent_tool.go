@@ -141,7 +141,7 @@ var InvokeAgentToolWidget = trail.FC("InvokeAgentToolWidget", func(props InvokeA
 		headerNodes = append(headerNodes, stateSuffix)
 	}
 
-	return wrapToolWidget(headerNodes, toolErrorSubline(tool, scheme))
+	return wrapToolWidget(tool, scheme, headerNodes)
 })
 
 func InvokeAgentToolRenderer(tool store.ToolPart) trail.Node {
@@ -261,7 +261,7 @@ var ManageAgentsToolWidget = trail.FC("ManageAgentsToolWidget", func(props Manag
 		headerNodes = append(headerNodes, stateSuffix)
 	}
 
-	return wrapToolWidget(headerNodes, toolErrorSubline(tool, scheme))
+	return wrapToolWidget(tool, scheme, headerNodes)
 })
 
 func ManageAgentsToolRenderer(tool store.ToolPart) trail.Node {

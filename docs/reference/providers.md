@@ -17,7 +17,7 @@ TaskSmith includes built-in drivers and presets for the following providers:
 | **Anthropic** | `anthropic` | `completion`, `decision` (fallback) | Extended thinking, deep reasoning (`claude-sonnet-5-5`, `claude-opus-5-5`), prompt caching | [Anthropic Guide](./providers/anthropic.md) |
 | **Claude Code** | `claudecode` | `completion` | Claude subscription inference through the installed `claude` CLI | [Claude Code Guide](./providers/claudecode.md) |
 | **GitHub Copilot** | `github-copilot` | `completion` | Copilot subscription inference through an installed `copilot` CLI that speaks protocol 4 | [GitHub Copilot Guide](./providers/github-copilot.md) |
-| **Ollama** | `ollama` | `completion`, `decision`, `embedding` | 100% offline local inference (`qwen3.8`, `nimble-v3`, `nomic-embed-text`), zero data egress | [Ollama Guide](./providers/ollama.md) |
+| **Ollama** | `ollama` | `completion`, `decision`, `embedding` | Local inference with preset defaults `qwen3.8` (completion) and `nimble-v3` (decision) | [Ollama Guide](./providers/ollama.md) |
 | **Google GenAI** | `google-genai`, `genai`, `gemini` | `completion`, `embedding` | Multimodal inputs and 1M+ token context, with `gemini-4-neon` as the preset default | [Google GenAI Guide](./providers/google-genai.md) |
 | **TypeSafe** | `typesafe` | `decision` | Ultra-fast native System 1 decisions (`jev-latest`), sub-50ms deterministic classifications | [TypeSafe Guide](./providers/typesafe.md) |
 | **Antigravity** | `antigravity` | `completion` | Enterprise model gateway with managed thinking effort tiers (`gemini-4-hydrogen`, `gemini-3.8-flash`) | [Antigravity Guide](./providers/antigravity.md) |

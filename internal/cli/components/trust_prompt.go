@@ -51,7 +51,7 @@ var TrustPrompt = trail.FC("TrustPrompt", func(props TrustPromptProps) trail.Nod
 	}
 
 	execs := props.Status.Executables
-	if len(execs.MCPServers) > 0 || len(execs.CustomTools) > 0 || execs.HasEnv {
+	if len(execs.MCPServers) > 0 || len(execs.CustomTools) > 0 || len(execs.Decisions) > 0 || execs.HasEnv {
 		var execLines []trail.Node
 		execLines = append(execLines, trail.Span(trail.SpanProps{
 			Style: style.S().Foreground(scheme.Color.Text.Secondary),
@@ -65,6 +65,12 @@ var TrustPrompt = trail.FC("TrustPrompt", func(props TrustPromptProps) trail.Nod
 		}
 		if len(execs.CustomTools) > 0 {
 			label := fmt.Sprintf("  ▸ %d custom tool(s) %s", len(execs.CustomTools), strings.Join(execs.CustomTools, ", "))
+			execLines = append(execLines, trail.Span(trail.SpanProps{
+				Style: style.S().Foreground(scheme.Color.Text.Muted),
+			}, trail.Text(label)))
+		}
+		if len(execs.Decisions) > 0 {
+			label := fmt.Sprintf("  ▸ %d decision(s)   %s", len(execs.Decisions), strings.Join(execs.Decisions, ", "))
 			execLines = append(execLines, trail.Span(trail.SpanProps{
 				Style: style.S().Foreground(scheme.Color.Text.Muted),
 			}, trail.Text(label)))

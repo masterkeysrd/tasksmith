@@ -1057,6 +1057,7 @@ func (d *Daemon) GetTrustStatus(ctx context.Context, rawWS string) (*api.TrustSt
 		Executables: api.ExecutableConfigSummary{
 			MCPServers:  summary.MCPServers,
 			CustomTools: summary.CustomTools,
+			Decisions:   summary.Decisions,
 			HasEnv:      summary.HasEnv,
 		},
 	}, nil
@@ -1121,6 +1122,7 @@ func (d *Daemon) GetWorkspaceStatus(ctx context.Context, rawWS string) (*api.Wor
 		Executables: api.ExecutableConfigSummary{
 			MCPServers:  summary.MCPServers,
 			CustomTools: summary.CustomTools,
+			Decisions:   summary.Decisions,
 			HasEnv:      summary.HasEnv,
 		},
 		GlobalProviders:    globalProviders,

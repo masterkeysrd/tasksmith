@@ -190,6 +190,9 @@ func ToAPIMessage(msg message.Message) (*api.Message, error) {
 		out.ToolCallID = tm.ToolCallID
 		out.Name = tm.Name
 		out.IsError = tm.IsError
+		if review := harness.PermissionReviewOf(tm); review != nil {
+			out.PermissionReview = review
+		}
 		if tm.StructuredContent != nil {
 			data, err := tm.CanonicalStructuredContent()
 			if err != nil {

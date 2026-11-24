@@ -59,7 +59,11 @@ var questionToolWidget = trail.FC("QuestionToolWidget", func(props questionToolP
 			trail.Span(trail.SpanProps{Style: textStyle.Flex(1, 1).MinWidth(style.Cells(0))}, trail.Text(text)),
 		)
 	}
-	children := []trail.Node{row("", heading, headerStyle)}
+	headerRow := trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow).Width(style.Percent(100)).MinWidth(style.Cells(0))},
+		trail.Span(trail.SpanProps{Style: headerStyle.Flex(0, 1).MinWidth(style.Cells(0))}, trail.Text(heading)),
+		toolAutoApprovedBadge(tool, scheme),
+	)
+	children := []trail.Node{headerRow}
 	for i, q := range input.Questions {
 		if strings.TrimSpace(q.Question) == "" {
 			continue
@@ -74,6 +78,9 @@ var questionToolWidget = trail.FC("QuestionToolWidget", func(props questionToolP
 	}
 	if answered && output.Canceled {
 		children = append(children, row("    > ", "Canceled", answerStyle))
+	}
+	if toolPermissionReview(tool) != nil {
+		children = append(children, ToolPermissionReviewSubline(ToolPermissionReviewSublineProps{Tool: tool}))
 	}
 	if err := toolErrorSubline(tool, scheme); err != nil {
 		children = append(children, err)

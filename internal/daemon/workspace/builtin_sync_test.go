@@ -476,3 +476,68 @@ func TestBuiltinSandboxPermissionReferences(t *testing.T) {
 		}
 	}
 }
+
+// TestBuiltinPermissionReviewerDecisionSync verifies the built-in permission
+// reviewer Decision materializes through EnsureBuiltinDir, resolves on a plain
+// workspace catalog as a system resource, parses and renders its rubric, and
+// that a workspace-level override wins across the 4-tier hierarchy.
+func TestBuiltinPermissionReviewerDecisionSync(t *testing.T) {
+	setupTestXDG(t)
+	ws, err := Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, ok := ws.Catalog().GetDecision(PermissionReviewerDecisionName)
+	if !ok {
+		t.Fatal("built-in permission-reviewer decision missing")
+	}
+	if snap.Scope != string(warp.NamespaceSystem) {
+		t.Fatalf("permission-reviewer scope = %q, want system", snap.Scope)
+	}
+	builtinDir, err := EnsureBuiltinDir()
+	if err != nil {
+		t.Fatalf("EnsureBuiltinDir: %v", err)
+	}
+	synced, err := os.ReadFile(filepath.Join(builtinDir, "decisions", "permission-reviewer.decision.md"))
+	if err != nil {
+		t.Fatalf("synced decision missing: %v", err)
+	}
+	if !strings.Contains(string(synced), "approve_once") || !strings.Contains(string(synced), "defer_to_user") {
+		t.Fatal("synced decision missing verdict options")
+	}
+	text, err := snap.Def.Render(&warp.DecisionRenderOptions{
+		Workspace: ws.Catalog().WorkspaceSpec(),
+		Project:   ws.Catalog().Project(),
+	})
+	if err != nil || !strings.Contains(text, "untrusted") {
+		t.Fatalf("decision render: %v", err)
+	}
+	if len(snap.Def.Spec.Questions) != 1 || snap.Def.Spec.Questions[0].Name != "verdict" {
+		t.Fatalf("decision questions = %+v, want single verdict question", snap.Def.Spec.Questions)
+	}
+
+	// A workspace override must win over the system built-in.
+	wsDir := t.TempDir()
+	overrideDir := filepath.Join(wsDir, ".agents", "decisions")
+	if err := os.MkdirAll(overrideDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	override := "---\napiVersion: warp/v1alpha1\nkind: Decision\nmetadata:\n  name: permission-reviewer\nspec:\n  models: [\"@default\"]\n  questions:\n    - name: verdict\n      type: choice\n      threshold: 0.98\n      options:\n        - value: approve_once\n          description: allow one execution\n        - value: defer_to_user\n          description: ask the human\n---\nstricter repo rubric\n"
+	if err := os.WriteFile(filepath.Join(overrideDir, "permission-reviewer.decision.md"), []byte(override), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws2, err := Open(context.Background(), wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap2, ok := ws2.Catalog().GetDecision(PermissionReviewerDecisionName)
+	if !ok {
+		t.Fatal("workspace decision override missing")
+	}
+	if snap2.Scope != string(warp.NamespaceLocal) {
+		t.Fatalf("override scope = %q, want local", snap2.Scope)
+	}
+	if snap2.Def.Spec.Questions[0].Threshold == nil || *snap2.Def.Spec.Questions[0].Threshold != 0.98 {
+		t.Fatalf("override threshold = %v, want 0.98", snap2.Def.Spec.Questions[0].Threshold)
+	}
+}

@@ -451,7 +451,7 @@ TaskSmith embeds system-tier command manifests directly within the binary. These
 
 ## 8. Decision Manifest (`*.decision.md`)
 
-Configures probabilistic System 1 decision classifiers for deterministic routing or rubric scoring. Placed under `.agents/decisions/<name>.decision.md`.
+Configures probabilistic System 1 decision classifiers for deterministic routing or rubric scoring. Placed under `.agents/decisions/<name>.decision.md` (and trust-fingerprinted alongside `.agents/tools/` and `.agents/mcps/`). TaskSmith ships a built-in `permission-reviewer` decision (`kind: Decision`) that evaluates risky `auto`-mode permission cards across the `local > workspace > user > system` hierarchy.
 
 ### Syntax
 
@@ -521,7 +521,7 @@ Evaluate the provided pull request diff against the defined criteria.
 | `name` | string | Unique question identifier. |
 | `type` | string | Question kind: `predicate` (boolean), `choice` (categorical), or `score` (ordinal). |
 | `instructions` | string | Specific evaluation instructions for this question. |
-| `threshold` | float | Minimum decision probability threshold (0.0 to 1.0) for `predicate`. |
+| `threshold` | float | Minimum decision probability threshold (0.0 to 1.0) for `predicate` or target `choice` option (for `permission-reviewer`, clamped to daemon floors of `0.90` native / `0.95` adapted). |
 | `minConfidence` | float | Minimum required model confidence score. |
 | `criteria.true` | string | Explicit positive condition description for `predicate`. |
 | `criteria.false` | string | Explicit negative condition description for `predicate`. |

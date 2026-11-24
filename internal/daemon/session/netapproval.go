@@ -13,6 +13,8 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
@@ -39,13 +41,26 @@ type hostApproval struct {
 	request api.PermissionRequest
 	hostKey string
 	decided chan hostApprovalOutcome
-
 	done    chan struct{}
 	outcome hostApprovalOutcome
 }
 
 type hostApprovalOutcome struct {
 	decision api.PermissionDecision
+	err      error
+}
+
+// hostReviewFlight coalesces concurrent Phase-1 auto-mode decision-model
+// reviews for the same host:port before any human prompt is created. It never
+// enters s.hostApprovals or surfaces in State.Clone.
+type hostReviewFlight struct {
+	hostKey string
+	done    chan struct{}
+	outcome hostReviewOutcome
+}
+
+type hostReviewOutcome struct {
+	approved bool
 	err      error
 }
 
@@ -65,12 +80,18 @@ func (s *Session) interactive() bool {
 	return true
 }
 
+// hostApprovalReviewTimeout bounds the silent decision-model review that
+// precedes a human host prompt in auto mode. The full hostApprovalTimeout
+// still applies to the human prompt after a deferral.
+const hostApprovalReviewTimeout = 8 * time.Second
+
 // requestHostApproval is the sandbox proxy's OnUnlistedHost callback. It runs
 // the synthetic net(host) plan through the session permission engine: rules
 // and mode decide silently where they can (an existing net(host) allow rule,
 // auto mode, plan mode, deny rules), and only a genuine ask reaches the user.
-// With no interactive subscriber — or after the approval timeout — the host
-// is refused immediately.
+// In auto mode a risky ask first gets one silent decision-model review; only
+// a deferral prompts the human. With no interactive subscriber — or after the
+// approval timeout — the host is refused immediately.
 //
 // Host approvals run in the middle of an active turn (the harness is blocked
 // inside a sandboxed subprocess), so the prompt status must never touch
@@ -79,6 +100,8 @@ func (s *Session) interactive() bool {
 func (s *Session) requestHostApproval(ctx context.Context, host string, port int) (bool, error) {
 	s.Lock()
 	perm := s.PermManager
+	prior := s.Status
+	turnToken := s.done
 	s.Unlock()
 	if perm == nil {
 		return false, errors.New("session: permission manager unavailable for host approval")
@@ -106,14 +129,18 @@ func (s *Session) requestHostApproval(ctx context.Context, host string, port int
 		return false, fmt.Errorf("session: host approval ask for %s produced no request", host)
 	}
 
+	// Phase 1: in auto mode, coalesce concurrent same-host connections on a
+	// silent decision-model review without touching s.hostApprovals or status.
+	if perm.Mode() == api.ModeAuto && s.permReviewer != nil {
+		if handled, allow, reviewErr := s.tryAutoHostReview(ctx, perm, *req, plan, host, port); handled {
+			return allow, reviewErr
+		}
+	}
+
+	// Phase 2: human prompt flow.
 	if !s.interactive() {
 		return false, fmt.Errorf("sandbox: host %q is not in the network allowlist and no client is attached to approve it", host)
 	}
-
-	s.Lock()
-	prior := s.Status
-	turnToken := s.done
-	s.Unlock()
 
 	owner, shared := s.registerHostApproval(*req, host, port)
 	if owner == nil {
@@ -122,6 +149,7 @@ func (s *Session) requestHostApproval(ctx context.Context, host string, port int
 		}
 		return awaitSharedApproval(ctx, shared)
 	}
+
 	s.beginHostApprovalPrompt(prior)
 	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.PermissionRequestedEvent{
 		SessionID:   s.ID,
@@ -133,10 +161,164 @@ func (s *Session) requestHostApproval(ctx context.Context, host string, port int
 	return allowed, finishErr
 }
 
+// tryAutoHostReview runs or joins a silent Phase-1 auto-mode review for
+// host:port. It returns handled=true when the verdict is final (approved,
+// canceled, closing, or errored); when deferred, it returns handled=false so
+// callers proceed into the human prompt path.
+func (s *Session) tryAutoHostReview(ctx context.Context, perm permissions.SessionManager, req api.PermissionRequest, plan *tools.Plan, host string, port int) (handled bool, allow bool, err error) {
+	key := fmt.Sprintf("%s|%d", host, port)
+	s.Lock()
+	if s.closing {
+		s.Unlock()
+		return true, false, errors.New("sandbox: session is closing")
+	}
+	for _, w := range s.hostApprovals {
+		if w.hostKey == key {
+			s.Unlock()
+			return false, false, nil
+		}
+	}
+	if s.hostReviews != nil {
+		if existing := s.hostReviews[key]; existing != nil {
+			s.Unlock()
+			select {
+			case <-existing.done:
+				if existing.outcome.err != nil {
+					return true, false, existing.outcome.err
+				}
+				if existing.outcome.approved {
+					return true, true, nil
+				}
+				return false, false, nil
+			case <-ctx.Done():
+				return true, false, ctx.Err()
+			}
+		}
+	}
+	if s.hostReviews == nil {
+		s.hostReviews = make(map[string]*hostReviewFlight)
+	}
+	if id, idErr := uuid.NewV7(); idErr == nil {
+		req.ID = id.String()
+	}
+	flight := &hostReviewFlight{
+		hostKey: key,
+		done:    make(chan struct{}),
+	}
+	s.hostReviews[key] = flight
+	s.Unlock()
+
+	receipt := s.reviewHostApproval(ctx, perm, req, plan)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		s.finishHostReviewFlight(key, flight, hostReviewOutcome{err: ctxErr})
+		return true, false, ctxErr
+	}
+	s.Lock()
+	closing := s.closing
+	s.Unlock()
+	if closing {
+		closeErr := errors.New("sandbox: session is closing")
+		s.finishHostReviewFlight(key, flight, hostReviewOutcome{err: closeErr})
+		return true, false, closeErr
+	}
+	if receipt == nil {
+		s.finishHostReviewFlight(key, flight, hostReviewOutcome{approved: false})
+		return false, false, nil
+	}
+
+	dec := api.PermissionDecision{RequestID: req.ID, Kind: api.DecisionAllowOnce}
+	if applyErr := perm.ApplyDecision(&req, dec); applyErr != nil {
+		wrapErr := fmt.Errorf("session: apply host approval decision: %w", applyErr)
+		s.finishHostReviewFlight(key, flight, hostReviewOutcome{err: wrapErr})
+		return true, false, wrapErr
+	}
+	if s.Timeline != nil {
+		entry := timeline.NewPermissionEntry(api.PermissionRecord{
+			Request:  req,
+			Decision: dec,
+			Review:   receipt,
+		})
+		if tlErr := s.appendTimeline(s.bgCtx, entry); tlErr != nil {
+			s.finishHostReviewFlight(key, flight, hostReviewOutcome{err: tlErr})
+			return true, false, tlErr
+		}
+	}
+	s.finishHostReviewFlight(key, flight, hostReviewOutcome{approved: true})
+	return true, true, nil
+}
+
+func (s *Session) finishHostReviewFlight(key string, flight *hostReviewFlight, outcome hostReviewOutcome) {
+	s.Lock()
+	if s.hostReviews != nil && s.hostReviews[key] == flight {
+		delete(s.hostReviews, key)
+	}
+	s.Unlock()
+	flight.outcome = outcome
+	close(flight.done)
+}
+
+// reviewHostApproval runs the auto-mode decision-model review for a pending
+// host card. It returns the receipt only when the verdict survives post-
+// inference liveness and policy re-checks; every other path returns nil so
+// the caller defers to the human flow. The reviewer calls the gateway
+// in-process, never the sandbox proxy, so reviews cannot self-recurse.
+func (s *Session) reviewHostApproval(ctx context.Context, perm permissions.SessionManager, req api.PermissionRequest, plan *tools.Plan) *api.PermissionReview {
+	if s.permReviewer == nil || perm.Mode() != api.ModeAuto {
+		return nil
+	}
+	s.Lock()
+	agentName := s.Config.Agent
+	var wsRoot string
+	if s.workspace != nil {
+		wsRoot = s.workspace.RootDir()
+	}
+	s.Unlock()
+	scopedCtx := scope.With(ctx, scope.Scope{
+		SessionID:       s.ID,
+		ParentSessionID: s.ParentID,
+		WorkspaceRoot:   wsRoot,
+		Agent:           agentName,
+	})
+	reviewCtx, cancel := context.WithTimeout(scopedCtx, hostApprovalReviewTimeout)
+	defer cancel()
+	res := s.permReviewer.Review(reviewCtx, permreview.ReviewRequest{Request: req, UserIntent: s.lastTurnUserIntent()})
+	if res.WarnOnce != "" {
+		s.logger.Warn(res.WarnOnce)
+	}
+	if res.Verdict != permreview.VerdictApproveOnce || res.Receipt == nil {
+		return nil
+	}
+	s.Lock()
+	closing := s.closing
+	s.Unlock()
+	if closing || ctx.Err() != nil || perm.Mode() != api.ModeAuto {
+		return nil
+	}
+	if recheck, _, err := perm.Evaluate(plan); err != nil || recheck == tools.AccessDeny {
+		return nil
+	}
+	return res.Receipt
+}
+
+// lastTurnUserIntent returns the initiating user prompt text of the active
+// turn from the harness checkpoint, for the reviewer's user_intent field.
+func (s *Session) lastTurnUserIntent() string {
+	if s.Harness == nil {
+		return ""
+	}
+	state, err := s.Harness.LoadState(s.bgCtx)
+	if err != nil {
+		return ""
+	}
+	return state.LastUserIntentText()
+}
+
 // registerHostApproval records the pending approval. It returns the new owner
 // waiter, or an existing waiter for the same host:port (single-flight) so a
-// burst of parallel connections produces at most one prompt. Both returns are
-// nil once the session is closing.
+// burst of parallel connections produces at most one review and, after a
+// deferral, at most one prompt. Both returns are nil once the session is
+// closing. Registered entries are silent until beginHostApprovalPrompt flips
+// them to the human-prompt phase.
 func (s *Session) registerHostApproval(req api.PermissionRequest, host string, port int) (*hostApproval, *hostApproval) {
 	s.Lock()
 	defer s.Unlock()
@@ -162,15 +344,18 @@ func (s *Session) registerHostApproval(req api.PermissionRequest, host string, p
 		done:    make(chan struct{}),
 	}
 	s.hostApprovals[req.ID] = w
-	s.hostApprovalActive++
 	return w, nil
 }
 
-// beginHostApprovalPrompt switches the session to a permission-waiting status
-// without disturbing Running: an in-flight turn keeps executing (the harness
-// is blocked inside the sandboxed subprocess) and must remain visible as such
-// to Enqueue, startTurn, and reconnecting clients.
+// beginHostApprovalPrompt counts the prompt as active and switches the session
+// to a permission-waiting status without disturbing Running — an in-flight
+// turn keeps executing (the harness is blocked inside the sandboxed
+// subprocess) and must remain visible as such to Enqueue, startTurn, and
+// reconnecting clients.
 func (s *Session) beginHostApprovalPrompt(prior api.SessionStatus) {
+	s.Lock()
+	s.hostApprovalActive++
+	s.Unlock()
 	if prior == api.StatusWaitingPermission || prior == api.StatusWaitingQuestion || prior == api.StatusWaitingPlanReview {
 		return
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -772,5 +773,152 @@ func TestExecCommandSubagentPermissionBubblesAndApprovesByRequestID(t *testing.T
 	gotFile, err := os.ReadFile(filepath.Join(wsDir, "sub-deployed.txt"))
 	if err != nil || string(gotFile) != "approved-from-bidi\n" {
 		t.Fatalf("sub-deployed.txt = %q (err=%v), want approved write", string(gotFile), err)
+	}
+}
+
+func TestExecAutoModePermissionReviewJSONLApproveAndDefer(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		choice      string
+		probability float64
+		wantExit    int
+		wantDeleted bool
+	}{
+		{
+			name:        "approve_once_executes_and_emits_receipt",
+			choice:      "approve_once",
+			probability: 0.96,
+			wantExit:    exec.ExitOK,
+			wantDeleted: true,
+		},
+		{
+			name:        "defer_to_user_triggers_needs_input",
+			choice:      "defer_to_user",
+			probability: 0.20,
+			wantExit:    exec.ExitNeedsInput,
+			wantDeleted: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prov := &fakeProvider{
+				chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+					hasToolResult := false
+					for _, m := range req.Messages {
+						if _, ok := m.(*message.Tool); ok {
+							hasToolResult = true
+							break
+						}
+					}
+					return func(yield func(message.AssistantChunk, error) bool) {
+						if !hasToolResult {
+							yield(message.AssistantChunk{
+								BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+								Model:     req.Model,
+								Content: []message.Block{
+									&message.ToolCall{
+										ID:   "call-rm-1",
+										Name: "remove",
+										Args: map[string]any{"path": "obsolete.txt", "force": true},
+									},
+								},
+								Done: true,
+							}, nil)
+							return
+						}
+						yield(message.AssistantChunk{
+							BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+							Model:     req.Model,
+							Content:   []message.Block{&message.TextBlock{Text: "removed"}},
+							Done:      true,
+						}, nil)
+					}, nil
+				},
+				decisionHandler: func(_ context.Context, req *decision.Request) (*decision.Response, error) {
+					return &decision.Response{
+						Model: req.Model,
+						Answers: map[string]decision.Answer{
+							"verdict": {
+								Name:   "verdict",
+								Type:   decision.QuestionChoice,
+								Choice: tc.choice,
+								ChoiceProbabilities: []decision.OptionProbability{
+									{Value: "approve_once", Probability: tc.probability},
+									{Value: "defer_to_user", Probability: 1 - tc.probability},
+								},
+								Confidence: 0.85,
+							},
+						},
+					}, nil
+				},
+			}
+			_, sockPath, wsDir := setupCLITestDaemon(t, prov)
+			targetFile := filepath.Join(wsDir, "obsolete.txt")
+			if err := os.WriteFile(targetFile, []byte("delete me"), 0o644); err != nil {
+				t.Fatalf("write target file: %v", err)
+			}
+			provDir := filepath.Join(wsDir, ".agents", "providers")
+			if err := os.MkdirAll(provDir, 0o755); err != nil {
+				t.Fatalf("mkdir providers: %v", err)
+			}
+			provManifest := "apiVersion: warp/v1alpha1\nkind: ModelProvider\nmetadata:\n  name: fake\nspec:\n  type: ollama\n  models:\n    - id: fake-default-model\n      capabilities:\n        completion: true\n    - id: fake-decision-model\n      capabilities:\n        decision: true\n        structuredOutput: true\n---\n"
+			if err := os.WriteFile(filepath.Join(provDir, "fake.provider.yaml"), []byte(provManifest), 0o644); err != nil {
+				t.Fatalf("write fake.provider.yaml: %v", err)
+			}
+			manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: exec-auto-test\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n    decision: fake-decision-model\n---\n"
+			if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+				t.Fatalf("write WORKSPACE.md: %v", err)
+			}
+
+			cmd := NewRootCmd()
+			var outBuf, errBuf syncBuffer
+			cmd.SetIn(strings.NewReader(""))
+			cmd.SetOut(&outBuf)
+			cmd.SetErr(&errBuf)
+			cmd.SetArgs([]string{
+				"exec", "--socket", sockPath, "-w", wsDir,
+				"--model", "fake/fake-default-model",
+				"--mode", "auto",
+				"--output-format", "jsonl",
+				"delete obsolete.txt",
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			err := cmd.ExecuteContext(ctx)
+			if code := exec.ExitCode(err); code != tc.wantExit {
+				t.Fatalf("exit code = %d (err=%v stderr=%q), want %d\nout=%s", code, err, errBuf.String(), tc.wantExit, outBuf.String())
+			}
+
+			_, statErr := os.Stat(targetFile)
+			if tc.wantDeleted && !os.IsNotExist(statErr) {
+				t.Fatalf("expected obsolete.txt deleted after approve_once, stat err = %v", statErr)
+			}
+			if !tc.wantDeleted && statErr != nil {
+				t.Fatalf("expected obsolete.txt preserved on deferral, stat err = %v", statErr)
+			}
+
+			frames := decodeFrames[map[string]json.RawMessage](t, outBuf.String())
+			var sawPermReviewRecord, sawToolReviewReceipt bool
+			for _, f := range frames {
+				var typ string
+				_ = json.Unmarshal(f["type"], &typ)
+				if typ != string(api.EventEntryAdded) {
+					continue
+				}
+				var payload api.EntryAddedEvent
+				if json.Unmarshal(f["payload"], &payload) != nil {
+					continue
+				}
+				if payload.Entry.Kind == api.TimelineKindPermission && payload.Entry.Permission != nil && payload.Entry.Permission.Review != nil {
+					sawPermReviewRecord = true
+				}
+				if payload.Entry.Kind == api.TimelineKindMessage && payload.Entry.Message != nil && payload.Entry.Message.Role == api.RoleTool && payload.Entry.Message.PermissionReview != nil {
+					sawToolReviewReceipt = true
+				}
+			}
+			if tc.wantDeleted && (!sawPermReviewRecord || !sawToolReviewReceipt) {
+				t.Fatalf("missing wire permission review receipts (perm=%v tool=%v) in:\n%s", sawPermReviewRecord, sawToolReviewReceipt, outBuf.String())
+			}
+		})
 	}
 }

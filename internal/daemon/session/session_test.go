@@ -36,6 +36,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -2709,6 +2710,64 @@ func TestModePermissionPreservesPendingQuestionCheckpoint(t *testing.T) {
 		t.Fatalf("after answering: status = %s, questions = %+v, provider calls = %d; want completed turn", sess.Status, sess.PendingQuestions, len(provider.recordedTurns()))
 	}
 	modePermissionAssertWritten(t, sess, "mixed.txt")
+}
+
+func TestModePermissionAutoPreservesOutsideAndDeletePrompts(t *testing.T) {
+	outsideTarget := filepath.Join(t.TempDir(), "outside.txt")
+	sess, provider := newModePermissionTest(t,
+		&message.ToolCall{
+			ID:   "outside-write",
+			Name: "write",
+			Args: map[string]any{"path": outsideTarget, "content": "x"},
+		},
+		&message.ToolCall{
+			ID:   "delete-file",
+			Name: "remove",
+			Args: map[string]any{"path": "victim.txt", "force": true},
+		},
+	)
+	if err := os.WriteFile(filepath.Join(sess.WorkDir, "victim.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	revCalls := 0
+	sess.permReviewer = reviewerFunc(func(context.Context, permreview.ReviewRequest) permreview.Result {
+		revCalls++
+		return permreview.Result{
+			Verdict:    permreview.VerdictApproveOnce,
+			ReasonCode: permreview.ReasonApproved,
+			Receipt:    &api.PermissionReview{Source: permreview.DecisionReviewSource, Verdict: "approve_once"},
+		}
+	})
+
+	modePermissionSend(t, sess)
+	pending := sess.Clone().PendingPermissions
+	if len(pending) != 2 {
+		t.Fatalf("initial pending permissions = %+v, want 2 prompts (outside + delete)", pending)
+	}
+
+	modePermissionUpdate(t, sess, api.ModeAuto)
+	modePermissionWait(t, sess)
+
+	if revCalls != 0 {
+		t.Fatalf("widening to auto must not retroactively model-review already-pending prompts, got %d calls", revCalls)
+	}
+	if sess.Status != api.StatusWaitingPermission || !reflect.DeepEqual(sess.PendingPermissions, pending) || len(provider.recordedTurns()) != 1 {
+		t.Fatalf("after widening to auto: status=%s pending=%+v turns=%d; want original outside+delete prompts preserved",
+			sess.Status, sess.PendingPermissions, len(provider.recordedTurns()))
+	}
+	modePermissionAssertDecisions(t, t.Context(), sess, nil)
+	if _, err := os.Stat(outsideTarget); !os.IsNotExist(err) {
+		t.Fatalf("outside file must not be written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sess.WorkDir, "victim.txt")); err != nil {
+		t.Fatalf("victim.txt must remain intact: %v", err)
+	}
+}
+
+type reviewerFunc func(context.Context, permreview.ReviewRequest) permreview.Result
+
+func (f reviewerFunc) Review(ctx context.Context, req permreview.ReviewRequest) permreview.Result {
+	return f(ctx, req)
 }
 
 func newModePermissionTest(t *testing.T, calls ...message.Block) (*Session, *fakeProvider) {

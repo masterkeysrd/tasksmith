@@ -591,3 +591,52 @@ func TestExecPlanReviewRoutingAndNonInteractiveGuard(t *testing.T) {
 		t.Fatalf("non-interactive guard mismatch: stop=%v status=%q reason=%q", stop, nonInt.lastStatus, nonInt.guardReason)
 	}
 }
+
+func TestExecUsageIncludesPermissionReview(t *testing.T) {
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/usage") && req.Method == http.MethodGet {
+			body, err := json.Marshal(api.SessionUsage{
+				SessionID: "root-sess",
+				Totals: api.UsageGroup{
+					Calls:    4,
+					CostNano: 50_000_000,
+					Tokens:   api.UsageTokens{Input: 2000, Output: 200},
+				},
+				Purposes: []api.UsageGroup{
+					{Key: "permission_review", Calls: 2, CostNano: 10_000_000, Tokens: api.UsageTokens{Input: 800, Output: 50}},
+				},
+				Review: &api.UsagePermissionReview{
+					Reviews:  3,
+					Approved: 2,
+					Deferred: 1,
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		}
+		return execTransport{}.RoundTrip(req)
+	})
+
+	var outBuf bytes.Buffer
+	r := newExecRun(t, &Options{InputFormat: InputText, OutputFormat: OutputText, Stdout: &outBuf, Stderr: &bytes.Buffer{}}, rt)
+	r.sess = &api.Session{ID: "root-sess", Status: api.StatusIdle}
+
+	if err := r.cmdUsage(); err != nil {
+		t.Fatalf("cmdUsage: %v", err)
+	}
+	got := outBuf.String()
+	for _, want := range []string{
+		"permission reviews: 3 (2 approved, 1 deferred)",
+		"review inference: 2 calls, 850 tokens, $0.01",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in exec /usage output:\n%s", want, got)
+		}
+	}
+}

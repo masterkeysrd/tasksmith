@@ -4,9 +4,13 @@ A Decision describes a probabilistic evaluation using a shared rubric and struct
 
 ## Discovery and support
 
-Decision manifests are commonly stored in `.agents/decisions/<name>.decision.md` in a workspace or project, or under `$XDG_CONFIG_HOME/tasksmith/agents/decisions/` for a user. They follow the normal resource hierarchy and can also be supplied by system resources or workspace plugins.
+Decision manifests are commonly stored in `.agents/decisions/<name>.decision.md` in a workspace or project, or under `$XDG_CONFIG_HOME/tasksmith/agents/decisions/` for a user. They follow the normal resource hierarchy (`local > workspace > user > system`) and can also be supplied by system resources or workspace plugins. Project `.agents/decisions/**` files participate in workspace trust fingerprinting (restricted workspaces ignore repo overrides, and edits re-prompt trust).
 
-**TaskSmith does not currently support evaluating Decision resources.** The workspace can discover, look up, and render their instruction templates, but no runtime path evaluates their questions or produces probabilistic answers. Declaring a Decision, selecting decision models, or referring to a Decision from a Rule does not make it execute. The fields below describe the WARP schema, not active TaskSmith evaluation behavior.
+TaskSmith evaluates the built-in `permission-reviewer` Decision at runtime when a session is in `auto` mode (`internal/daemon/permreview`):
+- It must expose a single `choice` question named `verdict` with options `approve_once` and `defer_to_user`.
+- `spec.models` defaults to `["@permission-reviewer", "@default", "@fast"]` (`@default` resolves strictly against the `decision` role; non-`@default` entries try `decision` then `completion` adapted via `LLMAdapter`).
+- Go clamps `threshold` to immutable daemon floors (`0.90` native / `0.95` adapted) so custom manifests can tighten criteria or thresholds (`0.98`) but never weaken calibration or invent new verdicts.
+- General user-defined `Decision` triggers on `Rule` manifests are still not evaluated at runtime.
 
 ## Definition
 
@@ -28,13 +32,13 @@ The instruction body is rendered as a template when the workspace rendering API 
 | `name` | string | Question identifier, unique within the Decision. |
 | `type` | string | `predicate`, `choice`, or `score`. |
 | `instructions` | string | Question-specific condition or prompt. |
-| `threshold` | float | Predicate probability threshold from `0.0` to `1.0`. |
+| `threshold` | float | Minimum probability threshold from `0.0` to `1.0` (used by `predicate` and `permission-reviewer`'s `verdict` choice, clamped to daemon calibration floors). |
 | `minConfidence` | float | Minimum answer confidence from `0.0` to `1.0`. |
 | `criteria` | object | Predicate criteria under `true` and `false`. |
 | `options` | object[] | At least two choices for `choice`; each has a `value` and optional `description`. |
 | `levels` | object[] | At least two ordered levels for `score`; each has a `label` and optional `description`. |
 
-The question `name` and `type`, each option's `value`, and each level's `label` identify the intended results. Thresholds and confidence settings describe evaluation behavior for a supporting runtime; TaskSmith does not currently apply them.
+The question `name` and `type`, each option's `value`, and each level's `label` identify the intended results. For `permission-reviewer`, the daemon enforces the `verdict` threshold (clamped to `0.90` native / `0.95` adapted) and optional `minConfidence`. Custom `Decision` manifests outside `permission-reviewer` remain declarative only.
 
 ## Example
 
@@ -75,4 +79,4 @@ spec:
 Evaluate the change against each question using the available evidence.
 ```
 
-The model ID is illustrative and the manifest will not be evaluated by the current TaskSmith runtime.
+General custom Decision triggers remain un-evaluated; only the built-in `permission-reviewer` Decision (and overrides of that name) runs at runtime in `auto` mode.

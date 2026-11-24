@@ -521,14 +521,36 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	}
 	_ = sess.Clear()
 
-	// 5. ModeAuto
+	// 5. ModeAuto (tightened): safe non-delete plans auto-approve; anything
+	// Unsafe/Outside/Delete needs a matching allow rule or falls through to Ask
+	// for the permission reviewer / human.
 	sess.SetMode(api.ModeAuto)
 	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessAllow {
 		t.Fatalf("ModeAuto writePlan: expected AccessAllow, got %s", dec)
 	}
-	if dec, _, _ := sess.Evaluate(unsafePlan); dec != tools.AccessAllow {
-		t.Fatalf("ModeAuto unsafePlan: expected AccessAllow, got %s", dec)
+	if dec, _, _ := sess.Evaluate(unsafePlan); dec != tools.AccessAsk {
+		t.Fatalf("ModeAuto unsafePlan: expected AccessAsk, got %s", dec)
 	}
+	if dec, _, _ := sess.Evaluate(outsideReadPlan); dec != tools.AccessAsk {
+		t.Fatalf("ModeAuto outsideReadPlan: expected AccessAsk, got %s", dec)
+	}
+	if dec, _, _ := sess.Evaluate(unsafeReadPlan); dec != tools.AccessAsk {
+		t.Fatalf("ModeAuto unsafeReadPlan: expected AccessAsk, got %s", dec)
+	}
+	// A matching allow rule still auto-approves a non-safe (but non-Unsafe) plan.
+	if dec, _, _ := sess.Evaluate(outsideReadPlan); dec != tools.AccessAsk {
+		t.Fatalf("ModeAuto outsideReadPlan pre-grant: expected AccessAsk, got %s", dec)
+	}
+	_ = sess.AddAllow("view(/outside/somefile.txt)")
+	if dec, _, _ := sess.Evaluate(outsideReadPlan); dec != tools.AccessAllow {
+		t.Fatalf("ModeAuto outsideReadPlan with allow rule: expected AccessAllow, got %s", dec)
+	}
+	// Unsafe plans stay behind the ask gate even with a matching allow rule.
+	_ = sess.AddAllow("view(/etc/hosts)")
+	if dec, _, _ := sess.Evaluate(unsafeReadPlan); dec != tools.AccessAsk {
+		t.Fatalf("ModeAuto unsafeReadPlan with allow rule: expected AccessAsk, got %s", dec)
+	}
+	_ = sess.Clear()
 
 	// 6. Deny precedence over Allow and ModeAuto!
 	_ = sess.AddAllow("write_file(*)")

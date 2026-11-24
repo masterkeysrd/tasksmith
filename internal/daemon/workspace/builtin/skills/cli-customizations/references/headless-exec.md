@@ -63,7 +63,11 @@ Control frames (one JSON object per line, schema `api.ExecInputFrame`):
 
 In `text` mode a pending permission, question, or plan review cannot be answered: the run terminates
 with status `needs_input` and exit code `4` (the in-flight turn is canceled in the
-background) instead of hanging.
+background) instead of hanging. Under `--mode auto`, risky requests (`SafetyUnsafe`, unmatched
+outside-workspace ops, unmatched deletes, `bypass_sandbox` retries, and unlisted proxy hosts)
+first undergo calibrated one-shot review via `permission-reviewer`: an `approve_once` verdict
+continues execution uninterrupted (emitting `permission_review` receipts on `entry_added` frames
+in `jsonl`), while any deferral triggers `needs_input` (exit `4`) in `text` mode.
 
 ## Output framing
 

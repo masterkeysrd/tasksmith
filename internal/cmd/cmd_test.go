@@ -36,8 +36,9 @@ import (
 )
 
 type fakeProvider struct {
-	mu           sync.Mutex
-	chunkHandler func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error)
+	mu              sync.Mutex
+	chunkHandler    func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error)
+	decisionHandler func(ctx context.Context, req *decision.Request) (*decision.Response, error)
 }
 
 func (p *fakeProvider) Name() string                              { return "fake" }
@@ -71,6 +72,19 @@ func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream
 	}, nil
 }
 
+func (p *fakeProvider) Evaluate(ctx context.Context, req *decision.Request) (*decision.Response, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	h := p.decisionHandler
+	p.mu.Unlock()
+	if h == nil {
+		return nil, gateway.ErrUnsupportedCapability
+	}
+	return h(ctx, req)
+}
+
 type fakeGateway struct {
 	provider *fakeProvider
 }
@@ -82,8 +96,14 @@ func (g *fakeGateway) LLM(ctx context.Context, model models.Model, cfg llm.Model
 	return llm.NewModel(g.provider, string(model.ID), &cfg)
 }
 
-func (g *fakeGateway) Decision(context.Context, models.Model, llm.ModelConfig) (*decision.Model, error) {
-	return nil, gateway.ErrUnsupportedCapability
+func (g *fakeGateway) Decision(ctx context.Context, model models.Model, cfg llm.ModelConfig) (*decision.Model, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if g.provider == nil || g.provider.decisionHandler == nil {
+		return nil, gateway.ErrUnsupportedCapability
+	}
+	return decision.NewModel(g.provider, string(model.ID), &decision.ModelConfig{Options: cfg.Options})
 }
 
 func (g *fakeGateway) Embedding(context.Context, models.Model) (*embedding.Model, error) {

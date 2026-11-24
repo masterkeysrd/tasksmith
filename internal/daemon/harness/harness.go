@@ -21,6 +21,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -129,6 +130,9 @@ type Config struct {
 	Logger      log.Interface
 	// Metrics receives tool call metrics. A nil recorder disables them.
 	Metrics metrics.Recorder
+	// Reviewer, when non-nil, evaluates risky auto-mode permission cards
+	// once before the graph interrupts for a human decision.
+	Reviewer permreview.Reviewer
 }
 
 // Validate checks that all required configuration dependencies are present.
@@ -206,6 +210,7 @@ func New(cfg Config) (Harness, error) {
 		Spiller:      cfg.Spiller,
 		Logger:       logger,
 		Metrics:      cfg.Metrics,
+		Reviewer:     cfg.Reviewer,
 	})
 	if err != nil {
 		return nil, err
@@ -437,6 +442,7 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 			CompactionCompleted,
 			RuleLoaded,
 			api.CacheBrokenRecord,
+			api.PermissionRecord,
 			api.ContextUpdatedEvent:
 			if !yield(custom, nil) {
 				stopped = true

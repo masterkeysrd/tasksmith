@@ -39,6 +39,16 @@ func TestSessionLinesContents(t *testing.T) {
 			{Tool: "bash", Calls: 10, Errors: 4, Denied: 3, DurationMS: 9_000, MaxDurationMS: 4_000},
 			{Tool: "edit", Calls: 6, LinesAdded: 312, LinesRemoved: 48},
 		},
+		Purposes: []api.UsageGroup{
+			{Key: "permission_review", Calls: 3, CostNano: 15_000_000, Tokens: api.UsageTokens{Input: 1_200, Output: 120}},
+		},
+		Review: &api.UsagePermissionReview{
+			Reviews:    4,
+			Approved:   3,
+			Deferred:   1,
+			DurationMS: 200,
+			Outcomes:   map[string]int64{"approved": 3, "below_threshold": 1},
+		},
 	}
 	out := strings.Join(strings.Fields(text(sessionLines(u, now))), " ")
 	for _, want := range []string{
@@ -47,6 +57,9 @@ func TestSessionLinesContents(t *testing.T) {
 		"20.0k uncached input, 90.0k cache read, 10.0k cache write, 8.0k output",
 		"75% of input tokens from cache", "3 misses", "1 expected rebuild after compaction", "8.0k tokens re-cached",
 		"4 errors", "3 denied", "slowest 4.0s", "+312/−48 lines",
+		"Permission reviews: 4 reviews · 3 approved · 1 deferred · 200ms total (avg 50ms)",
+		"Review inference: 3 calls · 1.3k tokens · $0.01",
+		"Outcomes: approved 3, below_threshold 1",
 		"What's driving your usage?",
 		"40% of cost came from calls above 150.0k context",
 		"50% of cost came from cache writes",

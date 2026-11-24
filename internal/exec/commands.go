@@ -404,15 +404,27 @@ func (r *run) cmdUsage() error {
 		return err
 	}
 	t := usage.Totals
-	out := fmt.Sprintf("calls: %d | tokens in/out: %s / %s | cache read/write: %s / %s | cost: %s",
+	var out strings.Builder
+	fmt.Fprintf(&out, "calls: %d | tokens in/out: %s / %s | cache read/write: %s / %s | cost: %s",
 		t.Calls,
 		format.Tokens(int(t.Tokens.Input)), format.Tokens(int(t.Tokens.Output)),
 		format.Tokens(int(t.Tokens.CacheRead)), format.Tokens(int(t.Tokens.CacheWrite)),
 		format.FormatCostNano(t.CostNano, t.UnpricedCalls > 0))
 	if t.QuotaCalls > 0 {
-		out += fmt.Sprintf(" | quota-billed calls: %d", t.QuotaCalls)
+		fmt.Fprintf(&out, " | quota-billed calls: %d", t.QuotaCalls)
 	}
-	r.reportCommandData("/usage", out, usage, nil)
+	if usage.Review != nil && usage.Review.Reviews > 0 {
+		rev := usage.Review
+		fmt.Fprintf(&out, " | permission reviews: %d (%d approved, %d deferred)", rev.Reviews, rev.Approved, rev.Deferred)
+		for _, p := range usage.Purposes {
+			if p.Key == "permission_review" && p.Calls > 0 {
+				fmt.Fprintf(&out, " | review inference: %d calls, %s tokens, %s",
+					p.Calls, format.Tokens(int(p.Tokens.Total())), format.FormatCostNano(p.CostNano, p.UnpricedCalls > 0))
+				break
+			}
+		}
+	}
+	r.reportCommandData("/usage", out.String(), usage, nil)
 	return nil
 }
 

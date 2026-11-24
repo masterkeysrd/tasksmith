@@ -21,6 +21,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -76,6 +77,7 @@ type GraphConfig struct {
 	Spiller      tools.Spiller
 	Logger       log.Interface
 	Metrics      metrics.Recorder
+	Reviewer     permreview.Reviewer
 }
 
 type AgentNodeConfig struct {
@@ -91,6 +93,9 @@ type ToolsNodeConfig struct {
 	Metrics     metrics.Recorder
 	Permissions permissions.SessionManager
 	Logger      log.Interface
+	// Reviewer, when non-nil, evaluates risky auto-mode permission cards
+	// once before interrupting the human.
+	Reviewer permreview.Reviewer
 }
 
 type InboxNodeConfig struct {
@@ -117,6 +122,7 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], []Node, error) {
 		Metrics:     cfg.Metrics,
 		Permissions: cfg.Permissions,
 		Logger:      cfg.Logger,
+		Reviewer:    cfg.Reviewer,
 	})
 	inboxNode := NewInboxNode(InboxNodeConfig{
 		Queue:  cfg.Queue,
@@ -225,6 +231,8 @@ func emit(ctx context.Context, ev any) {
 		name = "rule_loaded"
 	case api.CacheBrokenRecord:
 		name = "cache_broken"
+	case api.PermissionRecord:
+		name = "permission_recorded"
 	case api.ContextUpdatedEvent:
 		name = "context_updated"
 	default:
@@ -543,6 +551,7 @@ type ToolsNode struct {
 	rules       *RuleMatcher
 	logger      log.Interface
 	metrics     metrics.Recorder
+	reviewer    permreview.Reviewer
 }
 
 var _ Node = (*ToolsNode)(nil)
@@ -560,7 +569,40 @@ func NewToolsNode(cfg ToolsNodeConfig) *ToolsNode {
 		permissions: cfg.Permissions,
 		logger:      cfg.Logger.ForComponent("harness.tools"),
 		metrics:     cfg.Metrics,
+		reviewer:    cfg.Reviewer,
 	}
+}
+
+// permissionReviewTimeout bounds one auto-mode permission review so inference
+// never dominates the human approval budget that follows a deferral.
+const permissionReviewTimeout = 10 * time.Second
+
+// reviewAutoAsk consults the permission reviewer for a risky card that the
+// deterministic engine would otherwise interrupt for. It returns the review
+// result only when the verdict survives post-inference liveness and policy
+// re-checks; every other path (nil reviewer, non-auto mode, defer, cancel,
+// mode flip, or a policy that turned to deny while inference ran) returns
+// false so the caller keeps the human permission flow.
+func (n *ToolsNode) reviewAutoAsk(ctx context.Context, req *api.PermissionRequest, plan *tools.Plan, userIntent string) (permreview.Result, bool) {
+	if n.reviewer == nil || n.permissions.Mode() != api.ModeAuto {
+		return permreview.Result{}, false
+	}
+	reviewCtx, cancel := context.WithTimeout(ctx, permissionReviewTimeout)
+	defer cancel()
+	res := n.reviewer.Review(reviewCtx, permreview.ReviewRequest{Request: *req, UserIntent: userIntent})
+	if res.WarnOnce != "" {
+		n.logger.Warn(res.WarnOnce)
+	}
+	if res.Verdict != permreview.VerdictApproveOnce || res.Receipt == nil {
+		return res, false
+	}
+	if ctx.Err() != nil || n.permissions.Mode() != api.ModeAuto {
+		return permreview.Result{}, false
+	}
+	if recheck, _, err := n.permissions.Evaluate(plan); err != nil || recheck == tools.AccessDeny {
+		return permreview.Result{}, false
+	}
+	return res, true
 }
 
 // executeTool runs the tool and records a tool_call metric. The duration
@@ -573,6 +615,9 @@ func NewToolsNode(cfg ToolsNodeConfig) *ToolsNode {
 func (n *ToolsNode) executeTool(ctx context.Context, tc *message.ToolCall, planReadOnly, planUnsandboxed bool) (*message.Tool, error) {
 	start := time.Now()
 	msg, err := n.tools.Execute(tools.WithUnsandboxedExecution(tools.WithReadOnlyExecution(ctx, planReadOnly), planUnsandboxed), tc)
+	// Strip any tool-supplied receipt key across every execution path
+	// (evaluate and resume) so custom or MCP tools cannot spoof an approval.
+	SetPermissionReview(msg, nil)
 	dur := time.Since(start)
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
@@ -628,7 +673,17 @@ func (n *ToolsNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	if len(state.PendingPermissions) > 0 || len(state.PendingQuestions) > 0 || len(state.PendingPlanReviews) > 0 {
 		return n.resumeCalls(ctx, unfulfilled, state.PendingPermissions, state.PermissionDecisions, state.PendingQuestions, state.QuestionResponses, state.PendingPlanReviews, state.PlanReviewDecisions, state.LoadedTools)
 	}
-	return n.evaluateCalls(ctx, unfulfilled, state.LoadedTools)
+	return n.evaluateCalls(ctx, unfulfilled, state.LoadedTools, state.LastUserIntentText())
+}
+
+// emitPermissionReview audits a reviewer-approved card on the timeline with an
+// allow-once decision carrying the review receipt.
+func emitPermissionReview(ctx context.Context, req *api.PermissionRequest, receipt *api.PermissionReview) {
+	emit(ctx, api.PermissionRecord{
+		Request:  *req,
+		Decision: api.PermissionDecision{RequestID: req.ID, ToolCallID: req.ToolCallID, Kind: api.DecisionAllowOnce},
+		Review:   receipt,
+	})
 }
 
 func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []*message.ToolCall, messages message.MessageList) (graph.Command[State], error) {
@@ -676,7 +731,7 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 	}), nil
 }
 
-func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.ToolCall, loadedTools []string) (graph.Command[State], error) {
+func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.ToolCall, loadedTools []string, userIntent string) (graph.Command[State], error) {
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
 	var pending []api.PermissionRequest
 	var pendingPlans map[string]tools.Plan
@@ -711,6 +766,13 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 					case tools.AccessAsk:
 						if req == nil {
 							err = tools.ErrPermissionDenied
+						} else if res, approved := n.reviewAutoAsk(ctx, req, plan, userIntent); approved {
+							// A reviewer approval only clears the permission
+							// gate to ask: the question or plan review below
+							// still interrupts for the human.
+							emitPermissionReview(ctx, req, res.Receipt)
+						} else if ctx.Err() != nil {
+							return nil, ctx.Err()
 						} else {
 							addPending(req, plan)
 							continue
@@ -747,13 +809,16 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 			toolMsgs = append(toolMsgs, msg)
 			continue
 		}
-		toolMsg, req, err := n.evaluateSingleCall(ctx, tc, plans)
+		toolMsg, req, review, err := n.evaluateSingleCall(ctx, tc, plans, userIntent)
 		if err != nil {
 			return nil, err
 		}
 		if req != nil {
 			addPending(req, plans[tc.ID])
 			continue
+		}
+		if review != nil {
+			SetPermissionReview(toolMsg, review)
 		}
 		deduped, msgNewTools := dedupState.DeduplicateToolBlocks(toolMsg)
 		dedupState = dedupState.RecordLoadedTools(msgNewTools...)
@@ -856,12 +921,12 @@ func newQuestionRequest(tc *message.ToolCall) (api.QuestionRequest, error) {
 	}, nil
 }
 
-func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall, plans map[string]*tools.Plan) (*message.Tool, *api.PermissionRequest, error) {
+func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall, plans map[string]*tools.Plan, userIntent string) (*message.Tool, *api.PermissionRequest, *api.PermissionReview, error) {
 	plan, err := n.tools.Prepare(ctx, tc)
 	if err != nil {
 		n.recordFailure(ctx, tc, err)
 		msg, msgErr := newErrorToolMessage(tc, err.Error())
-		return msg, nil, msgErr
+		return msg, nil, nil, msgErr
 	}
 	if plans != nil {
 		plans[tc.ID] = plan
@@ -871,22 +936,38 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 	if err != nil {
 		n.recordFailure(ctx, tc, err)
 		msg, msgErr := newErrorToolMessage(tc, err.Error())
-		return msg, nil, msgErr
+		return msg, nil, nil, msgErr
 	}
+	var receipt *api.PermissionReview
 	if access == tools.AccessAsk && req != nil {
-		return nil, req, nil
+		res, approved := n.reviewAutoAsk(ctx, req, plan, userIntent)
+		if !approved {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, nil, err
+			}
+			if recheck, _, recErr := n.permissions.Evaluate(plan); recErr == nil && recheck == tools.AccessDeny {
+				n.recordTool(ctx, tc, metrics.StatusDenied, "permission_denied", 0)
+				msg, msgErr := newErrorToolMessage(tc, tools.ErrPermissionDenied.Error())
+				return msg, nil, nil, msgErr
+			}
+			return nil, req, nil, nil
+		}
+		receipt = res.Receipt
+		// Audit the approval before execution so the timeline records it
+		// even if the tool later hangs or the turn is interrupted.
+		emitPermissionReview(ctx, req, receipt)
 	}
 	if access == tools.AccessDeny {
 		n.recordTool(ctx, tc, metrics.StatusDenied, "permission_denied", 0)
 		msg, msgErr := newErrorToolMessage(tc, tools.ErrPermissionDenied.Error())
-		return msg, nil, msgErr
+		return msg, nil, nil, msgErr
 	}
 
 	msg, execErr := n.executeTool(ctx, tc, plan.ReadOnly, plan.Unsandboxed)
 	if execErr != nil {
-		return nil, nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, execErr)
+		return nil, nil, nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, execErr)
 	}
-	return msg, nil, nil
+	return msg, nil, receipt, nil
 }
 
 func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []api.PermissionRequest, decisions map[string]api.PermissionDecision, questions []api.QuestionRequest, answers map[string]api.QuestionResponse, planReviews []api.PlanReviewRequest, planReviewDecisions map[string]api.PlanReviewDecision, loadedTools []string) (graph.Command[State], error) {

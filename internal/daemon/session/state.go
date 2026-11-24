@@ -35,6 +35,7 @@ type State struct {
 	answers            map[string]api.QuestionResponse   `json:"-"`
 	planReviews        map[string]api.PlanReviewDecision `json:"-"`
 	hostApprovals      map[string]*hostApproval          `json:"-"`
+	hostReviews        map[string]*hostReviewFlight      `json:"-"`
 	hostApprovalActive int                               `json:"-"`
 	closing            bool                              `json:"-"`
 	queue              []queueItem                       `json:"-"`

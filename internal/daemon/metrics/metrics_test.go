@@ -3,6 +3,7 @@ package metrics_test
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -396,5 +397,50 @@ func TestTurnUsageSumsTurns(t *testing.T) {
 	none, err := s.TurnUsage(context.Background(), "missing")
 	if err != nil || none.Calls != 0 {
 		t.Fatalf("missing turn: %+v err=%v", none, err)
+	}
+}
+
+func TestPermissionReviewUsageSummary(t *testing.T) {
+	s := newStore(t)
+	live := metrics.NewLive(s, nil)
+	ctx := scoped("s1", "")
+
+	if err := metrics.RecordPermissionReview(ctx, live, metrics.PermissionReview{
+		Outcome: metrics.ReviewOutcomeApproved, RequestClass: "unsafe", Model: "p/dec",
+		Decision: "system", RubricDigest: "abc123", Duration: 400 * time.Millisecond,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := metrics.RecordPermissionReview(ctx, live, metrics.PermissionReview{
+		Outcome: metrics.ReviewOutcomeBelowThreshold, RequestClass: "net", Duration: 300 * time.Millisecond,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	u, err := live.SessionUsage(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Review == nil {
+		t.Fatal("usage missing review summary")
+	}
+	if u.Review.Reviews != 2 || u.Review.Approved != 1 || u.Review.Deferred != 1 {
+		t.Fatalf("review summary = %+v", u.Review)
+	}
+	if u.Review.Outcomes["approved"] != 1 || u.Review.Outcomes["below_threshold"] != 1 {
+		t.Fatalf("outcomes = %+v", u.Review.Outcomes)
+	}
+	if u.Review.DurationMS != 700 {
+		t.Fatalf("duration = %d, want 700", u.Review.DurationMS)
+	}
+
+	// A fresh Live reloads the same summary from the journal.
+	fresh := metrics.NewLive(s, nil)
+	loaded, err := fresh.SessionUsage(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Review == nil || !reflect.DeepEqual(*loaded.Review, *u.Review) {
+		t.Fatalf("loaded review %+v != live %+v", loaded.Review, u.Review)
 	}
 }

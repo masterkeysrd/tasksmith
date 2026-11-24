@@ -74,12 +74,13 @@ const (
 
 // ToolPart joins a tool call and its response by ID.
 type ToolPart struct {
-	ID          string
-	Call        *api.ToolCall
-	Response    *api.Message
-	Status      ToolStatus
-	Permissions []api.PermissionRequest
-	Question    *api.QuestionRecord
+	ID               string
+	Call             *api.ToolCall
+	Response         *api.Message
+	Status           ToolStatus
+	Permissions      []api.PermissionRequest
+	Question         *api.QuestionRecord
+	PermissionReview *api.PermissionReview
 }
 
 type StreamStatus string
@@ -208,6 +209,7 @@ type conversationAccumulator struct {
 	sessionID           string
 	messages            []conversationMessage
 	permissions         []api.PermissionRequest
+	permissionReviews   map[string]api.PermissionReview
 	questions           []api.QuestionRequest
 	resolvedQuestions   map[string]bool
 	questionRecords     map[string]api.QuestionRecord
@@ -392,6 +394,7 @@ func (acc *conversationAccumulator) reset() {
 	acc.sessionID = ""
 	acc.messages = nil
 	acc.clearPermissionsLocked()
+	acc.permissionReviews = nil
 	acc.clearQuestionsLocked()
 	acc.resolvedQuestions = nil
 	acc.questionRecords = nil
@@ -759,6 +762,12 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			}
 			if p.Entry.Kind == api.TimelineKindPermission {
 				if p.Entry.Permission != nil {
+					if p.Entry.Permission.Review != nil && p.Entry.Permission.Request.ToolCallID != "" {
+						if acc.permissionReviews == nil {
+							acc.permissionReviews = make(map[string]api.PermissionReview)
+						}
+						acc.permissionReviews[p.Entry.Permission.Request.ToolCallID] = *p.Entry.Permission.Review
+					}
 					reqID := p.Entry.Permission.Request.ID
 					acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
 						return r.ID == reqID
@@ -774,6 +783,9 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 						}
 					}
 					acc.publishLocked()
+					if p.Entry.Permission.Request.ToolName == "net" && p.Entry.Permission.Review != nil {
+						acc.appendTimeline(p.Entry)
+					}
 				}
 				return
 			}
@@ -1051,6 +1063,12 @@ func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entr
 			}
 		case api.TimelineKindPermission:
 			if entry.Permission != nil {
+				if entry.Permission.Review != nil && entry.Permission.Request.ToolCallID != "" {
+					if acc.permissionReviews == nil {
+						acc.permissionReviews = make(map[string]api.PermissionReview)
+					}
+					acc.permissionReviews[entry.Permission.Request.ToolCallID] = *entry.Permission.Review
+				}
 				reqID := entry.Permission.Request.ID
 				acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
 					return r.ID == reqID
@@ -1142,6 +1160,9 @@ func (acc *conversationAccumulator) loadTimelineSnapshot(sess *api.Session, entr
 					acc.appendMessage(h)
 				}
 			}
+		} else if entry.Kind == api.TimelineKindPermission && entry.Permission != nil &&
+			entry.Permission.Request.ToolName == "net" && entry.Permission.Review != nil {
+			acc.appendTimeline(entry)
 		} else if entry.Kind == api.TimelineKindCompacted || entry.Kind == api.TimelineKindCacheBroken || (entry.Kind != api.TimelineKindPermission && entry.Kind != api.TimelineKindQuestion && entry.Kind != api.TimelineKindPlanReview) {
 			acc.appendTimeline(entry)
 		}
@@ -1750,10 +1771,11 @@ func (acc *conversationAccumulator) projectLocked() (history []Message, streamMs
 		response := cloneConversationMessage(record.message)
 		if tool := tools[response.ToolCallID]; tool != nil {
 			tool.Response = &response
+			tool.PermissionReview = response.PermissionReview
 		} else {
 			messages[i].Parts = []MessagePart{{
 				ID: "tool:" + response.ToolCallID, Type: PartTool,
-				Tool: &ToolPart{ID: response.ToolCallID, Response: &response},
+				Tool: &ToolPart{ID: response.ToolCallID, Response: &response, PermissionReview: response.PermissionReview},
 			}}
 		}
 	}
@@ -1762,6 +1784,13 @@ func (acc *conversationAccumulator) projectLocked() (history []Message, streamMs
 		if tool := tools[id]; tool != nil {
 			copy := record
 			tool.Question = &copy
+		}
+	}
+
+	for id, review := range acc.permissionReviews {
+		if tool := tools[id]; tool != nil && tool.PermissionReview == nil {
+			copy := review
+			tool.PermissionReview = &copy
 		}
 	}
 
@@ -1884,6 +1913,10 @@ func cloneConversationMessage(message api.Message) api.Message {
 	message.Content = slices.Clone(message.Content)
 	message.StructuredContent = slices.Clone(message.StructuredContent)
 	message.Attachments = slices.Clone(message.Attachments)
+	if message.PermissionReview != nil {
+		review := *message.PermissionReview
+		message.PermissionReview = &review
+	}
 	for i := range message.Content {
 		if call := message.Content[i].ToolCall; call != nil {
 			cloned := *call

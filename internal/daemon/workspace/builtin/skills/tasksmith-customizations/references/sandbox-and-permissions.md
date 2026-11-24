@@ -130,8 +130,8 @@ Three controlled routes run a command without the kernel wrapper. All require `a
 | `plan` | Denied unless read-only (mode rule wins). |
 | `ask` | Still prompts (mode rule wins). |
 | `default` / `accept_edits` | Auto-approved (native backend only; unsafe, outside, unsandboxed, denied, or rule-asked plans still prompt). |
-| `auto` | Already auto-approved by the mode itself. |
+| `auto` | Workspace-safe non-destructive operations run immediately; `SafetyUnsafe`, unmatched `SafetyOutside`, unmatched `ActionDelete`, `bypass_sandbox`, and unlisted `net(host)` plans undergo calibrated `permission-reviewer` review before prompting. |
 
-Network plans are never widened by `autoAllowBash`. Under a network allowlist, no permission mode — including `auto` — silently opens an unlisted host: only `sandbox.json` `network.allowedDomains` or an explicit `net(host)` allow rule permits it without prompting (persistent project/global host approvals append to `sandbox.json` `network.allowedDomains`, while one-shot and session approvals record in-memory `net(host)` rules; unattached sessions with no active client subscriber refuse unlisted hosts immediately).
+Network plans are never widened by `autoAllowBash`. Under a network allowlist, no permission mode — including `auto` — silently opens an unlisted host: only `sandbox.json` `network.allowedDomains` or an explicit `net(host)` allow rule permits it without prompting or review (persistent project/global host approvals append to `sandbox.json` `network.allowedDomains`, while human one-shot/session approvals record in-memory `net(host)` rules; `permission-reviewer` `approve_once` verdicts in `auto` mode apply once without persisting rules or domains, and unattached sessions refuse unlisted hosts on deferral).
 
 See `workspace-and-context.md` for the `WORKSPACE.md` `spec.policies.tools` ceiling, and load the `cli-customizations` skill (`references/sandbox-and-permissions.md`) when guiding a terminal CLI user through interactive views or approval prompts.

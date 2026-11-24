@@ -14,10 +14,19 @@ TaskSmith supports five session-wide permission modes. Each mode adjusts the app
 | **Accept Edits** | `accept_edits` | Same read baseline as `default`, plus workspace file write/edit/remove operations (`write`, `edit`, `remove`) execute automatically without prompting. Shell commands (`bash`) and network requests still require approval. | Standard **Act** posture for iterative code refactoring with shell auditing. |
 | **Plan** | `plan` | Same permission gate as `default` (reads run; mutations prompt). Writes, edits, and removals inside `<session-dir>/plans/` auto-allow without prompting. | **Plan** posture: investigates the codebase, clarifies ambiguities via `ask_question`, asks where to save the plan (`<session-dir>/plans/` vs. workspace), and submits via `exit_plan_mode` for approval. |
 | **Ask** | `ask` | Same permission gate as `default` (reads run; mutations prompt). | **Ask** posture: answers questions and explains code without modifying project files. |
-| **Auto** | `auto` | Autonomous mode. Automatically executes all allowed tools without prompting, unless an action matches an explicit `deny` rule, workspace/agent policy ceiling, `bypass_sandbox` retry, or unlisted proxy host. | Standard **Act** posture for automated CI/CD runs or trusted local sandbox workflows. |
+| **Auto** | `auto` | Workspace-safe non-destructive operations (and non-unsafe plans matching an allow rule) run immediately. Risky operations (`SafetyUnsafe`, unmatched outside-workspace reads/writes, unmatched `remove`/deletes, `bypass_sandbox` retries, and unlisted proxy hosts) undergo a calibrated one-shot decision-model review (`permission-reviewer`), interrupting only if the reviewer defers or is unavailable. Explicit `deny` rules and policy exclusions always block immediately. | Standard **Act** posture for automated CI/CD runs or trusted local sandbox workflows. |
 
 > [!NOTE]
-> Even in `auto` mode, explicit `deny` rules and workspace policy exclusions are strictly enforced. To learn how Abstract Syntax Tree (AST) command analysis and filesystem path confinement prevent escapes under the hood, see the [Permissions Architecture](../architecture/permissions.md).
+> Even in `auto` mode, explicit `deny` rules and workspace policy exclusions are strictly enforced with zero model calls. To learn how Abstract Syntax Tree (AST) command analysis, path confinement, and the calibrated reviewer interact under the hood, see the [Permissions Architecture](../architecture/permissions.md).
+
+### Calibrated Permission Review in `auto` Mode
+
+When `auto` mode encounters a risky tool call or an unlisted proxy host, the daemon runs a one-shot evaluation against the `permission-reviewer` `Decision` manifest before interrupting you:
+
+- **What triggers review**: `SafetyUnsafe` actions, unmatched outside-workspace paths (`SafetyOutside`), unmatched delete actions (`ActionDelete`), `bypass_sandbox` retries, and unlisted sandbox-proxy `net(host)` connections. Ordinary workspace-safe reads, writes, edits, and sandboxed commands execute with zero model calls.
+- **One-shot receipts**: A model `approve_once` verdict applies **only** to that exact request and never creates `permissions.json` rules or modifies `sandbox.json`. Auto-approved tool cards display an `[Auto-approved]` header badge and a `Reviewer:` provenance subline, proxy approvals add a `Host access auto-approved` transcript notice, and `/usage` reports review counts, outcomes, tokens, and cost.
+- **Safe deferral**: Every non-approving outcome (`defer_to_user`, below-threshold probability, oversize card evidence, missing model, timeout, or error) falls back cleanly to the standard human permission prompt (or `needs_input` exit code `4` in non-interactive `tasksmith exec`).
+- **Model routing & overrides**: By default, `permission-reviewer` tries `@permission-reviewer`, `defaultModels.decision` in `WORKSPACE.md`, and finally `@fast`. Teams can override thresholds (clamped to immutable daemon floors of `0.90` native / `0.95` adapted) or add repo-specific deferral rules in `.agents/decisions/permission-reviewer.decision.md` (which is trust-fingerprinted alongside `.agents/tools/` and `.agents/mcps/`).
 
 ---
 

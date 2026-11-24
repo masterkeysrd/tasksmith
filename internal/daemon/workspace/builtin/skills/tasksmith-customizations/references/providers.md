@@ -35,6 +35,8 @@ Preset installs through `/setup` and `/providers` copy every preset model, but t
 
 ## Model resolution
 
+The Ollama preset defaults to `qwen3.8` for completion and `nimble-v3` for decisions. Pull `nimble-v3` into Ollama before using it.
+
 A model identifier commonly has the form `provider/model`. Workspace resolution considers explicit overrides, workspace role defaults, the configured default provider's role defaults, then other effective providers' defaults and capability matches. `defaultModels` can separately select `completion`, `decision`, and `embedding`. The gateway also considers provider availability and authentication when resolving models. See `workspace-and-context.md` for workspace precedence.
 
 ## Authentication and environment

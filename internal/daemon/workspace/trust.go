@@ -46,12 +46,13 @@ type TrustStore struct {
 type ExecutableConfigSummary struct {
 	MCPServers  []string `json:"mcp_servers,omitempty"`
 	CustomTools []string `json:"custom_tools,omitempty"`
+	Decisions   []string `json:"decisions,omitempty"`
 	HasEnv      bool     `json:"has_env,omitempty"`
 }
 
 // HasExecutables reports whether any executable items or local .env are present.
 func (s ExecutableConfigSummary) HasExecutables() bool {
-	return len(s.MCPServers) > 0 || len(s.CustomTools) > 0 || s.HasEnv
+	return len(s.MCPServers) > 0 || len(s.CustomTools) > 0 || len(s.Decisions) > 0 || s.HasEnv
 }
 
 var trustMu sync.RWMutex
@@ -314,11 +315,23 @@ func ScanExecutableConfig(dir string) (ExecutableConfigSummary, error) {
 		}
 	}
 
+	// 4. Check for .agents/decisions
+	decisionsDir := filepath.Join(cleanDir, warp.DefaultAgentsDir, "decisions")
+	if entries, err := os.ReadDir(decisionsDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && (strings.HasSuffix(e.Name(), ".decision.md") || strings.HasSuffix(e.Name(), ".decision.yaml")) {
+				relPath := filepath.Join(warp.DefaultAgentsDir, "decisions", e.Name())
+				summary.Decisions = append(summary.Decisions, relPath)
+			}
+		}
+	}
+
 	return summary, nil
 }
 
 // ComputeExecutableFingerprint calculates a SHA-256 hash over the contents of
-// .agents/mcps/** and .agents/tools/** to detect modifications after a pull.
+// .agents/mcps/**, .agents/tools/**, and .agents/decisions/** to detect
+// modifications after a pull.
 func ComputeExecutableFingerprint(dir string) (string, error) {
 	cleanDir, err := fsutils.CleanPath(dir)
 	if err != nil {
@@ -329,7 +342,7 @@ func ComputeExecutableFingerprint(dir string) (string, error) {
 	hasItems := false
 
 	agentsDir := filepath.Join(cleanDir, warp.DefaultAgentsDir)
-	for _, sub := range []string{"mcps", "tools"} {
+	for _, sub := range []string{"mcps", "tools", "decisions"} {
 		targetDir := filepath.Join(agentsDir, sub)
 		if _, err := os.Stat(targetDir); err != nil {
 			continue

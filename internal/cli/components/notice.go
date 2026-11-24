@@ -158,7 +158,17 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 		if entry.Agent != nil && entry.Agent.To != "" {
 			text = "Agent set to " + entry.Agent.To
 		}
-	case api.TimelineKindPermission, api.TimelineKindPlanReview:
+	case api.TimelineKindPermission:
+		if entry.Permission != nil && entry.Permission.Request.ToolName == "net" && entry.Permission.Review != nil {
+			target := entry.Permission.Request.Target
+			model := entry.Permission.Review.Model
+			if model != "" {
+				text = fmt.Sprintf("Host access auto-approved · %s (%s)", target, model)
+			} else {
+				text = fmt.Sprintf("Host access auto-approved · %s", target)
+			}
+		}
+	case api.TimelineKindPlanReview:
 		return nil
 	case api.TimelineKindInterrupted:
 		text = "Interrupted by user"

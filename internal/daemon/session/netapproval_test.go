@@ -12,9 +12,12 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/warp"
@@ -590,4 +593,306 @@ type failingApplyPermManager struct {
 
 func (m *failingApplyPermManager) ApplyDecision(req *api.PermissionRequest, decision api.PermissionDecision) error {
 	return errors.New("apply boom")
+}
+
+// autoAskingPermManager is askingPermManager in auto mode.
+type autoAskingPermManager struct {
+	askingPermManager
+}
+
+func (m *autoAskingPermManager) Mode() api.PermissionMode { return api.ModeAuto }
+
+// scriptedReviewer answers every review with a fixed verdict.
+type scriptedReviewer struct {
+	mu      sync.Mutex
+	calls   int
+	request []permreview.ReviewRequest
+	approve bool
+	// gate, when non-nil, blocks the first Review until closed.
+	gate     chan struct{}
+	gateOnce sync.Once
+}
+
+func (r *scriptedReviewer) Review(ctx context.Context, req permreview.ReviewRequest) permreview.Result {
+	r.mu.Lock()
+	r.calls++
+	first := r.calls == 1
+	r.request = append(r.request, req)
+	gate := r.gate
+	r.mu.Unlock()
+	if first && gate != nil {
+		r.gateOnce.Do(func() { <-gate })
+	}
+	if !r.approve {
+		return permreview.Result{Verdict: permreview.VerdictDefer, ReasonCode: permreview.ReasonDeferred}
+	}
+	return permreview.Result{
+		Verdict:    permreview.VerdictApproveOnce,
+		ReasonCode: permreview.ReasonApproved,
+		Receipt: &api.PermissionReview{
+			RequestID: req.Request.ID,
+			Source:    permreview.DecisionReviewSource,
+			Verdict:   string(permreview.VerdictApproveOnce),
+			Model:     "fake/decider",
+			Threshold: 0.9,
+		},
+	}
+}
+
+func (r *scriptedReviewer) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+func TestHostApprovalAutoReviewerApproves(t *testing.T) {
+	pub := &observingPublisher{}
+	pub.setSubscribers(true)
+	perm := &autoAskingPermManager{}
+	sess := newHostApprovalSession(t, perm, pub)
+	rev := &scriptedReviewer{approve: true}
+	sess.permReviewer = rev
+
+	allow, err := sess.requestHostApproval(context.Background(), "registry.example.com", 443)
+	if err != nil || !allow {
+		t.Fatalf("requestHostApproval = (%v, %v), want (true, nil)", allow, err)
+	}
+	if rev.count() != 1 {
+		t.Fatalf("reviewer calls = %d, want 1", rev.count())
+	}
+	if _, ok := permissionRequested(firstEvent(pub, permissionRequested)); ok {
+		t.Fatal("reviewer approval must not publish PermissionRequestedEvent")
+	}
+	sess.Lock()
+	leftover := len(sess.hostApprovals) + sess.hostApprovalActive
+	status := sess.Status
+	sess.Unlock()
+	if leftover != 0 {
+		t.Fatalf("pending host approvals after auto-approve = %d, want 0", leftover)
+	}
+	if status == api.StatusWaitingPermission {
+		t.Fatal("auto-approve must never flip status to waiting-permission")
+	}
+	applied := perm.appliedDecisions()
+	if len(applied) != 1 || applied[0].Kind != api.DecisionAllowOnce {
+		t.Fatalf("ApplyDecision calls = %+v, want one AllowOnce (no rule persisted)", applied)
+	}
+}
+
+func TestHostApprovalAutoReviewerDefersPromptsHuman(t *testing.T) {
+	pub := &observingPublisher{}
+	pub.setSubscribers(true)
+	perm := &autoAskingPermManager{}
+	sess := newHostApprovalSession(t, perm, pub)
+	sess.permReviewer = &scriptedReviewer{approve: false}
+
+	type verdict struct {
+		allow bool
+		err   error
+	}
+	result := make(chan verdict, 1)
+	go func() {
+		allow, err := sess.requestHostApproval(context.Background(), "exfil.example.com", 443)
+		result <- verdict{allow, err}
+	}()
+
+	var reqID string
+	deadline := time.Now().Add(2 * time.Second)
+	for reqID == "" && time.Now().Before(deadline) {
+		for _, ev := range pub.recorded() {
+			if e, ok := permissionRequested(ev); ok && len(e.Permissions) > 0 {
+				reqID = e.Permissions[0].ID
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if reqID == "" {
+		t.Fatal("deferred review must fall through to a human prompt")
+	}
+	if _, err := sess.resolveHostApproval(api.PermissionDecision{RequestID: reqID, Kind: api.DecisionAllowOnce}); err != nil {
+		t.Fatalf("resolveHostApproval: %v", err)
+	}
+	select {
+	case v := <-result:
+		if v.err != nil || !v.allow {
+			t.Fatalf("requestHostApproval = (%v, %v), want (true, nil)", v.allow, v.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("requestHostApproval did not return after human decision")
+	}
+}
+
+func TestHostApprovalAutoBurstSingleFlight(t *testing.T) {
+	pub := &observingPublisher{}
+	pub.setSubscribers(true)
+	perm := &autoAskingPermManager{}
+	sess := newHostApprovalSession(t, perm, pub)
+	rev := &scriptedReviewer{approve: true, gate: make(chan struct{})}
+	sess.permReviewer = rev
+
+	const burst = 5
+	type hostVerdict struct {
+		allow bool
+		err   error
+	}
+	results := make(chan hostVerdict, burst)
+	for range burst {
+		go func() {
+			allow, err := sess.requestHostApproval(context.Background(), "burst.example.com", 443)
+			results <- hostVerdict{allow, err}
+		}()
+	}
+	// Hold the owner inside its review until all burst connections have
+	// coalesced onto the shared waiter, and verify State.Clone hides silent reviews.
+	time.Sleep(100 * time.Millisecond)
+	if cloned := sess.Clone().PendingPermissions; len(cloned) != 0 {
+		t.Fatalf("State.Clone leaked silent Phase-1 host review into PendingPermissions: %+v", cloned)
+	}
+	close(rev.gate)
+	for range burst {
+		select {
+		case v := <-results:
+			if v.err != nil || !v.allow {
+				t.Fatalf("burst requestHostApproval = (%v, %v), want (true, nil)", v.allow, v.err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("burst request did not finish")
+		}
+	}
+	if got := rev.count(); got != 1 {
+		t.Fatalf("reviewer calls = %d, want single-flight 1", got)
+	}
+	sess.Lock()
+	leftover := len(sess.hostApprovals) + sess.hostApprovalActive
+	sess.Unlock()
+	if leftover != 0 {
+		t.Fatalf("pending host approvals after burst = %d, want 0", leftover)
+	}
+}
+
+func TestHostApprovalAutoDeferHeadlessRefuses(t *testing.T) {
+	pub := &observingPublisher{}
+	pub.setSubscribers(false)
+	perm := &autoAskingPermManager{}
+	sess := newHostApprovalSession(t, perm, pub)
+	sess.permReviewer = &scriptedReviewer{approve: false}
+
+	allow, err := sess.requestHostApproval(context.Background(), "headless.example.com", 443)
+	if allow || err == nil {
+		t.Fatalf("requestHostApproval = (%v, %v), want refusal with error", allow, err)
+	}
+	if !strings.Contains(err.Error(), "no client is attached") {
+		t.Fatalf("error = %v, want no-client refusal", err)
+	}
+	sess.Lock()
+	leftover := len(sess.hostApprovals) + sess.hostApprovalActive
+	sess.Unlock()
+	if leftover != 0 {
+		t.Fatalf("pending host approvals after headless refusal = %d, want 0", leftover)
+	}
+}
+
+func TestHostApprovalAutoCancelDuringReviewNoLatePrompt(t *testing.T) {
+	pub := &observingPublisher{}
+	pub.setSubscribers(true)
+	perm := &autoAskingPermManager{}
+	sess := newHostApprovalSession(t, perm, pub)
+	rev := &scriptedReviewer{approve: true, gate: make(chan struct{})}
+	sess.permReviewer = rev
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := sess.requestHostApproval(ctx, "cancel.example.com", 443)
+		result <- err
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for rev.count() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	close(rev.gate)
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("requestHostApproval err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("requestHostApproval did not exit on cancel")
+	}
+	if _, ok := permissionRequested(firstEvent(pub, permissionRequested)); ok {
+		t.Fatal("canceled review must not publish a late PermissionRequestedEvent")
+	}
+}
+
+type metricsRecordingReviewer struct {
+	rec metrics.Recorder
+}
+
+func (r *metricsRecordingReviewer) Review(ctx context.Context, req permreview.ReviewRequest) permreview.Result {
+	_ = metrics.RecordPermissionReview(ctx, r.rec, metrics.PermissionReview{
+		Outcome:      permreview.ReasonApproved,
+		RequestClass: "net",
+		Model:        "fake/decider",
+		Decision:     "system",
+		Duration:     15 * time.Millisecond,
+	})
+	return permreview.Result{
+		Verdict:    permreview.VerdictApproveOnce,
+		ReasonCode: permreview.ReasonApproved,
+		Receipt: &api.PermissionReview{
+			RequestID:     req.Request.ID,
+			Source:        permreview.DecisionReviewSource,
+			Verdict:       string(permreview.VerdictApproveOnce),
+			Model:         "fake/decider",
+			DecisionScope: "system",
+			Probability:   0.98,
+			Threshold:     0.90,
+			LatencyMs:     15,
+		},
+	}
+}
+
+func TestHostApprovalAutoReviewScopesMetricsToSession(t *testing.T) {
+	ctx := context.Background()
+	db, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	mStore, err := metrics.NewStore(ctx, db, log.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mStore.Close() })
+	live := metrics.NewLive(mStore, nil)
+
+	pub := &observingPublisher{}
+	pub.setSubscribers(true)
+	sess := newHostApprovalSession(t, &autoAskingPermManager{}, pub)
+	sess.permReviewer = &metricsRecordingReviewer{rec: live}
+
+	// Pass a bare listener context without scope.Scope (matching proxy OnUnlistedHost).
+	allow, err := sess.requestHostApproval(context.Background(), "registry.npmjs.org", 443)
+	if err != nil || !allow {
+		t.Fatalf("requestHostApproval = (%v, %v), want (true, nil)", allow, err)
+	}
+	usage, err := live.SessionUsage(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("SessionUsage: %v", err)
+	}
+	if usage.Review == nil || usage.Review.Reviews != 1 || usage.Review.Approved != 1 {
+		t.Fatalf("SessionUsage.Review = %+v, want 1 approved proxy review scoped to %q", usage.Review, sess.ID)
+	}
+}
+
+func firstEvent(pub *observingPublisher, match func(broker.Event) (*api.PermissionRequestedEvent, bool)) broker.Event {
+	for _, ev := range pub.recorded() {
+		if _, ok := match(ev); ok {
+			return ev
+		}
+	}
+	return nil
 }

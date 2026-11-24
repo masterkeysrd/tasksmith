@@ -335,7 +335,7 @@ func modelLines(groups []api.UsageGroup) []usageLine {
 // sessionLines renders the Session tab.
 func sessionLines(u api.SessionUsage, now time.Time) []usageLine {
 	t := u.Totals
-	if t.Calls == 0 && len(u.Tools) == 0 && u.Changes.Files == 0 {
+	if t.Calls == 0 && len(u.Tools) == 0 && u.Changes.Files == 0 && (u.Review == nil || u.Review.Reviews == 0) {
 		return []usageLine{{Text: "No usage recorded for this session yet.", Style: lineDim}}
 	}
 	out := []usageLine{
@@ -353,7 +353,44 @@ func sessionLines(u api.SessionUsage, now time.Time) []usageLine {
 	out = append(out, cacheLines(u, now)...)
 	out = append(out, billingNotes(t, false)...)
 	out = append(out, toolLines(u.Tools)...)
+	out = append(out, reviewLines(u)...)
 	return append(out, insightLines(sessionInsights(u))...)
+}
+
+func reviewLines(u api.SessionUsage) []usageLine {
+	if u.Review == nil || u.Review.Reviews == 0 {
+		return nil
+	}
+	r := u.Review
+	summary := fmt.Sprintf("%s · %d approved · %d deferred", plural(r.Reviews, "review", "reviews"), r.Approved, r.Deferred)
+	if r.DurationMS > 0 {
+		summary += fmt.Sprintf(" · %s total (avg %s)", format.DurationMilis(r.DurationMS), format.DurationMilis(r.DurationMS/max(r.Reviews, 1)))
+	}
+	out := []usageLine{kv("Permission reviews", summary)}
+	for _, p := range u.Purposes {
+		if p.Key == "permission_review" && p.Calls > 0 {
+			out = append(out, kv("Review inference", fmt.Sprintf("%s · %s tokens · %s",
+				plural(p.Calls, "call", "calls"), tok(p.Tokens.Total()), costOf(p))))
+			break
+		}
+	}
+	if len(r.Outcomes) > 0 {
+		keys := make([]string, 0, len(r.Outcomes))
+		for k, v := range r.Outcomes {
+			if v > 0 {
+				keys = append(keys, k)
+			}
+		}
+		slices.Sort(keys)
+		if len(keys) > 0 {
+			parts := make([]string, 0, len(keys))
+			for _, k := range keys {
+				parts = append(parts, fmt.Sprintf("%s %d", k, r.Outcomes[k]))
+			}
+			out = append(out, wrapLine("    Outcomes:  "+strings.Join(parts, ", "), 15, lineDim)...)
+		}
+	}
+	return out
 }
 
 func trendText(cur, prev api.UsageGroup) string {

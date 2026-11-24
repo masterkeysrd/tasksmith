@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -140,5 +141,49 @@ func TestScanExecutableConfigAndFingerprint(t *testing.T) {
 	}
 	if fp1 == fp2 {
 		t.Errorf("fingerprint should have changed when file modified")
+	}
+}
+
+func TestScanExecutableConfigIncludesDecisions(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	decisionsDir := filepath.Join(tmpDir, ".agents", "decisions")
+	if err := os.MkdirAll(decisionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Decision\nmetadata:\n  name: permission-reviewer\nspec:\n  models: [\"@default\"]\n---\nrubric\n"
+	if err := os.WriteFile(filepath.Join(decisionsDir, "permission-reviewer.decision.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := ScanExecutableConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("ScanExecutableConfig error = %v", err)
+	}
+	wantRel := filepath.Join(".agents", "decisions", "permission-reviewer.decision.md")
+	if !slices.Contains(summary.Decisions, wantRel) {
+		t.Errorf("expected Decisions to list %s, got %v", wantRel, summary.Decisions)
+	}
+	if !summary.HasExecutables() {
+		t.Errorf("expected HasExecutables true with a repo Decision override present")
+	}
+
+	fp1, err := ComputeExecutableFingerprint(tmpDir)
+	if err != nil {
+		t.Fatalf("ComputeExecutableFingerprint error = %v", err)
+	}
+
+	// Editing the Decision rubric must change the trust fingerprint so an
+	// agent self-modification re-prompts before the next turn executes.
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(filepath.Join(decisionsDir, "permission-reviewer.decision.md"), []byte(manifest+"tighter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp2, err := ComputeExecutableFingerprint(tmpDir)
+	if err != nil {
+		t.Fatalf("ComputeExecutableFingerprint 2 error = %v", err)
+	}
+	if fp1 == fp2 {
+		t.Errorf("fingerprint should have changed when Decision modified")
 	}
 }

@@ -36,10 +36,11 @@ const (
 	NamespaceLocal     = warp.NamespaceLocal
 )
 
-// Builtin agent identifiers shipped in the system namespace.
+// Builtin agent and decision identifiers shipped in the system namespace.
 const (
-	AgentNameMain           = "main"
-	AgentNameTitleGenerator = "title-generator"
+	AgentNameMain                  = "main"
+	AgentNameTitleGenerator        = "title-generator"
+	PermissionReviewerDecisionName = "permission-reviewer"
 )
 
 // ModelAliasInherit is the TaskSmith-reserved model alias "@inherit". It never
@@ -254,9 +255,10 @@ func (w *Workspace) Reload(ctx context.Context) error {
 	}
 
 	if w.opts.restricted {
-		// Strip workspace and project-scoped executable resources (tools, mcps)
+		// Strip workspace and project-scoped executable resources (tools, mcps,
+		// decisions)
 		for _, res := range reg.Resources() {
-			if res.GetKind() == warp.KindTool || res.GetKind() == warp.KindMCP {
+			if res.GetKind() == warp.KindTool || res.GetKind() == warp.KindMCP || res.GetKind() == warp.KindDecision {
 				ns := strings.ToLower(res.GetNamespace())
 				if ns == warp.NamespaceWorkspace || ns == "workspace" || (ns != warp.NamespaceSystem && ns != warp.NamespaceUser && ns != "system" && ns != "user") {
 					reg.Delete(res.QualifiedName())

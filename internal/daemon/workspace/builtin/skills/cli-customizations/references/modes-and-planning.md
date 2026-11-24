@@ -11,7 +11,7 @@ TaskSmith separates **permission gates** (what auto-runs vs. prompts) from **beh
 | `accept_edits` | Same read baseline as `default`, plus safe `write`/`edit`/`remove` operations auto-run; shell and network still prompt. | Act normally. |
 | `plan` | Same permission gate as `default`. Writes, edits, and removals inside `<session-dir>/plans/` always auto-allow. | Investigate and clarify ambiguities via `ask_question`, ask where to store the plan (`<session-dir>/plans/` vs. workspace), write the plan, and submit via `exit_plan_mode`. |
 | `ask` | Same permission gate as `default`. | Answer the user's questions without modifying code or files. |
-| `auto` | All allowed tools auto-run except explicit `deny` rules, workspace/agent policy ceilings, `bypass_sandbox` retries, and unlisted proxy hosts. | Act normally. |
+| `auto` | Workspace-safe non-destructive operations (and non-unsafe plans matching an allow rule) auto-run; `SafetyUnsafe`, unmatched outside-workspace ops, unmatched deletes, `bypass_sandbox` retries, and unlisted proxy hosts undergo calibrated one-shot `permission-reviewer` review, prompting only on deferral. Explicit `deny` rules and policy exclusions always block. | Act normally. |
 
 In **restricted (untrusted)** repositories, sessions start in `default` mode while the daemon
 enforces read-only protection on the repository (mutating tools are denied and the kernel sandbox is

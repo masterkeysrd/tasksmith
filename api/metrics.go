@@ -109,10 +109,30 @@ type SessionUsage struct {
 	Tools     []ToolUsage  `json:"tools,omitempty"`
 	Changes   UsageChanges `json:"changes"`
 	Cache     UsageCache   `json:"cache"`
+	// Review summarizes the auto-mode permission reviewer's outcomes. Its
+	// inference cost lives in Purposes under the permission_review purpose,
+	// keeping review latency out of tool execution durations.
+	Review *UsagePermissionReview `json:"review,omitempty"`
 	// FirstAt and LastAt bound the session's recorded activity; their
 	// difference is the wall-clock duration.
 	FirstAt time.Time `json:"first_at"`
 	LastAt  time.Time `json:"last_at"`
+}
+
+// UsagePermissionReview aggregates auto-mode permission-reviewer outcomes.
+type UsagePermissionReview struct {
+	// Reviews counts eligible asks the reviewer evaluated (including
+	// no-model and oversize deferrals).
+	Reviews int64 `json:"reviews"`
+	// Approved counts the approve_once verdicts that advanced execution.
+	Approved int64 `json:"approved"`
+	// Deferred counts every verdict that fell back to the human flow.
+	Deferred int64 `json:"deferred"`
+	// Outcomes breaks reviews down by bounded outcome code
+	// (approved, deferred, below_threshold, no_model, oversize,
+	// invalid_manifest, timeout, canceled, error).
+	Outcomes   map[string]int64 `json:"outcomes,omitempty"`
+	DurationMS int64            `json:"duration_ms"`
 }
 
 // UsageSession is one session's share of a [UsageSummary].

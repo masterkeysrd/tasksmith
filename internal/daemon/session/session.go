@@ -27,6 +27,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -368,16 +369,19 @@ type Session struct {
 	// refresh and the rate-limit refresh cannot publish duplicate events.
 	quotaInFlight atomic.Bool
 
-	workspace  *workspace.Workspace   `json:"-"`
-	gateway    func() gateway.Gateway `json:"-"`
-	catalog    func() *models.Catalog `json:"-"`
-	metrics    metrics.Service        `json:"-"`
-	mcpCaller  func() tools.MCPCaller `json:"-"`
-	reloadLock *sync.RWMutex          `json:"-"`
-	publisher  Publisher              `json:"-"`
-	logger     log.Interface          `json:"-"`
-	bgCtx      context.Context        `json:"-"`
-	wg         *sync.WaitGroup        `json:"-"`
+	workspace *workspace.Workspace   `json:"-"`
+	gateway   func() gateway.Gateway `json:"-"`
+	catalog   func() *models.Catalog `json:"-"`
+	metrics   metrics.Service        `json:"-"`
+	// permReviewer evaluates risky auto-mode permission cards once before
+	// interrupting the human (harness tool calls and sandbox net approvals).
+	permReviewer permreview.Reviewer    `json:"-"`
+	mcpCaller    func() tools.MCPCaller `json:"-"`
+	reloadLock   *sync.RWMutex          `json:"-"`
+	publisher    Publisher              `json:"-"`
+	logger       log.Interface          `json:"-"`
+	bgCtx        context.Context        `json:"-"`
+	wg           *sync.WaitGroup        `json:"-"`
 
 	interactionMu sync.Mutex
 	modeUpdateMu  sync.Mutex
@@ -759,6 +763,15 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	s.PermManager.SetPlansDir(s.plansDir())
 	s.pushRuntimePolicy()
 
+	s.permReviewer = permreview.New(permreview.Deps{
+		Permissions: s.PermManager,
+		Workspace:   s.workspace,
+		Catalog:     s.catalog,
+		Gateway:     s.gateway,
+		Metrics:     s.metrics,
+		Logger:      s.logger,
+	})
+
 	attResolver, err := harness.NewAttachmentResolver(harness.AttachmentResolverConfig{
 		AgentName:        s.Config.Agent,
 		Workspace:        s.workspace,
@@ -786,6 +799,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 		Queue:       s,
 		Logger:      s.logger,
 		Metrics:     s.metrics,
+		Reviewer:    s.permReviewer,
 	})
 	if err != nil {
 		return fmt.Errorf("session: initialize harness: %w", err)
