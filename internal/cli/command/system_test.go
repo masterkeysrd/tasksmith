@@ -179,11 +179,15 @@ type modelPickerFixture struct {
 func mountModelPicker(t *testing.T, models []api.Model, defaultModel *api.Model) *modelPickerFixture {
 	t.Helper()
 	store.ResetSession()
+	store.ResetApp()
 	store.ClearSlot()
 	store.ClearTranscript()
-	t.Cleanup(store.ResetSession)
-	t.Cleanup(store.ClearSlot)
-	t.Cleanup(store.ClearTranscript)
+	t.Cleanup(func() {
+		store.ResetSession()
+		store.ResetApp()
+		store.ClearSlot()
+		store.ClearTranscript()
+	})
 
 	c, err := client.New("test.sock", client.WithCWD("."),
 		client.WithHTTPClient(&http.Client{Transport: &modelsTransport{models: models, defaultModel: defaultModel}}))

@@ -41,9 +41,13 @@ func thinkingResponse(body string) func(*http.Request) (*http.Response, error) {
 func thinkingCommandsWithModel(t *testing.T, previewBody string) *Registry {
 	t.Helper()
 	store.ResetSession()
+	store.ResetApp()
 	store.ClearTranscript()
-	t.Cleanup(store.ResetSession)
-	t.Cleanup(store.ClearTranscript)
+	t.Cleanup(func() {
+		store.ResetSession()
+		store.ResetApp()
+		store.ClearTranscript()
+	})
 	c, err := client.New("test.sock", client.WithCWD("."),
 		client.WithHTTPClient(&http.Client{Transport: roundTripFunc(thinkingResponse(previewBody))}))
 	if err != nil {
@@ -180,7 +184,12 @@ func TestBudgetReportsDefaultRange(t *testing.T) {
 
 func TestThinkingCommands(t *testing.T) {
 	store.ResetSession()
-	defer store.ResetSession()
+	store.ResetApp()
+	t.Cleanup(func() {
+		store.ResetSession()
+		store.ResetApp()
+		store.ClearSlot()
+	})
 	c, err := client.New("test.sock", client.WithCWD("."), client.WithHTTPClient(&http.Client{Transport: thinkingTransport{}}))
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +198,6 @@ func TestThinkingCommands(t *testing.T) {
 	store.InitSession(ctx, c, store.InitSessionOptions{Model: "test"})
 	r := NewRegistry()
 	store.ClearSlot()
-	defer store.ClearSlot()
 	if err := r.Execute("/effort"); err != nil {
 		t.Fatal(err)
 	}

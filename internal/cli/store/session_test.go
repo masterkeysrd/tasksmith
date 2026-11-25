@@ -819,9 +819,9 @@ func TestSwitchSessionSameIDReloadsTranscript(t *testing.T) {
 	ResetStream()
 	ClearTranscript()
 	FreezeTranscript()
-	defer ResetSession()
-	defer ResetStream()
 	defer ClearTranscript()
+	defer ResetStream()
+	defer ResetSession()
 
 	now := time.Now()
 	timelineEntries := []api.TimelineEntry{
@@ -1370,9 +1370,9 @@ func TestSwitchSessionRunningSessionSeedsSpinnerImmediately(t *testing.T) {
 	ResetStream()
 	ClearTranscript()
 	FreezeTranscript()
-	defer ResetSession()
-	defer ResetStream()
 	defer ClearTranscript()
+	defer ResetStream()
+	defer ResetSession()
 
 	rt := &mockSessionRoundTripper{
 		handler: func(req *http.Request) (*http.Response, error) {
@@ -1452,9 +1452,9 @@ func TestSwitchSessionDelegatedSlashCommandSeedsSpinnerAndSettles(t *testing.T) 
 	ResetStream()
 	ClearTranscript()
 	FreezeTranscript()
-	defer ResetSession()
-	defer ResetStream()
 	defer ClearTranscript()
+	defer ResetStream()
+	defer ResetSession()
 
 	subStart := time.Now().UTC().Add(-25 * time.Second).Truncate(time.Second)
 	rt := &mockSessionRoundTripper{
@@ -1574,9 +1574,9 @@ func TestForkSessionSwitchesToFork(t *testing.T) {
 	ResetSession()
 	ResetStream()
 	ClearTranscript()
-	defer ResetSession()
-	defer ResetStream()
 	defer ClearTranscript()
+	defer ResetStream()
+	defer ResetSession()
 
 	var forked atomic.Bool
 

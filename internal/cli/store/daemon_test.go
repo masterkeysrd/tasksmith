@@ -315,3 +315,66 @@ func TestDisconnectDetectionInSessionsWatcher(t *testing.T) {
 		t.Fatalf("expected watcher to passively reconnect and set DaemonConnected, got %v", GetApp().DaemonStatus)
 	}
 }
+
+func TestResetSessionWaitsForDaemonWatcherAndBlocksStaleDisconnect(t *testing.T) {
+	ResetApp()
+	ResetSession()
+	defer ResetApp()
+	defer ResetSession()
+
+	healthStarted := make(chan struct{})
+	var healthStartedOnce atomic.Bool
+	healthFinished := make(chan struct{})
+	var healthFinishedOnce atomic.Bool
+
+	rt := &mockSessionRoundTripper{
+		handler: func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case "/v1/events":
+				return nil, errors.New("connection broken")
+			case "/v1/health":
+				if healthStartedOnce.CompareAndSwap(false, true) {
+					close(healthStarted)
+				}
+				<-req.Context().Done()
+				if healthFinishedOnce.CompareAndSwap(false, true) {
+					close(healthFinished)
+				}
+				return nil, req.Context().Err()
+			default:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+		},
+	}
+
+	c, err := client.New("/tmp/test-reset-wait.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	InitSession(context.Background(), c, InitSessionOptions{})
+	SetDaemonStatus(DaemonConnected)
+
+	select {
+	case <-healthStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for daemon health check to start")
+	}
+
+	ResetSession()
+
+	select {
+	case <-healthFinished:
+	default:
+		t.Fatal("ResetSession returned while daemon health watcher was still running")
+	}
+
+	ResetApp()
+	if got := GetApp().DaemonStatus; got != DaemonConnected {
+		t.Fatalf("DaemonStatus after ResetSession+ResetApp = %q, want %q", got, DaemonConnected)
+	}
+}

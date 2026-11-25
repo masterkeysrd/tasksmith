@@ -72,16 +72,27 @@ func ApplyThinkingChange(setting *api.ThinkingSetting) {
 func SetThinking(setting api.ThinkingSetting, command, description string) {
 	state := GetSession()
 	if state.Session != nil && state.Session.ID != "" {
-		c := Client()
-		go func() {
-			updated, err := c.UpdateSession(context.Background(), state.Session.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Thinking: &setting}})
+		sessMu.Lock()
+		c := activeClient
+		lc := ensureLifecycleLocked()
+		sessMu.Unlock()
+		if c == nil {
+			return
+		}
+		lc.goRun(func(ctx context.Context) {
+			updated, err := c.UpdateSession(ctx, state.Session.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Thinking: &setting}})
 			if err != nil {
-				AppendError("Error", err.Error())
+				if ctx.Err() == nil {
+					AppendError("Error", err.Error())
+				}
+				return
+			}
+			if ctx.Err() != nil || !isActiveLifecycle(lc) {
 				return
 			}
 			SetSession(updated)
 			showSessionDiagnostics(updated, false)
-		}()
+		})
 		return
 	}
 	session.Set(func(s SessionState) SessionState {

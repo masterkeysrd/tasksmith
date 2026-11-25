@@ -377,10 +377,10 @@ func NewClearingBackend(b *mock.Backend) *ClearingBackend {
 
 // Clear marks the current scrollback as discarded, then clears the viewport.
 func (c *ClearingBackend) Clear() {
-	c.Backend.Clear()
 	c.mu.Lock()
 	c.dropped = c.InsertedAboveCount()
 	c.mu.Unlock()
+	c.Backend.Clear()
 }
 
 // AllInsertedAbove returns the buffers committed since the last Clear.

@@ -860,7 +860,16 @@ func TestSharedSSEMultiplexer(t *testing.T) {
 
 	// Cancel w2 -> should trigger unsubscribe for topic.two
 	w2Cancel()
-	time.Sleep(100 * time.Millisecond)
+	unsubDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(unsubDeadline) {
+		mu.Lock()
+		hasUnsub := slices.Contains(unsubCalls, "topic.two")
+		mu.Unlock()
+		if hasUnsub {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	mu.Lock()
 	if !slices.Contains(unsubCalls, "topic.two") {

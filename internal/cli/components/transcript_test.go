@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -13,9 +14,23 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
+func startTranscript(t *testing.T, b backend.Backend) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = trail.Run(ctx, Transcript(), trail.WithBackend(b))
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+}
+
 func TestTranscriptRendersHeaderAndRemountsOnReset(t *testing.T) {
 	store.ClearTranscript()
-	defer store.ClearTranscript()
+	t.Cleanup(store.ClearTranscript)
 
 	store.AppendHeader(store.HeaderData{
 		Version:   "1.0.0",
@@ -26,12 +41,7 @@ func TestTranscriptRendersHeaderAndRemountsOnReset(t *testing.T) {
 	store.FreezeTranscript()
 
 	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, Transcript(), trail.WithBackend(b))
-	}()
+	startTranscript(t, b)
 
 	// Wait for header to be committed to InsertedAbove static scrollback
 	var initialText string
@@ -111,7 +121,7 @@ func TestTranscriptFreezesMascotInReadyPose(t *testing.T) {
 
 func TestTranscriptPlaceholderKinds(t *testing.T) {
 	store.ClearTranscript()
-	defer store.ClearTranscript()
+	t.Cleanup(store.ClearTranscript)
 
 	// Append other kinds; should not panic and return valid nodes
 	store.AppendTimelineEntry(api.TimelineEntry{ID: "tl-1"})
@@ -120,12 +130,7 @@ func TestTranscriptPlaceholderKinds(t *testing.T) {
 	store.AppendCommandOutput("/cmd", "output")
 
 	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, Transcript(), trail.WithBackend(b))
-	}()
+	startTranscript(t, b)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -143,7 +148,7 @@ func TestTranscriptPlaceholderKinds(t *testing.T) {
 
 func TestTranscriptClearReprintHeader(t *testing.T) {
 	store.ClearTranscript()
-	defer store.ClearTranscript()
+	t.Cleanup(store.ClearTranscript)
 
 	store.SetHeaderMeta("1.0.0", "/workspace/clear-test")
 	store.SetModelInfo("TestModel", "medium")
@@ -151,13 +156,7 @@ func TestTranscriptClearReprintHeader(t *testing.T) {
 	store.AppendWarning("old message that should be cleared")
 
 	b := testutils.NewClearingBackend(mock.New(80, 24))
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, Transcript(), trail.WithBackend(b))
-	}()
+	startTranscript(t, b)
 
 	// Wait for initial header and notice to be committed to scrollback
 	var initialText string
@@ -181,9 +180,11 @@ func TestTranscriptClearReprintHeader(t *testing.T) {
 	var postClearText string
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		postClearText = b.AllText()
-		if b.ClearCount() > 0 && strings.Contains(postClearText, "TaskSmith v1.0.0") {
-			break
+		if b.ClearCount() > 0 {
+			postClearText = b.AllText()
+			if strings.Contains(postClearText, "TaskSmith v1.0.0") {
+				break
+			}
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -201,18 +202,13 @@ func TestTranscriptClearReprintHeader(t *testing.T) {
 
 func TestTranscriptLiveDraftAndFreezeOnSubmit(t *testing.T) {
 	store.ClearTranscript()
-	defer store.ClearTranscript()
+	t.Cleanup(store.ClearTranscript)
 
 	store.SetHeaderMeta("1.0.0", "/workspace/live-test")
 	store.SetModelInfo("model-alpha", "low")
 
 	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, Transcript(), trail.WithBackend(b))
-	}()
+	startTranscript(t, b)
 
 	// 1. Initial render: Header is live on surface, scrollback (InsertedAbove) is empty
 	deadline := time.Now().Add(2 * time.Second)
@@ -281,18 +277,13 @@ func TestTranscriptLiveDraftAndFreezeOnSubmit(t *testing.T) {
 
 func TestTranscriptSessionSwitch(t *testing.T) {
 	store.ClearTranscript()
-	defer store.ClearTranscript()
+	t.Cleanup(store.ClearTranscript)
 
 	store.SetHeaderMeta("1.0.0", "/workspace/resumed")
 	store.SetModelInfo("resumed-model", "high")
 
 	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, Transcript(), trail.WithBackend(b))
-	}()
+	startTranscript(t, b)
 
 	// Switch session: snapshot header and enter frozen mode
 	store.ResetForSessionSwitch()

@@ -215,22 +215,19 @@ func DecideSubagentPermission(subagentID string, req api.PermissionRequest, dec 
 
 	sessMu.Lock()
 	c := activeClient
-	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
 	if c == nil {
 		return
 	}
 
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
+	lc.goRun(func(ctx context.Context) {
 		err := c.Send(ctx, subagentID, api.SendRequest{Decision: &dec})
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			AppendError("Error", err.Error())
 		}
-	}()
+	})
 }
 
 // SubmitSubagentQuestion submits a user answer to a pending question for a child subagent.
@@ -271,7 +268,7 @@ func SubmitSubagentQuestion(subagentID string, req api.QuestionRequest, resp api
 
 	sessMu.Lock()
 	c := activeClient
-	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
 	if c == nil {
@@ -281,15 +278,12 @@ func SubmitSubagentQuestion(subagentID string, req api.QuestionRequest, resp api
 		return
 	}
 
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
+	lc.goRun(func(ctx context.Context) {
 		err := c.Send(ctx, subagentID, api.SendRequest{Question: &resp})
 		if done != nil {
 			done(err)
 		}
-	}()
+	})
 }
 
 // SubagentConversation maintains an isolated conversation stream for a subagent session.

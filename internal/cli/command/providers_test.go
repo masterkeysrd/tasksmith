@@ -55,11 +55,13 @@ func newProviderFixture(t *testing.T, providers []api.WorkspaceProvider) *provid
 		t.Fatalf("client.New: %v", err)
 	}
 	store.ResetSession()
+	store.ResetApp()
 	store.ClearSlot()
 	store.ClearTranscript()
 	t.Cleanup(func() {
 		mcpBackground.Wait()
 		store.ResetSession()
+		store.ResetApp()
 		store.ClearSlot()
 		store.ClearTranscript()
 	})

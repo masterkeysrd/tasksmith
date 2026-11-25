@@ -72,12 +72,67 @@ func (s SessionState) ActiveModelID() string {
 	return strings.TrimSpace(s.Config.Model)
 }
 
+type sessionLifecycle struct {
+	gen    uint64
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	mu     sync.Mutex
+	closed bool
+	wg     sync.WaitGroup
+}
+
+func newSessionLifecycle(parent context.Context, gen uint64) *sessionLifecycle {
+	if parent == nil {
+		parent = context.Background()
+	}
+	subCtx, cancel := context.WithCancel(parent)
+	return &sessionLifecycle{
+		gen:    gen,
+		ctx:    subCtx,
+		cancel: cancel,
+	}
+}
+
+func (l *sessionLifecycle) goRun(fn func(ctx context.Context)) bool {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return false
+	}
+	l.wg.Add(1)
+	l.mu.Unlock()
+
+	go func() {
+		defer l.wg.Done()
+		fn(l.ctx)
+	}()
+	return true
+}
+
+func (l *sessionLifecycle) isClosed() bool {
+	l.mu.Lock()
+	closed := l.closed
+	l.mu.Unlock()
+	return closed
+}
+
+func (l *sessionLifecycle) stopAndWait() {
+	l.mu.Lock()
+	l.closed = true
+	l.mu.Unlock()
+	l.cancel()
+	l.wg.Wait()
+}
+
 var (
 	sessMu               sync.Mutex
 	activeClient         *client.Client
 	activeOpts           InitSessionOptions
 	activeCtx            context.Context
 	activeCancel         context.CancelFunc
+	activeLifecycle      *sessionLifecycle
+	sessionGen           uint64
 	streamCancel         context.CancelFunc
 	modeDebounceTimer    *time.Timer
 	modeDebounceDelay    = 500 * time.Millisecond
@@ -86,6 +141,25 @@ var (
 	diagnosticConfig     api.SessionConfig
 	displayedDiagnostics []api.SessionDiagnostic
 )
+
+func ensureLifecycleLocked() *sessionLifecycle {
+	if activeLifecycle != nil {
+		return activeLifecycle
+	}
+	sessionGen++
+	lc := newSessionLifecycle(activeCtx, sessionGen)
+	activeLifecycle = lc
+	activeCtx = lc.ctx
+	activeCancel = lc.cancel
+	return lc
+}
+
+func isActiveLifecycle(lc *sessionLifecycle) bool {
+	sessMu.Lock()
+	active := activeLifecycle == lc && !lc.isClosed()
+	sessMu.Unlock()
+	return active
+}
 
 func cancelModeDebounceLocked() {
 	if modeDebounceTimer != nil {
@@ -113,20 +187,33 @@ type InitSessionOptions struct {
 func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions) {
 	sessMu.Lock()
 	cancelModeDebounceLocked()
+	prev := activeLifecycle
+	activeLifecycle = nil
 	if activeCancel != nil {
 		activeCancel()
+		activeCancel = nil
 	}
 	if streamCancel != nil {
 		streamCancel()
 		streamCancel = nil
 	}
-	subCtx, cancel := context.WithCancel(ctx)
-	activeCtx = subCtx
-	activeCancel = cancel
+	sessMu.Unlock()
+
+	if prev != nil {
+		prev.stopAndWait()
+	}
+
+	sessMu.Lock()
+	sessionGen++
+	lc := newSessionLifecycle(ctx, sessionGen)
+	activeLifecycle = lc
+	activeCtx = lc.ctx
+	activeCancel = lc.cancel
 	activeClient = c
 	activeOpts = opts
 	workspaceSandboxMode = ""
 	sessMu.Unlock()
+	subCtx := lc.ctx
 
 	var sess *api.Session
 	sid := strings.TrimSpace(opts.SessionID)
@@ -178,7 +265,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	// failed to start reports itself in the timeline instead of staying invisible.
 	if servers, err := c.ListMCPs(subCtx); err == nil {
 		SetWorkspaceMCPServers(servers)
-		watchMCPSettlement(subCtx, c, servers)
+		watchMCPSettlement(subCtx, c, servers, lc)
 	}
 	if cmds, err := c.ListCommands(subCtx); err == nil {
 		SetWorkspaceCommands(cmds)
@@ -244,10 +331,10 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		}
 		globalConversation.ReconcileStreamStatus(sess)
 		showSessionDiagnostics(sess, true)
-		startSessionStreamWatcher(subCtx, sid, watchSince)
+		startSessionStreamWatcher(lc, sid, watchSince)
 	}
 
-	startSessionsWatcher(subCtx)
+	startSessionsWatcher(lc)
 }
 
 // startSessionStreamWatcher watches a session's event stream. since anchors
@@ -255,42 +342,57 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 // GetSession/Timeline so events published during the snapshot fetch are
 // replayed from the daemon's ring instead of falling into the gap between the
 // fetch and the subscription. An empty since subscribes live-only.
-func startSessionStreamWatcher(ctx context.Context, sessionID string, since string) {
+func startSessionStreamWatcher(lc *sessionLifecycle, sessionID string, since string) {
 	sessMu.Lock()
+	if activeLifecycle != lc || activeClient == nil || sessionID == "" {
+		sessMu.Unlock()
+		return
+	}
 	if streamCancel != nil {
 		streamCancel()
 	}
-	watchCtx, cancel := context.WithCancel(ctx)
+	watchCtx, cancel := context.WithCancel(lc.ctx)
 	streamCancel = cancel
 	c := activeClient
 	sessMu.Unlock()
 
-	if c == nil || sessionID == "" {
-		return
-	}
+	lc.goRun(func(context.Context) {
+		loadSessionUsage(watchCtx, c, sessionID)
+	})
 
-	go loadSessionUsage(watchCtx, c, sessionID)
-
-	go func() {
+	if !lc.goRun(func(context.Context) {
+		defer cancel()
 		for {
 			if watchCtx.Err() != nil {
 				return
 			}
 			for ev, err := range c.Watch(watchCtx, since, api.SessionStreamTopic(sessionID)) {
 				if err != nil {
+					if watchCtx.Err() != nil {
+						return
+					}
 					if client.IsNeedSync(err) {
 						resyncSince := client.NewCursor()
 						loadSessionUsage(watchCtx, c, sessionID)
 						sess, sessErr := c.GetSession(watchCtx, sessionID)
+						if watchCtx.Err() != nil {
+							return
+						}
 						if sessErr == nil && sess != nil {
 							SetSession(sess)
 						}
 						if tl, tlErr := c.Timeline(watchCtx, sessionID); tlErr == nil {
+							if watchCtx.Err() != nil {
+								return
+							}
 							if sessErr == nil && sess != nil {
 								globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions, sess.PendingPlanReviews)
 							} else {
 								globalConversation.loadTimeline(tl)
 							}
+						}
+						if watchCtx.Err() != nil {
+							return
 						}
 						if sessErr == nil && sess != nil {
 							globalConversation.reconcilePermissions(sess.PendingPermissions)
@@ -301,6 +403,9 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string, since stri
 						since = resyncSince
 					}
 					break
+				}
+				if watchCtx.Err() != nil {
+					return
 				}
 				if ev.ID != "" {
 					since = ev.ID
@@ -313,19 +418,21 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string, since stri
 			case <-time.After(100 * time.Millisecond):
 			}
 		}
-	}()
+	}) {
+		cancel()
+	}
 }
 
-func startSessionsWatcher(ctx context.Context) {
+func startSessionsWatcher(lc *sessionLifecycle) {
 	sessMu.Lock()
+	if activeLifecycle != lc || activeClient == nil {
+		sessMu.Unlock()
+		return
+	}
 	c := activeClient
 	sessMu.Unlock()
 
-	if c == nil {
-		return
-	}
-
-	go func() {
+	lc.goRun(func(ctx context.Context) {
 		var since string
 		for {
 			if ctx.Err() != nil {
@@ -341,7 +448,7 @@ func startSessionsWatcher(ctx context.Context) {
 						break
 					}
 					if !isDaemonHealthy(ctx, c) {
-						if ctx.Err() != nil {
+						if ctx.Err() != nil || !isActiveLifecycle(lc) {
 							return
 						}
 						if GetApp().DaemonStatus == DaemonConnected {
@@ -363,17 +470,20 @@ func startSessionsWatcher(ctx context.Context) {
 						}
 						ticker.Stop()
 
-						if ctx.Err() != nil {
+						if ctx.Err() != nil || !isActiveLifecycle(lc) {
 							return
 						}
 						since = ""
-						resyncDaemonState(ctx, c)
-						if ctx.Err() != nil {
+						resyncDaemonState(ctx, c, lc)
+						if ctx.Err() != nil || !isActiveLifecycle(lc) {
 							return
 						}
 						SetDaemonStatus(DaemonConnected)
 					}
 					break
+				}
+				if ctx.Err() != nil || !isActiveLifecycle(lc) {
+					return
 				}
 				if ev.ID != "" {
 					since = ev.ID
@@ -400,7 +510,7 @@ func startSessionsWatcher(ctx context.Context) {
 			case <-time.After(100 * time.Millisecond):
 			}
 		}
-	}()
+	})
 }
 
 // draftSandboxMode predicts the sandbox backend a draft session will get:
@@ -420,7 +530,7 @@ func draftSandboxMode() api.SandboxMode {
 	return api.SandboxNative
 }
 
-func getOrCreateSession(ctx context.Context) (*api.Session, error) {
+func getOrCreateSession(ctx context.Context, lc *sessionLifecycle) (*api.Session, error) {
 	sessMu.Lock()
 	sess := GetSession().Session
 	if sess != nil && sess.ID != "" {
@@ -453,10 +563,13 @@ func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	SetSession(created)
 	globalConversation.setSessionID(created.ID)
 	showSessionDiagnostics(created, false)
-	startSessionStreamWatcher(ctx, created.ID, "")
+	startSessionStreamWatcher(lc, created.ID, "")
 	return created, nil
 }
 
@@ -508,7 +621,7 @@ func sendWithUserText(text, userText string, modeOverride api.PermissionMode, at
 
 	sessMu.Lock()
 	c := activeClient
-	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
 	if c == nil {
@@ -516,14 +629,12 @@ func sendWithUserText(text, userText string, modeOverride api.PermissionMode, at
 		return
 	}
 
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
-
-		sess, err := getOrCreateSession(ctx)
+	lc.goRun(func(ctx context.Context) {
+		sess, err := getOrCreateSession(ctx, lc)
 		if err != nil {
-			globalConversation.cancelPendingUser(msgID, err)
+			if ctx.Err() == nil {
+				globalConversation.cancelPendingUser(msgID, err)
+			}
 			return
 		}
 		if modeOverride != "" && cmp.Or(sess.Config.Mode, api.ModeDefault) != modeOverride {
@@ -531,7 +642,9 @@ func sendWithUserText(text, userText string, modeOverride api.PermissionMode, at
 				Config: api.SessionConfig{Mode: modeOverride},
 			})
 			if uerr != nil {
-				globalConversation.cancelPendingUser(msgID, uerr)
+				if ctx.Err() == nil {
+					globalConversation.cancelPendingUser(msgID, uerr)
+				}
 				return
 			}
 			if updated != nil {
@@ -587,7 +700,9 @@ func sendWithUserText(text, userText string, modeOverride api.PermissionMode, at
 			}
 			uploaded, uerr := c.UploadMedia(ctx, sess.ID, staged.Data, staged.MIMEType, staged.DisplayName)
 			if uerr != nil {
-				globalConversation.cancelPendingUser(msgID, uerr)
+				if ctx.Err() == nil {
+					globalConversation.cancelPendingUser(msgID, uerr)
+				}
 				return
 			}
 			att.Target = uploaded.SHA256
@@ -599,10 +714,10 @@ func sendWithUserText(text, userText string, modeOverride api.PermissionMode, at
 			Content:     text,
 			Attachments: finalAttachments,
 		})
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			globalConversation.cancelPendingUser(msgID, err)
 		}
-	}()
+	})
 }
 
 // SendCommand executes a direct user shell command (!) in the active session sandbox
@@ -623,17 +738,15 @@ func SendCommand(cmd string) {
 
 	sessMu.Lock()
 	c := activeClient
-	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
-
-		sess, err := getOrCreateSession(ctx)
+	lc.goRun(func(ctx context.Context) {
+		sess, err := getOrCreateSession(ctx, lc)
 		if err != nil {
-			globalConversation.cancelPendingUser(msgID, err)
+			if ctx.Err() == nil {
+				globalConversation.cancelPendingUser(msgID, err)
+			}
 			return
 		}
 
@@ -641,10 +754,10 @@ func SendCommand(cmd string) {
 			ID:      msgID,
 			Command: trimmed,
 		})
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			globalConversation.cancelPendingUser(msgID, err)
 		}
-	}()
+	})
 }
 
 // SendCompact triggers manual context compaction for the active session.
@@ -657,7 +770,7 @@ func SendCompact(focus string) {
 	sessMu.Lock()
 	sess := GetSession().Session
 	c := activeClient
-	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
 	if sess == nil || sess.ID == "" {
@@ -673,18 +786,15 @@ func SendCompact(focus string) {
 		return
 	}
 
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
+	lc.goRun(func(ctx context.Context) {
 		err := c.Send(ctx, sess.ID, api.SendRequest{
 			ID:      msgID,
 			Compact: &api.CompactRequest{Focus: strings.TrimSpace(focus)},
 		})
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			AppendError("Error", err.Error())
 		}
-	}()
+	})
 }
 
 // Cancel aborts the active turn if streaming.
@@ -694,7 +804,7 @@ func Cancel() {
 	}
 	sessMu.Lock()
 	c := activeClient
-	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sess := GetSession().Session
 	sessMu.Unlock()
 
@@ -703,18 +813,17 @@ func Cancel() {
 		return
 	}
 
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
+	lc.goRun(func(ctx context.Context) {
 		_ = c.Cancel(ctx, sess.ID)
-		globalConversation.cancelTurn()
-	}()
+		if ctx.Err() == nil {
+			globalConversation.cancelTurn()
+		}
+	})
 }
 
 func SubmitQuestion(req api.QuestionRequest, response api.QuestionResponse, done func(error)) {
 	sessMu.Lock()
-	c, ctx := activeClient, activeCtx
+	c, lc := activeClient, ensureLifecycleLocked()
 	sess := GetSession().Session
 	sessMu.Unlock()
 	if sess == nil || sess.ID == "" || req.ID == "" {
@@ -725,12 +834,9 @@ func SubmitQuestion(req api.QuestionRequest, response api.QuestionResponse, done
 	}
 	response.RequestID, response.ToolCallID = req.ID, req.ToolCallID
 	sessionID := sess.ID
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
+	lc.goRun(func(ctx context.Context) {
 		err := c.Send(ctx, sessionID, api.SendRequest{Question: &response})
-		if err == nil {
+		if err == nil && ctx.Err() == nil {
 			globalConversation.mu.Lock()
 			if globalConversation.sessionID == sessionID {
 				globalConversation.removeQuestionLocked(req.ID)
@@ -741,13 +847,13 @@ func SubmitQuestion(req api.QuestionRequest, response api.QuestionResponse, done
 		if done != nil {
 			done(err)
 		}
-	}()
+	})
 }
 
 // SubmitPlanReview submits a user approval or keep-planning decision for a pending plan review.
 func SubmitPlanReview(req api.PlanReviewRequest, decision api.PlanReviewDecision, done func(error)) {
 	sessMu.Lock()
-	c, ctx := activeClient, activeCtx
+	c, lc := activeClient, ensureLifecycleLocked()
 	sess := GetSession().Session
 	sessMu.Unlock()
 	if sess == nil || sess.ID == "" || req.ID == "" {
@@ -758,12 +864,9 @@ func SubmitPlanReview(req api.PlanReviewRequest, decision api.PlanReviewDecision
 	}
 	decision.RequestID, decision.ToolCallID = req.ID, req.ToolCallID
 	sessionID := sess.ID
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
+	lc.goRun(func(ctx context.Context) {
 		err := c.Send(ctx, sessionID, api.SendRequest{PlanReview: &decision})
-		if err == nil {
+		if err == nil && ctx.Err() == nil {
 			globalConversation.mu.Lock()
 			if globalConversation.sessionID == sessionID {
 				globalConversation.removePlanReviewLocked(req.ID)
@@ -774,7 +877,7 @@ func SubmitPlanReview(req api.PlanReviewRequest, decision api.PlanReviewDecision
 		if done != nil {
 			done(err)
 		}
-	}()
+	})
 }
 
 // DecidePermission submits a user decision on a pending permission request.
@@ -790,7 +893,7 @@ func DecidePermission(req api.PermissionRequest, dec api.PermissionDecision) {
 
 	sessMu.Lock()
 	c := activeClient
-	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sess := GetSession().Session
 	sessMu.Unlock()
 
@@ -798,21 +901,18 @@ func DecidePermission(req api.PermissionRequest, dec api.PermissionDecision) {
 		return
 	}
 
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
+	lc.goRun(func(ctx context.Context) {
 		err := c.Send(ctx, sess.ID, api.SendRequest{Decision: &dec})
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			AppendError("Error", err.Error())
 			globalConversation.SeedPermissions([]api.PermissionRequest{req})
 		}
-	}()
+	})
 }
 
 func ApprovePermissionAndAcceptEdits(req api.PermissionRequest) {
 	sessMu.Lock()
-	c, ctx, sess := activeClient, activeCtx, GetSession().Session
+	c, lc, sess := activeClient, ensureLifecycleLocked(), GetSession().Session
 	cancelModeDebounceLocked()
 	sessMu.Unlock()
 
@@ -820,10 +920,9 @@ func ApprovePermissionAndAcceptEdits(req api.PermissionRequest) {
 		AppendError("Could not switch to accept_edits", "No active session connection")
 		return
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	go approvePermissionAndAcceptEdits(ctx, c, sess.ID, req.ID)
+	lc.goRun(func(ctx context.Context) {
+		approvePermissionAndAcceptEdits(ctx, c, sess.ID, req.ID)
+	})
 }
 
 func approvePermissionAndAcceptEdits(ctx context.Context, c *client.Client, sessionID, requestID string) {
@@ -977,7 +1076,7 @@ func loadSessionUsage(parent context.Context, c *client.Client, sessionID string
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	usage, err := c.SessionUsage(ctx, sessionID)
-	if err != nil {
+	if err != nil || parent.Err() != nil {
 		return
 	}
 	SetUsage(usage)
@@ -996,7 +1095,16 @@ func refreshQuotaSoon(c *client.Client) {
 	if c == nil {
 		return
 	}
-	go loadModelQuota(context.Background(), c)
+	sessMu.Lock()
+	if activeClient != c {
+		sessMu.Unlock()
+		return
+	}
+	lc := ensureLifecycleLocked()
+	sessMu.Unlock()
+	lc.goRun(func(ctx context.Context) {
+		loadModelQuota(ctx, c)
+	})
 }
 
 // loadModelQuota fetches the active model's quota once so the status line can
@@ -1008,6 +1116,9 @@ func refreshQuotaSoon(c *client.Client) {
 func loadModelQuota(parent context.Context, c *client.Client) {
 	claimed := false
 	for attempt := 0; attempt < 40 && !claimed; attempt++ {
+		if parent.Err() != nil {
+			return
+		}
 		state := GetSession()
 		if !state.ModelQuotaBilled || state.Quota != nil || state.ActiveModelID() == "" {
 			return
@@ -1019,7 +1130,11 @@ func loadModelQuota(parent context.Context, c *client.Client) {
 		}
 		quotaPrefetchMu.Unlock()
 		if !claimed {
-			time.Sleep(125 * time.Millisecond)
+			select {
+			case <-parent.Done():
+				return
+			case <-time.After(125 * time.Millisecond):
+			}
 		}
 	}
 	if !claimed {
@@ -1031,6 +1146,9 @@ func loadModelQuota(parent context.Context, c *client.Client) {
 		quotaPrefetchMu.Unlock()
 	}()
 
+	if parent.Err() != nil {
+		return
+	}
 	state := GetSession()
 	if !state.ModelQuotaBilled || state.Quota != nil {
 		return
@@ -1043,7 +1161,7 @@ func loadModelQuota(parent context.Context, c *client.Client) {
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	quota, err := c.GetModelQuota(ctx, id)
-	if err != nil || quota == nil {
+	if err != nil || quota == nil || parent.Err() != nil {
 		return
 	}
 	SetQuota(*quota)
@@ -1316,38 +1434,38 @@ func SetMode(mode api.PermissionMode) {
 		if c == nil {
 			return
 		}
+		lc := ensureLifecycleLocked()
 		targetSessID := sessID
 		modeDebounceTimer = time.AfterFunc(modeDebounceDelay, func() {
-			sessMu.Lock()
-			cl := activeClient
-			ctx := activeCtx
-			sessMu.Unlock()
-			if cl == nil {
-				return
-			}
-			current := GetSession()
-			if current.Session == nil || current.Session.ID != targetSessID {
-				return
-			}
-			currentMode := cmp.Or(current.Config.Mode, api.ModeDefault)
-			persistedMode := cmp.Or(current.Session.Config.Mode, api.ModeDefault)
-			if currentMode == persistedMode {
-				return
-			}
-			if ctx == nil || ctx.Err() != nil {
-				ctx = context.Background()
-			}
-			updated, err := cl.UpdateSession(ctx, targetSessID, api.UpdateSessionRequest{
-				Config: api.SessionConfig{Mode: currentMode},
-			})
-			if err == nil && updated != nil {
-				session.Set(func(s SessionState) SessionState {
-					if s.Session != nil && s.Session.ID == targetSessID {
-						s.Session.Config.Mode = currentMode
-					}
-					return s
+			lc.goRun(func(ctx context.Context) {
+				sessMu.Lock()
+				cl := activeClient
+				sameLifecycle := activeLifecycle == lc
+				sessMu.Unlock()
+				if cl == nil || !sameLifecycle {
+					return
+				}
+				current := GetSession()
+				if current.Session == nil || current.Session.ID != targetSessID {
+					return
+				}
+				currentMode := cmp.Or(current.Config.Mode, api.ModeDefault)
+				persistedMode := cmp.Or(current.Session.Config.Mode, api.ModeDefault)
+				if currentMode == persistedMode {
+					return
+				}
+				updated, err := cl.UpdateSession(ctx, targetSessID, api.UpdateSessionRequest{
+					Config: api.SessionConfig{Mode: currentMode},
 				})
-			}
+				if err == nil && updated != nil && ctx.Err() == nil {
+					session.Set(func(s SessionState) SessionState {
+						if s.Session != nil && s.Session.ID == targetSessID {
+							s.Session.Config.Mode = currentMode
+						}
+						return s
+					})
+				}
+			})
 		})
 	}
 }
@@ -1509,11 +1627,14 @@ func refreshWorkspaceToolsForce(ctx context.Context, c *client.Client, agent str
 	return len(tools), nil
 }
 
-func resyncDaemonState(ctx context.Context, c *client.Client) {
-	if c == nil {
+func resyncDaemonState(ctx context.Context, c *client.Client, lc *sessionLifecycle) {
+	if c == nil || ctx.Err() != nil || !isActiveLifecycle(lc) {
 		return
 	}
 	if ws, err := c.GetWorkspace(ctx); err == nil && ws != nil {
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
+			return
+		}
 		SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
 		sessMu.Lock()
 		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
@@ -1523,31 +1644,48 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 	// A resync follows a daemon restart, so MCP connections are starting over and
 	// the cached health is stale; re-list and keep watching while they settle.
 	if servers, err := c.ListMCPs(ctx); err == nil {
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
+			return
+		}
 		SetWorkspaceMCPServers(servers)
-		watchMCPSettlement(ctx, c, servers)
+		watchMCPSettlement(ctx, c, servers, lc)
 	}
 	if cmds, err := c.ListCommands(ctx); err == nil {
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
+			return
+		}
 		SetWorkspaceCommands(cmds)
 	}
 	if skills, err := c.ListSkills(ctx); err == nil {
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
+			return
+		}
 		SetWorkspaceSkills(skills)
 	}
 	if rules, err := c.ListRules(ctx); err == nil {
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
+			return
+		}
 		SetWorkspaceRules(rules)
 	}
 	if agents, err := c.ListAgents(ctx); err == nil {
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
+			return
+		}
 		SetWorkspaceAgents(agents)
+	}
+	if ctx.Err() != nil || !isActiveLifecycle(lc) {
+		return
 	}
 	refreshWorkspaceTools(ctx, c, effectiveToolAgent())
 
 	sessMu.Lock()
 	sess := GetSession().Session
 	opts := activeOpts
-	pCtx := activeCtx
 	sessMu.Unlock()
 
-	if pCtx == nil || pCtx.Err() != nil {
-		pCtx = context.Background()
+	if ctx.Err() != nil || !isActiveLifecycle(lc) {
+		return
 	}
 
 	if sess == nil {
@@ -1560,6 +1698,9 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 		})
 
 		ws, _ := c.GetWorkspace(ctx)
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
+			return
+		}
 		if ws != nil && strings.TrimSpace(cfg.Agent) == "" && strings.TrimSpace(cfg.Model) == "" {
 			SetSessionModelInfo(ws.DefaultModel, cfg.Thinking)
 		} else {
@@ -1568,13 +1709,22 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 	} else {
 		watchSince := client.NewCursor()
 		if loadedSess, err := c.GetSession(ctx, sess.ID); err == nil && loadedSess != nil {
+			if ctx.Err() != nil || !isActiveLifecycle(lc) {
+				return
+			}
 			SetSession(loadedSess)
 			sess = loadedSess
 		}
 		if tl, err := c.Timeline(ctx, sess.ID); err == nil {
+			if ctx.Err() != nil || !isActiveLifecycle(lc) {
+				return
+			}
 			globalConversation.loadTimelineSnapshot(sess, tl, sess.PendingQuestions, sess.PendingPlanReviews)
 		}
 		loadSessionUsage(ctx, c, sess.ID)
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
+			return
+		}
 		if len(sess.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(sess.PendingPermissions)
 		}
@@ -1588,7 +1738,7 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 		}
 		globalConversation.ReconcileStreamStatus(sess)
 		showSessionDiagnostics(sess, false)
-		startSessionStreamWatcher(pCtx, sess.ID, watchSince)
+		startSessionStreamWatcher(lc, sess.ID, watchSince)
 	}
 }
 
@@ -1602,22 +1752,28 @@ var (
 
 // watchMCPSettlement refreshes the cached MCP listing in the background until no
 // server is still connecting, the wait expires, or the session context ends.
-func watchMCPSettlement(ctx context.Context, c *client.Client, servers []api.MCPServer) {
+func watchMCPSettlement(ctx context.Context, c *client.Client, servers []api.MCPServer, lc *sessionLifecycle) {
 	if !hasConnectingMCP(servers) {
 		return
 	}
-	go func() {
+	lc.goRun(func(lcCtx context.Context) {
+		pollCtx, cancel := context.WithCancel(lcCtx)
+		defer cancel()
+		if ctx != nil && ctx != lcCtx {
+			stop := context.AfterFunc(ctx, cancel)
+			defer stop()
+		}
 		deadline := time.Now().Add(mcpSettleTimeout)
 		ticker := time.NewTicker(mcpSettleInterval)
 		defer ticker.Stop()
 		for time.Now().Before(deadline) {
 			select {
-			case <-ctx.Done():
+			case <-pollCtx.Done():
 				return
 			case <-ticker.C:
 			}
-			updated, err := c.ListMCPs(ctx)
-			if err != nil {
+			updated, err := c.ListMCPs(pollCtx)
+			if err != nil || pollCtx.Err() != nil {
 				return
 			}
 			SetWorkspaceMCPServers(updated)
@@ -1625,7 +1781,7 @@ func watchMCPSettlement(ctx context.Context, c *client.Client, servers []api.MCP
 				return
 			}
 		}
-	}()
+	})
 }
 
 // hasConnectingMCP reports whether any server in the listing is still connecting.
@@ -1640,6 +1796,7 @@ func StartDaemon(ctx context.Context) (*api.HealthResponse, error) {
 	sessMu.Lock()
 	c := activeClient
 	starter := activeOpts.StartDaemon
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
 	if c == nil {
@@ -1664,7 +1821,7 @@ func StartDaemon(ctx context.Context) (*api.HealthResponse, error) {
 		SetDaemonStatus(DaemonDisconnected)
 		return nil, err
 	}
-	resyncDaemonState(ctx, c)
+	resyncDaemonState(ctx, c, lc)
 	SetDaemonStatus(DaemonConnected)
 	return h, nil
 }
@@ -1740,6 +1897,7 @@ func RestartDaemon(ctx context.Context) (*api.HealthResponse, error) {
 	sessMu.Lock()
 	c := activeClient
 	starter := activeOpts.StartDaemon
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
 	if c == nil {
@@ -1777,7 +1935,7 @@ func RestartDaemon(ctx context.Context) (*api.HealthResponse, error) {
 		SetDaemonStatus(DaemonDisconnected)
 		return nil, err
 	}
-	resyncDaemonState(ctx, c)
+	resyncDaemonState(ctx, c, lc)
 	SetDaemonStatus(DaemonConnected)
 	return h, nil
 }
@@ -1849,26 +2007,25 @@ func SwitchSession(sessionID string) {
 	sessMu.Lock()
 	cancelModeDebounceLocked()
 	c := activeClient
-	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
-	if strings.TrimSpace(sessionID) == "" {
+	if c == nil || strings.TrimSpace(sessionID) == "" {
 		return
 	}
 
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
+	lc.goRun(func(ctx context.Context) {
 		watchSince := client.NewCursor()
 		loaded, err := c.GetSession(ctx, sessionID)
 		if err != nil {
-			AppendError("Error", err.Error())
+			if ctx.Err() == nil {
+				AppendError("Error", err.Error())
+			}
 			return
 		}
 
 		sessMu.Lock()
-		if activeClient != c {
+		if activeLifecycle != lc || activeClient != c {
 			sessMu.Unlock()
 			return
 		}
@@ -1884,7 +2041,13 @@ func SwitchSession(sessionID string) {
 		ResetForSessionSwitch()
 
 		if tl, err := c.Timeline(ctx, loaded.ID); err == nil {
+			if ctx.Err() != nil || !isActiveLifecycle(lc) {
+				return
+			}
 			globalConversation.loadTimelineSnapshot(loaded, tl, loaded.PendingQuestions, loaded.PendingPlanReviews)
+		}
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
+			return
 		}
 		if len(loaded.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(loaded.PendingPermissions)
@@ -1899,8 +2062,8 @@ func SwitchSession(sessionID string) {
 		}
 		globalConversation.ReconcileStreamStatus(loaded)
 		showSessionDiagnostics(loaded, true)
-		startSessionStreamWatcher(ctx, loaded.ID, watchSince)
-	}()
+		startSessionStreamWatcher(lc, loaded.ID, watchSince)
+	})
 }
 
 // ForkSession branches the given session (or the active session when
@@ -1910,7 +2073,7 @@ func SwitchSession(sessionID string) {
 func ForkSession(sessionID, title string) {
 	sessMu.Lock()
 	c := activeClient
-	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
 	sid := strings.TrimSpace(sessionID)
@@ -1924,17 +2087,19 @@ func ForkSession(sessionID, title string) {
 		return
 	}
 
-	go func() {
-		if ctx == nil || ctx.Err() != nil {
-			ctx = context.Background()
-		}
+	lc.goRun(func(ctx context.Context) {
 		forked, err := c.ForkSession(ctx, sid, api.ForkSessionRequest{Title: strings.TrimSpace(title)})
 		if err != nil {
-			AppendError("Error forking session", err.Error())
+			if ctx.Err() == nil {
+				AppendError("Error forking session", err.Error())
+			}
+			return
+		}
+		if ctx.Err() != nil || !isActiveLifecycle(lc) {
 			return
 		}
 		SwitchSession(forked.ID)
-	}()
+	})
 }
 
 type stagedMediaItem struct {
@@ -2017,21 +2182,22 @@ func setModel(modelID string, force bool) {
 	sessMu.Lock()
 	c := activeClient
 	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
 	if st.Session != nil && st.Session.ID != "" {
 		if c == nil {
 			return
 		}
-		go func() {
-			if ctx == nil || ctx.Err() != nil {
-				ctx = context.Background()
-			}
+		lc.goRun(func(ctx context.Context) {
 			updated, err := c.UpdateSession(ctx, st.Session.ID, api.UpdateSessionRequest{
 				Config: api.SessionConfig{Model: modelID},
 				Force:  force,
 			})
 			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				if apiErr, ok := client.IsCapabilityMismatch(err); ok {
 					EnqueueSlot(SlotItem{
 						Kind: SlotKindModelSwitch,
@@ -2045,9 +2211,12 @@ func setModel(modelID string, force bool) {
 				AppendError("Error", err.Error())
 				return
 			}
+			if ctx.Err() != nil || !isActiveLifecycle(lc) {
+				return
+			}
 			SetSession(updated)
 			showSessionDiagnostics(updated, false)
-		}()
+		})
 		return
 	}
 
@@ -2075,26 +2244,29 @@ func SetAgent(agentName string) {
 	sessMu.Lock()
 	c := activeClient
 	ctx := activeCtx
+	lc := ensureLifecycleLocked()
 	sessMu.Unlock()
 
 	if st.Session != nil && st.Session.ID != "" {
 		if c == nil {
 			return
 		}
-		go func() {
-			if ctx == nil || ctx.Err() != nil {
-				ctx = context.Background()
-			}
+		lc.goRun(func(ctx context.Context) {
 			updated, err := c.UpdateSession(ctx, st.Session.ID, api.UpdateSessionRequest{
 				Config: api.SessionConfig{Agent: agentName},
 			})
 			if err != nil {
-				AppendError("Error", err.Error())
+				if ctx.Err() == nil {
+					AppendError("Error", err.Error())
+				}
+				return
+			}
+			if ctx.Err() != nil || !isActiveLifecycle(lc) {
 				return
 			}
 			SetSession(updated)
 			showSessionDiagnostics(updated, false)
-		}()
+		})
 		return
 	}
 
@@ -2110,11 +2282,15 @@ func SetAgent(agentName string) {
 	AppendCommandOutput("/agent "+agentName, "Agent set to "+agentName)
 }
 
-// ResetSession resets the session state to its initial default mode and cancels any active watchers.
+// ResetSession resets the session state to its initial default mode, cancels
+// any active watchers or session-scoped background goroutines, and waits for
+// them to exit.
 func ResetSession() {
 	sessMu.Lock()
 	clear(stagedMedia)
 	cancelModeDebounceLocked()
+	prev := activeLifecycle
+	activeLifecycle = nil
 	if activeCancel != nil {
 		activeCancel()
 		activeCancel = nil
@@ -2131,6 +2307,10 @@ func ResetSession() {
 	diagnosticConfig = api.SessionConfig{}
 	displayedDiagnostics = nil
 	sessMu.Unlock()
+
+	if prev != nil {
+		prev.stopAndWait()
+	}
 
 	session.Set(func(SessionState) SessionState {
 		return SessionState{Config: api.SessionConfig{Mode: api.ModeDefault}}
@@ -2240,7 +2420,10 @@ func updateDraftModel(ctx context.Context, c *client.Client, cfg api.SessionConf
 // ReloadWorkspace instructs the daemon to reload workspace resources from disk
 // and refreshes AppState with updated skills and commands.
 func ReloadWorkspace(ctx context.Context) error {
-	c := Client()
+	sessMu.Lock()
+	c := activeClient
+	lc := ensureLifecycleLocked()
+	sessMu.Unlock()
 	if err := c.ReloadWorkspace(ctx); err != nil {
 		return err
 	}
@@ -2266,7 +2449,7 @@ func ReloadWorkspace(ctx context.Context) error {
 	// A reload re-syncs MCP connections, so health captured before it is stale.
 	if servers, err := c.ListMCPs(ctx); err == nil {
 		SetWorkspaceMCPServers(servers)
-		watchMCPSettlement(ctx, c, servers)
+		watchMCPSettlement(ctx, c, servers, lc)
 	}
 	state := GetSession()
 	if state.Session == nil {

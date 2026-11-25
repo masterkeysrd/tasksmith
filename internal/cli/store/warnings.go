@@ -11,19 +11,23 @@ import (
 // daemon on a background goroutine so runtime auth-health diagnostics appear
 // in the statusline immediately.
 func RefreshWorkspaceWarnings() {
-	c := Client()
+	sessMu.Lock()
+	c := activeClient
 	if c == nil {
+		sessMu.Unlock()
 		return
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	lc := ensureLifecycleLocked()
+	sessMu.Unlock()
+	lc.goRun(func(parent context.Context) {
+		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 		defer cancel()
 		ws, err := c.GetWorkspace(ctx)
-		if err != nil || ws == nil {
+		if err != nil || ws == nil || parent.Err() != nil || !isActiveLifecycle(lc) {
 			return
 		}
 		SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
-	}()
+	})
 }
 
 type Warning struct {
