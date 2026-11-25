@@ -205,6 +205,8 @@ TaskSmith standardizes four completion-model tiers that the built-in provider pr
 
 Tier aliases resolve like any other model alias, so they work in session models, agent `spec.models`, command `spec.models`, and `WORKSPACE.md` `spec.modelAliases` (which can retarget a tier to another model without editing provider files). A provider that declares no tier alias simply leaves that alias unresolvable; add your own `aliases` or `spec.modelAliases` entries to enable it.
 
+The built-in review agent tries `["@code-reviewer", "@smart", "@inherit", "*"]`. Assign the custom alias `code-reviewer` to a completion model in the `F2` alias editor or under `WORKSPACE.md` `spec.modelAliases` to pin both `/review` and delegated reviews without retargeting the `@smart` tier.
+
 Two additional references are valid in agent `spec.models`:
 
 - **`@default`** — resolves through the workspace/provider role-default hierarchy.

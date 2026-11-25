@@ -788,6 +788,9 @@ func isToleratedSystemTierIssue(issue warp.ValidationIssue) bool {
 	}
 	switch issue.Kind {
 	case warp.KindAgent:
+		if issue.QualifiedName == "system/Agent/code-reviewer" && strings.HasSuffix(issue.Message, `unknown model alias "@code-reviewer"`) {
+			return true
+		}
 		for _, tier := range TierAliases {
 			if strings.HasSuffix(issue.Message, fmt.Sprintf("unknown model alias %q", tier)) {
 				return true

@@ -233,11 +233,12 @@ func (s *Session) resolveSubagentModel(agentName, requested string) (string, err
 	}
 
 	if requested == "" {
-		candidates, err := resolved.ResolveModelsWithParent(cat.Resolver(), parentModel)
+		resolver := parentProviderResolver{Resolver: cat.Resolver(), provider: parentProvider}
+		candidates, err := resolved.ResolveModelsWithParent(resolver, parentModel)
 		if err != nil {
 			return "", fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 		}
-		if id, ok := preferredModelCandidate(candidates, parentProvider); ok {
+		if id, ok := preferredModelCandidate(candidates, ""); ok {
 			return normalize(id), nil
 		}
 		if len(resolved.Agent.Spec.Models) > 0 && isRequestedInherit(resolved.Agent.Spec.Models[0]) && parentModel != "" {
@@ -283,6 +284,27 @@ func (s *Session) resolveSubagentModel(agentName, requested string) (string, err
 	}
 
 	return normalize(id), nil
+}
+
+type parentProviderResolver struct {
+	warp.Resolver
+	provider string
+}
+
+func (r parentProviderResolver) ResolveModels(role warp.ModelRole, refs ...string) []warp.ResolvedModel {
+	candidates := r.Resolver.ResolveModels(role, refs...)
+	if len(candidates) < 2 || r.provider == "" {
+		return candidates
+	}
+	priority := func(c warp.ResolvedModel) int {
+		if c.Provider != nil && c.Provider.Metadata.Name == r.provider {
+			return 0
+		}
+		return 1
+	}
+	ordered := slices.Clone(candidates)
+	slices.SortStableFunc(ordered, func(a, b warp.ResolvedModel) int { return cmp.Compare(priority(a), priority(b)) })
+	return ordered
 }
 
 func (s *Session) modelCatalog() *models.Catalog {

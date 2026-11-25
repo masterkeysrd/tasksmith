@@ -8,7 +8,7 @@ metadata:
 spec:
   triggers: [agent]
   subagents: []
-  models: ["@smart", "@inherit", "*"]
+  models: ["@code-reviewer", "@smart", "@inherit", "*"]
   rules: ["*"]
   skills: ["*"]
   tools: [view, ls, glob, grep, bash, load_skill, load_rule, web_fetch, web_search]

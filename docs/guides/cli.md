@@ -223,6 +223,8 @@ For a complete reference of flags, keybindings, and autocomplete shortcuts, see 
 
 Use `/review` for staged and unstaged changes, or name the comparison: `/review HEAD~1..HEAD`, `/review feature-branch`, or `/review PR 42`. In CI, use `tasksmith exec "/review HEAD~1..HEAD"`. The `code-reviewer` starts with clean history and returns verified findings with line citations; it neither edits files nor posts PR comments. PR inspection requires network access and an authorized `gh` for private repositories.
 
+Both `/review` and delegated reviews try `["@code-reviewer", "@smart", "@inherit", "*"]` in order. To pin a review model, highlight it in `/model`, press `F2`, then `n`, enter `code-reviewer`, and press `Enter` to confirm and `Enter` again to save. A workspace can override this assignment with `WORKSPACE.md` `spec.modelAliases`.
+
 ### Design Interviews (`/grill-me`)
 
 Use `/grill-me` when you know the outcome you want but haven't settled the choices behind it. Start with a loose idea, such as `/grill-me Should task retries be automatic?`, or type `/grill-me` on its own. With no topic, the agent uses the current conversation if the subject is clear; otherwise it asks what you want to explore. For a project question it reads relevant code and docs first. For an unrelated idea it starts with the idea, not a workspace scan.

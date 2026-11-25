@@ -82,7 +82,9 @@ TaskSmith checks the agent's temperature and thinking settings against the selec
 - **`subagents`**: Define which agents this persona is allowed to invoke for subtasks (e.g., built-in `explore` for read-only codebase research, `general` for general-purpose engineering tasks, or `["*"]` for all agent-triggerable personas). When `subagents` resolves to at least one target agent, TaskSmith automatically provides `invoke_agent` and `manage_agents` to the session. Set to `[]` to prevent recursive delegation.
 - **`models`**: Order preferred models for this persona using `provider/model` identifiers, aliases (`@fast`, `@balanced`, `@smart`, `@flagship`, `@default`, `@inherit`), or glob patterns (`"*"`, `"ollama/*"`, `"!pattern"` negations). When the persona runs as a subagent, this list also becomes the allowlist enforced on `invoke_agent`'s `model` parameter; for example, the built-in `general` subagent sets `["@inherit", "*"]` so it defaults to the parent session's active model while allowing any explicit override. See [Tier Aliases](../reference/providers.md#tier-aliases).
 
-The built-in `code-reviewer` defaults to `@smart` (`["@smart", "@inherit", "*"]`). Override the shared `code-review` skill in `.agents/skills/code-review/SKILL.md` for a project or workspace, or `~/.config/tasksmith/agents/skills/code-review/SKILL.md` for your user account. Both delegated reviews and `/review` use the effective skill.
+The built-in `code-reviewer` tries `["@code-reviewer", "@smart", "@inherit", "*"]` in order. To pin a model for both `/review` and delegated reviews without changing `@smart`, map `code-reviewer` to `<provider>/<model-id>` under `spec.modelAliases` in `WORKSPACE.md`, or assign it in the [F2 alias editor](../reference/cli.md#model-alias-editor-f2). Leave it unassigned to keep the existing fallback order.
+
+Override the shared `code-review` skill in `.agents/skills/code-review/SKILL.md` for a project or workspace, or `~/.config/tasksmith/agents/skills/code-review/SKILL.md` for your user account. Both delegated reviews and `/review` use the effective skill.
 
 ---
 

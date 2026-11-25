@@ -964,7 +964,7 @@ spec:
   models:
     - id: fake-fast-model
       label: Fake Fast
-      aliases: [fast]
+      aliases: [fast, smart]
       capabilities:
         completion: true
     - id: fake-balanced-model
@@ -1001,6 +1001,7 @@ func TestResolveSubagentModelTiers(t *testing.T) {
 		want      string
 		wantErr   bool
 	}{
+		{name: "unassigned review alias falls through to @smart", agent: "code-reviewer", want: "fake/fake-fast-model"},
 		{name: "explore defaults to @fast", agent: "explore", want: "fake/fake-fast-model"},
 		{name: "explicit @inherit uses parent model", agent: "explore", requested: "@inherit", want: "fake/fake-balanced-model"},
 		{name: "@inherit is case-insensitive", agent: "explore", requested: "@INHERIT", want: "fake/fake-balanced-model"},
@@ -1318,7 +1319,7 @@ func setupMultiTierTestEnv(t *testing.T) (*workspace.Workspace, *models.Catalog)
 	t.Cleanup(func() { xdg.ClearCache() })
 
 	wsDir := t.TempDir()
-	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: multitiers\nspec:\n  defaultProvider: alpha\n  defaultModels:\n    completion: alpha/alpha-balanced-model\n---\n"
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: multitiers\nspec:\n  defaultProvider: alpha\n  modelAliases:\n    code-reviewer: alpha/alpha-fast-model\n    smart: beta/beta-fast-model\n  defaultModels:\n    completion: alpha/alpha-balanced-model\n---\n"
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1392,6 +1393,7 @@ func TestResolveSubagentModelMultiProvider(t *testing.T) {
 		want      string
 		wantErr   bool
 	}{
+		{name: "review alias wins across providers", agent: "code-reviewer", want: "alpha/alpha-fast-model"},
 		{name: "default prefers parent provider", agent: "explore", want: "beta/beta-fast-model"},
 		{name: "provider-scoped second provider allowed", agent: "explore", requested: "beta/@fast", want: "beta/beta-fast-model"},
 		{name: "second provider canonical id allowed", agent: "explore", requested: "beta/beta-fast-model", want: "beta/beta-fast-model"},

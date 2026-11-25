@@ -269,7 +269,7 @@ func TestBuiltinReviewBundle(t *testing.T) {
 	cat := ws.Catalog()
 	main, err := cat.ResolveAgent("main")
 	if err != nil || !slices.ContainsFunc(main.Subagents, func(a *warp.Agent) bool {
-		return a.Metadata.Name == "code-reviewer" && slices.Equal(a.Spec.Models, []string{"@smart", "@inherit", "*"})
+		return a.Metadata.Name == "code-reviewer" && slices.Equal(a.Spec.Models, []string{"@code-reviewer", "@smart", "@inherit", "*"})
 	}) {
 		t.Fatalf("missing review delegation: %v", err)
 	}
