@@ -148,6 +148,35 @@ func TestParentRollup(t *testing.T) {
 	}
 }
 
+func TestChildModelAndCacheHistory(t *testing.T) {
+	s := newStore(t)
+	live := metrics.NewLive(s, nil)
+	parent, child := scoped("parent", ""), scoped("child", "parent")
+	main := llmCall("main", 100, true, "")
+	fast := llmCall("fast", 0, false, "")
+	fast.Billing = metrics.BillingQuota
+	fast.Tokens.CacheRead = 5
+	title := llmCall("title", 10, true, "")
+	title.Purpose = metrics.PurposeTitle
+	for _, r := range []struct {
+		ctx  context.Context
+		call metrics.LLMCall
+	}{{parent, main}, {child, fast}, {child, title}, {parent, main}} {
+		if err := metrics.RecordLLMCall(r.ctx, live, r.call); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, source := range []*metrics.Live{live, metrics.NewLive(s, nil)} {
+		u, err := source.SessionUsage(parent, "parent")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Cache.Requests != 3 || u.Cache.Misses != 0 || len(u.Models) != 3 || u.Totals.Calls != 4 {
+			t.Fatalf("rollup: %+v", u)
+		}
+	}
+}
+
 func TestQueryGroupingAndFilters(t *testing.T) {
 	s := newStore(t)
 	_ = metrics.RecordLLMCall(scoped("s1", ""), s, llmCall("m1", 100, true, ""))

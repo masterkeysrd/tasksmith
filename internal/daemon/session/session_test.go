@@ -38,6 +38,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -3362,6 +3363,23 @@ func TestSessionPermissionsPersistence(t *testing.T) {
 	}
 	if !slices.Contains(dbSess2.Permissions.Deny, "bash(*)") {
 		t.Fatalf("expected updated deny rule in store, got %+v", dbSess2.Permissions)
+	}
+}
+
+func TestChildTitleScope(t *testing.T) {
+	var got scope.Scope
+	_, _, _, _, mgr := setupTestEnv(t, &fakeProvider{chunkHandler: func(ctx context.Context, _ *llm.Request) ([]message.AssistantChunk, error) {
+		got, _ = scope.From(ctx)
+		return nil, errors.New("stop after scope capture")
+	}})
+	child, _, err := mgr.Create(t.Context(), api.CreateSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.ParentID = "parent"
+	child.generateTitle("inspect")
+	if got.SessionID != child.ID || got.ParentSessionID != "parent" || got.Purpose != "title" {
+		t.Fatalf("title scope: %+v", got)
 	}
 }
 

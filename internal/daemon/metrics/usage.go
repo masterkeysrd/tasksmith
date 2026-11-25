@@ -27,7 +27,10 @@ type Usage struct {
 	firstAt   time.Time
 	lastAt    time.Time
 
-	// cache analysis state
+	cacheHistory map[string]*cacheHistory
+}
+
+type cacheHistory struct {
 	havePrev       bool
 	prevCacheRead  int64
 	prevAt         time.Time
@@ -37,11 +40,12 @@ type Usage struct {
 // NewUsage returns an empty accumulator for sessionID.
 func NewUsage(sessionID string) *Usage {
 	return &Usage{
-		sessionID: sessionID,
-		models:    map[string]*api.UsageGroup{},
-		tiers:     map[string]*api.UsageGroup{},
-		purposes:  map[string]*api.UsageGroup{},
-		tools:     map[string]*api.ToolUsage{},
+		sessionID:    sessionID,
+		cacheHistory: make(map[string]*cacheHistory),
+		models:       map[string]*api.UsageGroup{},
+		tiers:        map[string]*api.UsageGroup{},
+		purposes:     map[string]*api.UsageGroup{},
+		tools:        map[string]*api.ToolUsage{},
 	}
 }
 
@@ -159,28 +163,33 @@ func (u *Usage) Apply(e Entry) {
 // A drop in cache read versus the previous chat call is a miss, unless a
 // compaction ran in between, which makes it an expected rebuild.
 func (u *Usage) applyCache(e Entry) {
+	h := u.cacheHistory[e.SessionID]
+	if h == nil {
+		h = &cacheHistory{}
+		u.cacheHistory[e.SessionID] = h
+	}
 	switch Purpose(e.Attr(AttrPurpose)) {
 	case PurposeCompaction:
-		u.compactedSince = true
+		h.compactedSince = true
 	case PurposeChat:
 		read := e.Value(TokensCacheRead)
 		u.cache.Requests++
 		u.cache.InputTokens += e.Value(TokensInput)
 		u.cache.CacheReadTokens += read
-		if u.havePrev && read < u.prevCacheRead {
-			if u.compactedSince {
+		if h.havePrev && read < h.prevCacheRead {
+			if h.compactedSince {
 				u.cache.Rebuilds++
 			} else {
 				u.cache.Misses++
 				u.cache.LastMissAt = e.CreatedAt
-				u.cache.LastMissGapMS = e.CreatedAt.Sub(u.prevAt).Milliseconds()
+				u.cache.LastMissGapMS = e.CreatedAt.Sub(h.prevAt).Milliseconds()
 				u.cache.LastMissRecachedTokens = e.Value(TokensCacheWrite)
 			}
 		}
-		u.havePrev = true
-		u.prevCacheRead = read
-		u.prevAt = e.CreatedAt
-		u.compactedSince = false
+		h.havePrev = true
+		h.prevCacheRead = read
+		h.prevAt = e.CreatedAt
+		h.compactedSince = false
 	}
 }
 

@@ -694,10 +694,11 @@ func (s *Session) generateTitle(userText string) {
 	sessionAgent := s.Config.Agent
 	s.Unlock()
 	titleCtx := scope.With(ctx, scope.Scope{
-		SessionID:     s.ID,
-		WorkspaceRoot: s.workspace.RootDir(),
-		Agent:         sessionAgent,
-		Purpose:       string(metrics.PurposeTitle),
+		ParentSessionID: s.ParentID,
+		SessionID:       s.ID,
+		WorkspaceRoot:   s.workspace.RootDir(),
+		Agent:           sessionAgent,
+		Purpose:         string(metrics.PurposeTitle),
 	})
 	resp, err := llmModel.Invoke(titleCtx, msgs)
 	if err != nil || resp == nil {
