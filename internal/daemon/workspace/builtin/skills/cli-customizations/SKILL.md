@@ -23,6 +23,8 @@ Prefer driving the interactive REPL view when the user is inside the TUI; edit `
 - **User-scope files**: `statusline.json` and `theme.json` are personal XDG settings, not repository files; do not create or commit them inside a project workspace unless asked, and remind users that direct JSON edits take effect after restarting the REPL (whereas `/statusline` applies live). If `statusline.json` fails to parse, fix the JSON rather than deleting the file.
 - **Billing & headless accuracy**: never report dollar costs for subscription (`quota`) models or invent provider reset countdowns; never run `tasksmith exec` / `-p` on an interactive TTY without a prompt (exit `2`), and recommend `--input-format jsonl` whenever headless runs may hit interactive prompts (which exit `4` / `needs_input` in `text` mode).
 
+For read-only code review, use `/review [target]` or `tasksmith exec "/review HEAD~1..HEAD"` in CI. The command opens a clean `code-reviewer` session; omit the target to inspect local changes.
+
 ## Topic references
 
 Read only the reference file matching the user's question (paths are relative to this skill directory):

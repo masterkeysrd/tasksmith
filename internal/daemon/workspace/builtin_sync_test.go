@@ -232,6 +232,85 @@ func TestBuiltinInitCommandResolves(t *testing.T) {
 	}
 }
 
+func TestBuiltinReviewBundle(t *testing.T) {
+	setupTestXDG(t)
+	dir, err := EnsureBuiltinDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"agents/code-reviewer.agent.md", "commands/review.command.md", "skills/code-review/SKILL.md", "skills/code-review/references/review-rubric.md", "skills/code-review/references/false-positives.md"} {
+		mirrored, err := os.ReadFile(filepath.Join(dir, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		embedded, err := builtinFS.ReadFile("builtin/" + file)
+		if err != nil || string(mirrored) != string(embedded) {
+			t.Fatalf("mirror mismatch for %s: %v", file, err)
+		}
+	}
+	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "commands/review.command.md"))
+	xdg.ClearCache()
+	t.Cleanup(xdg.ClearCache)
+	wsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(wsDir, "AGENTS.md"), []byte("Project review invariants."), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(wsDir, ".agents", "rules"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ruleDoc := "---\napiVersion: warp/v1alpha1\nkind: Rule\nmetadata:\n  name: custom-review-rule\n  description: Custom conditional rule\nspec:\n  triggers:\n    useWhen: Reviewing custom files\n---\nEnforce custom invariant.\n"
+	if err := os.WriteFile(filepath.Join(wsDir, ".agents", "rules", "custom.rule.md"), []byte(ruleDoc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := Open(t.Context(), wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := ws.Catalog()
+	main, err := cat.ResolveAgent("main")
+	if err != nil || !slices.ContainsFunc(main.Subagents, func(a *warp.Agent) bool {
+		return a.Metadata.Name == "code-reviewer" && slices.Equal(a.Spec.Models, []string{"@smart", "@inherit", "*"})
+	}) {
+		t.Fatalf("missing review delegation: %v", err)
+	}
+	reviewer, err := cat.ResolveAgent("code-reviewer")
+	if err != nil {
+		t.Fatalf("resolve code-reviewer: %v", err)
+	}
+	reviewerPrompt, err := reviewer.Agent.Render(&warp.AgentRenderOptions{
+		Workspace: cat.WorkspaceSpec(),
+		Project:   cat.Project(),
+		Resolved:  reviewer,
+		Globals:   cat.AgentRenderGlobals(reviewer),
+	})
+	if err != nil {
+		t.Fatalf("render code-reviewer: %v", err)
+	}
+	for _, want := range []string{"<available_skills>", "<name>code-review</name>", "<available_rules>", "<name>custom-review-rule</name>", "<project_context", "Project review invariants."} {
+		if !strings.Contains(reviewerPrompt, want) {
+			t.Errorf("code-reviewer prompt missing %q:\n%s", want, reviewerPrompt)
+		}
+	}
+	cmd, ok := cat.GetCommand("review")
+	if !ok || cmd.Def.Spec.Context != warp.CommandContextClean || cmd.Def.Spec.Agent != "code-reviewer" || !slices.Equal(cmd.Def.Spec.Skills, []string{"code-review"}) {
+		t.Fatalf("unexpected review command: %+v", cmd)
+	}
+	r, err := cat.ResolveCommand("main", "review")
+	if err != nil || len(r.Skills) != 1 || r.Agent.Agent.Metadata.Name != "code-reviewer" {
+		t.Fatalf("resolve review: %v", err)
+	}
+	for _, target := range []string{"", "PR 42"} {
+		text, err := cmd.Def.Render(&warp.CommandRenderOptions{Resolved: r, Globals: map[string]any{"RawArguments": target}})
+		if err != nil || !strings.Contains(text, target) || strings.Contains(text, "Inspect uncommitted") != (target == "") {
+			t.Fatalf("render %q: %s (%v)", target, text, err)
+		}
+	}
+	text, err := r.Skills[0].Render(&warp.SkillRenderOptions{Workspace: cat.WorkspaceSpec(), Project: cat.Project()})
+	if err != nil || !strings.Contains(text, "references/false-positives.md") || !strings.Contains(text, "references/review-rubric.md") {
+		t.Fatalf("render review skill: %s (%v)", text, err)
+	}
+}
+
 func TestBuiltinGrillMeCommandResolves(t *testing.T) {
 	setupTestXDG(t)
 	ctx := t.Context()

@@ -2943,7 +2943,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Timeline Lifecycle",
 		Config: api.SessionConfig{
-			Agent: "code-reviewer",
+			Agent: "main",
 			Model: "sonnet",
 		},
 	})

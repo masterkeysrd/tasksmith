@@ -445,6 +445,7 @@ Every parameter declared in `spec.arguments` supports:
 TaskSmith embeds system-tier command manifests directly within the binary. These commands are universally available across all workspaces unless shadowed by a higher-priority definition:
 
 - **`system:init` (`/init`)**: Built-in command that inspects the workspace codebase (directory layout, existing agent/editor rule files, build/CI configs, and representative source/test files) and interactively generates or updates `AGENTS.md`. Employs `inline` context, activates the `tasksmith-customizations` skill, and requests safe read/inspection tools (`ls`, `view`, `glob`, `grep`), interactive input (`ask_question`), and file modification tools (`write`, `edit`).
+- **`system/Command/review` (`/review [target]`)**: Runs `code-reviewer` with clean history and embeds the `code-review` skill. See [Code reviews](../guides/cli.md#code-reviews).
 - **`system/Command/grill-me` (`/grill-me [idea, plan, or problem]`)**: Inline design interview that uses repository inspection and `ask_question` rounds to settle choices without writing files. See [Design Interviews](../guides/cli.md#design-interviews-grill-me).
 
 ---
