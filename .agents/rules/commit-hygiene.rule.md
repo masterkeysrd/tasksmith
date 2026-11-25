@@ -23,8 +23,9 @@ requires build, format, vet, lint, and tests to pass before work is declared com
 
 ## 1. Establish ground truth
 
-Run `git status`, the staged diff, and `git log -n 5` before writing anything. Never compose a
-commit message from memory of what you changed; read the staged diff.
+Run `git status`, `git diff --cached --stat`, the staged diff, and `git log -n 5` before writing
+anything. Never compose a commit message from memory or a partial view of a large diff—inspect the
+changed areas until you understand the full problem being solved and its user or system impact.
 
 ## 2. Stage deliberately
 
@@ -53,10 +54,11 @@ changes need no documentation update; do not churn docs for them.
 
 - Prefix with a conventional type and area scope: `feat(daemon):`, `fix(cli):`, `refactor(gateway):`.
 - Subject is imperative, under 72 characters, and names the outcome, not the mechanism.
-- Body explains **why** the change exists and what it enables, in prose a new contributor can
-  follow without opening a file or knowing an internal name. Do not list changed filenames.
-- Wrap body lines at 72 characters. Add a body only when there is reasoning, a tradeoff, or
-  context worth recording.
+- Include a body wrapped at 72 characters on every behavioral, architectural, or multi-file
+  change (omit the body only for trivial single-line typos or formatting fixes).
+- Body explains **what problem existed**, **why** it mattered, and **what the change achieves**,
+  in prose a new contributor can follow without opening a file or knowing internal identifiers. Do
+  not list changed filenames.
 - Choose verbs accurately: `feat` adds capability, `fix` repairs behavior, `update` enhances,
   `refactor` preserves behavior while improving structure.
 

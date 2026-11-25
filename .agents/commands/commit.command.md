@@ -23,8 +23,9 @@ Create a git commit for the current work, following the commit-hygiene rule embe
 
 Work only from repository state, since you have no conversation history:
 
-1. Run `git status`, `git diff --cached`, and `git log -n 5` to understand the change and match the
-   existing message style.
+1. Run `git status`, `git diff --cached --stat`, `git diff --cached`, and `git log -n 5`. Read and
+   understand the full scope of what is being committed—if the diff is large, inspect the remaining
+   changed areas rather than summarizing from a partial diff.
 2. If files are already staged (`git diff --cached` is non-empty), treat the staged index as the
    intended commit scope and leave unstaged or untracked working-tree files untouched unless the
    requester's intent hint explicitly asks to stage additional paths. If nothing is staged, stage
@@ -35,10 +36,11 @@ Work only from repository state, since you have no conversation history:
    instead of committing everything.
 4. Verify documentation is in sync per the rule, and that no secrets or machine-local paths are
    staged.
-5. Write the message per the rule, commit it with a heredoc, then run `git status` to verify. If
-   `git commit` fails on GPG or SSH commit signing because the OS sandbox blocks `~/.gnupg` or the
-   signing agent (`Operation not permitted` / `No secret key` under `~/.gnupg`), retry that single
-   `git commit` command once with `bypass_sandbox: true` rather than changing git config or aborting.
+5. Write a complete commit message (subject plus explanatory body per the rule), commit it with a
+   heredoc, then run `git status` to verify. If `git commit` fails on GPG or SSH commit signing
+   because the OS sandbox blocks `~/.gnupg` or the signing agent (`Operation not permitted` /
+   `No secret key` under `~/.gnupg`), retry that single `git commit` command once with
+   `bypass_sandbox: true` rather than changing git config or aborting.
 
 Do not push, amend published commits, or open a pull request. Report the resulting short hash and
-subject when done.
+commit message when done.
