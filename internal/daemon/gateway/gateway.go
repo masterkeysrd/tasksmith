@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -43,15 +44,10 @@ func New(ctx context.Context, cfg Config) (Gateway, error) {
 	for _, pCfg := range cfg.Providers {
 		inst, err := initProvider(bgCtx, pCfg, cfg.Env)
 		if err != nil {
-			if len(cfg.Providers) > 1 {
-				inst = &providerInstance{
-					cfg:     pCfg,
-					authErr: err,
-					warning: fmt.Sprintf("provider %q disabled: %v", pCfg.Name, err),
-				}
-			} else {
-				bgCancel()
-				return nil, fmt.Errorf("gateway: failed to initialize provider %q: %w", pCfg.Name, err)
+			inst = &providerInstance{
+				cfg:     pCfg,
+				authErr: err,
+				warning: fmt.Sprintf("provider %q disabled: %v", pCfg.Name, err),
 			}
 		}
 		providers[pCfg.Name] = inst
@@ -89,10 +85,11 @@ func (g *gatewayImpl) ListProviders() []ProviderInfo {
 			continue
 		}
 		res = append(res, ProviderInfo{
-			Name:     inst.cfg.Name,
-			Type:     inst.cfg.Type,
-			Endpoint: inst.cfg.Endpoint,
-			Warning:  inst.warning,
+			Name:          inst.cfg.Name,
+			Type:          inst.cfg.Type,
+			Endpoint:      inst.cfg.Endpoint,
+			Warning:       inst.warning,
+			InvalidConfig: errors.Is(inst.authErr, ErrInvalidConfig),
 		})
 	}
 	return res
@@ -143,15 +140,8 @@ func (g *gatewayImpl) Quota(ctx context.Context, m models.Model) (*api.ModelQuot
 }
 
 func (inst *providerInstance) quotaAccount() string {
-	if driver, ok := auth.GetBrowserOAuthDriver(inst.cfg.Type); ok {
-		if account, signedIn := driver.Account(); signedIn && account != "" {
-			return account
-		}
-	}
-	if _, account, err := auth.LoadProviderToken(inst.cfg.Name); err == nil {
-		return account
-	}
-	return ""
+	account, _ := auth.Account(inst.cfg.Type, inst.cfg.Name)
+	return account
 }
 
 func (g *gatewayImpl) QuotaSnapshots(ctx context.Context) (*api.QuotaSnapshotResponse, error) {

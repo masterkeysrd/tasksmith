@@ -1,14 +1,18 @@
 package gateway
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"golang.org/x/oauth2"
 )
 
@@ -71,7 +75,7 @@ func TestFingerprintStableForSameCredential(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsUnknownAuthScheme(t *testing.T) {
+func TestUnknownAuthSchemeIsolatedPerProvider(t *testing.T) {
 	valid := Config{Providers: []ProviderConfig{
 		{Name: "a", Type: "openai", Auth: &auth.Config{Type: "  BEARER "}},
 		{Name: "b", Type: "openai", Auth: &auth.Config{Type: auth.TypeNone}},
@@ -85,12 +89,22 @@ func TestValidateRejectsUnknownAuthScheme(t *testing.T) {
 	invalid := Config{Providers: []ProviderConfig{
 		{Name: "a", Type: "openai", Auth: &auth.Config{Type: "unknown_scheme"}},
 	}}
-	err := invalid.Validate()
-	if err == nil {
-		t.Fatal("expected unknown auth scheme to fail validation")
+	if err := invalid.Validate(); err != nil {
+		t.Fatalf("structural Validate() should not fail on per-provider auth scheme: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unknown_scheme") {
-		t.Fatalf("error should name the offending scheme, got: %v", err)
+	gw, err := New(context.Background(), invalid)
+	if err != nil {
+		t.Fatalf("New() should isolate unknown auth scheme instead of failing: %v", err)
+	}
+	t.Cleanup(func() { _ = gw.Close() })
+
+	infos := gw.ListProviders()
+	if len(infos) != 1 || !infos[0].InvalidConfig || !strings.Contains(infos[0].Warning, "unknown_scheme") {
+		t.Fatalf("expected InvalidConfig warning naming unknown_scheme, got: %+v", infos)
+	}
+	_, err = gw.LLM(context.Background(), models.Model{ID: "a/gpt-4o", ProviderType: "openai"}, llm.ModelConfig{})
+	if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "unknown_scheme") {
+		t.Fatalf("expected ErrInvalidConfig naming unknown_scheme, got: %v", err)
 	}
 }
 

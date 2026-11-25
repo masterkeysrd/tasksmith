@@ -619,7 +619,19 @@ func buildGatewayConfig(ws *workspace.Workspace, rec metrics.Recorder) gateway.C
 	wsEnv := ws.Env()
 	wsProviders := ws.Catalog().Providers()
 	providers := make([]gateway.ProviderConfig, 0, len(wsProviders))
+	seen := make(map[string]struct{}, len(wsProviders))
 	for _, p := range wsProviders {
+		if p == nil {
+			continue
+		}
+		name := strings.TrimSpace(p.Metadata.Name)
+		if name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
 		providers = append(providers, toGatewayProvider(p))
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -378,15 +379,23 @@ func TestAntigravityProviderConfigEndToEnd(t *testing.T) {
 		t.Errorf("envelope model = %q, want %q", gotEnvelopeModel, "gemini-4-carbon-high")
 	}
 
-	// Invalid config field type should fail fast at gateway creation.
-	if _, err := New(ctx, Config{
+	// Invalid config field type should be isolated onto the provider rather than aborting gateway creation.
+	invalidGW, err := New(ctx, Config{
 		Providers: []ProviderConfig{{
 			Name:   "antigravity",
 			Type:   "antigravity",
 			Config: map[string]any{"companionProject": 123},
 		}},
-	}); err == nil {
-		t.Fatal("expected invalid companionProject type to fail")
+	})
+	if err != nil {
+		t.Fatalf("expected invalid companionProject type to isolate per provider, got: %v", err)
+	}
+	t.Cleanup(func() { _ = invalidGW.Close() })
+	if infos := invalidGW.ListProviders(); len(infos) != 1 || !infos[0].InvalidConfig {
+		t.Fatalf("expected InvalidConfig on antigravity provider, got: %+v", infos)
+	}
+	if _, err := invalidGW.LLM(ctx, models.Model{ID: "antigravity/gemini-4-carbon", ProviderType: "antigravity"}, llm.ModelConfig{}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("expected ErrInvalidConfig on invalid companionProject, got: %v", err)
 	}
 }
 

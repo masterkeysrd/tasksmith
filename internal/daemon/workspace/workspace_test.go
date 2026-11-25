@@ -2557,8 +2557,19 @@ func TestSubscriptionProviderPresets(t *testing.T) {
 					if limits := (warp.ProviderModelLimits{Context: want.context, Output: want.output}); m.Limits != limits {
 						t.Errorf("%s limits = %+v, want %+v", m.ID, m.Limits, limits)
 					}
-					if m.Capabilities != nil || m.Cost != nil {
-						t.Errorf("%s declares capability or pricing overrides", m.ID)
+					if m.Cost != nil {
+						t.Errorf("%s declares pricing overrides", m.ID)
+					}
+					if m.Capabilities == nil || m.Capabilities.Tools == nil || !*m.Capabilities.Tools {
+						t.Errorf("%s expected declarative tools capability, got %+v", m.ID, m.Capabilities)
+					}
+					if tc.provider == "github-copilot" {
+						if m.Capabilities.Attachment == nil || !*m.Capabilities.Attachment ||
+							m.Capabilities.Modalities == nil ||
+							!slices.Equal(m.Capabilities.Modalities.Input, []string{"text", "image", "pdf"}) ||
+							!slices.Equal(m.Capabilities.Modalities.Output, []string{"text"}) {
+							t.Errorf("%s expected declarative attachment and modalities, got %+v", m.ID, m.Capabilities)
+						}
 					}
 				}
 			}

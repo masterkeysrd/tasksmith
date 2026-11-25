@@ -46,12 +46,21 @@ func (inst *providerInstance) clients() [3]any {
 	return [3]any{inst.llmProv, inst.decisionProv, inst.embeddingProv}
 }
 
+func (inst *providerInstance) failConfig(err error) (*providerInstance, error) {
+	if !errors.Is(err, ErrInvalidConfig) {
+		err = fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+	inst.authErr = err
+	inst.warning = fmt.Sprintf("provider %q disabled: %v", inst.cfg.Name, err)
+	return inst, nil
+}
+
 func (inst *providerInstance) initBrowserCompletion(client interface {
 	llm.Provider
 	llm.ModelLister
 }, err error) (*providerInstance, error) {
 	if errors.Is(err, ErrInvalidConfig) {
-		return nil, err
+		return inst.failConfig(err)
 	}
 	if err != nil {
 		inst.authErr = err
@@ -65,9 +74,23 @@ func (inst *providerInstance) initBrowserCompletion(client interface {
 
 func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string) (*providerInstance, error) {
 	inst := &providerInstance{cfg: cfg}
+
+	pType := strings.TrimSpace(cfg.Type)
+	if pType == "" {
+		return inst.failConfig(fmt.Errorf("%w: provider %q is missing a type", ErrInvalidConfig, cfg.Name))
+	}
+	if cfg.Auth != nil {
+		switch cfg.Auth.Scheme() {
+		case auth.TypeBearer, auth.TypeAPIKey, auth.TypeBasic, auth.TypeNone, auth.TypeOAuth2:
+		default:
+			return inst.failConfig(fmt.Errorf("%w: provider %q has unknown auth type %q (expected bearer, api-key, basic, none, or oauth2)",
+				ErrInvalidConfig, cfg.Name, cfg.Auth.Type))
+		}
+	}
+
 	overrides := cfg.Endpoint != "" || len(cfg.Headers) != 0 || len(cfg.Config) != 0
 
-	switch cfg.Type {
+	switch pType {
 	case providers.ClaudeCodeName:
 		return inst.initBrowserCompletion(providers.NewClaudeCode(cfg.Name, cfg.Auth, overrides))
 	case providers.GitHubCopilotName:
@@ -80,22 +103,22 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 			endpoint = "http://127.0.0.1:11434"
 		}
 		if _, err := url.Parse(endpoint); err != nil {
-			return nil, fmt.Errorf("gateway: invalid ollama endpoint %q: %w", endpoint, err)
+			return inst.failConfig(fmt.Errorf("%w: invalid ollama endpoint %q: %w", ErrInvalidConfig, endpoint, err))
 		}
 	case "openai":
 		_, respOpts, err := parseOpenAIConfig(cfg.Name, cfg.Config)
 		if err != nil {
-			return nil, err
+			return inst.failConfig(err)
 		}
 		inst.openaiResponsesOpts = respOpts
 	case "antigravity":
 		if _, err := parseAntigravityConfig(cfg.Name, cfg.Config, cfg.Headers); err != nil {
-			return nil, err
+			return inst.failConfig(err)
 		}
 	case "anthropic", "typesafe", "genai", "google-genai", "gemini":
 		// valid provider types
 	default:
-		return nil, fmt.Errorf("%w: unknown provider type %q", ErrInvalidConfig, cfg.Type)
+		return inst.failConfig(fmt.Errorf("%w: unknown provider type %q", ErrInvalidConfig, cfg.Type))
 	}
 
 	token, err := auth.ResolveCredential(cfg.Auth, env)
@@ -110,13 +133,15 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 			}
 			return inst, nil
 		}
-		return nil, fmt.Errorf("provider %q auth error: %w", cfg.Name, err)
+		inst.authErr = fmt.Errorf("provider %q auth error: %w", cfg.Name, err)
+		inst.warning = inst.authErr.Error()
+		return inst, nil
 	}
 
-	transport := auth.BuildHTTPTransport(nil, cfg.Auth, token, cfg.Headers, cfg.Type)
+	transport := auth.BuildHTTPTransport(nil, cfg.Auth, token, cfg.Headers, pType)
 	httpClient := &http.Client{Transport: transport}
 
-	switch cfg.Type {
+	switch pType {
 	case "ollama":
 		endpoint := cfg.Endpoint
 		if endpoint == "" {
@@ -124,7 +149,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		}
 		u, err := url.Parse(endpoint)
 		if err != nil {
-			return nil, fmt.Errorf("gateway: invalid ollama endpoint %q: %w", endpoint, err)
+			return inst.failConfig(fmt.Errorf("%w: invalid ollama endpoint %q: %w", ErrInvalidConfig, endpoint, err))
 		}
 		client := api.NewClient(u, httpClient)
 		ollamaProv := (&loomollama.Provider{}).NewProvider(client, u)
@@ -215,9 +240,11 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		inst.embeddingProv = genaiProv
 
 	case "antigravity":
-		ts, hasCredentials, err := auth.ProviderTokenSource(ctx, cfg.Name, cfg.Type, token)
+		ts, hasCredentials, err := auth.ProviderTokenSource(ctx, cfg.Name, pType, token)
 		if err != nil {
-			return nil, err
+			inst.authErr = err
+			inst.warning = err.Error()
+			return inst, nil
 		}
 		if !hasCredentials {
 			if cfg.Auth != nil && cfg.Auth.Token != nil && cfg.Auth.Token.Env != "" {
@@ -230,7 +257,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 
 		agCfg, err := parseAntigravityConfig(cfg.Name, cfg.Config, cfg.Headers)
 		if err != nil {
-			return nil, err
+			return inst.failConfig(err)
 		}
 		agCfg.TokenSource = ts
 		agCfg.BaseURL = cfg.Endpoint
@@ -238,12 +265,14 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 
 		antigravityProv, err := loomantigravity.NewProvider(agCfg)
 		if err != nil {
-			return nil, fmt.Errorf("gateway: antigravity provider error: %w", err)
+			inst.authErr = fmt.Errorf("gateway: antigravity provider error: %w", err)
+			inst.warning = inst.authErr.Error()
+			return inst, nil
 		}
 		inst.llmProv = antigravityProv
 
 	default:
-		return nil, fmt.Errorf("%w: unknown provider type %q", ErrInvalidConfig, cfg.Type)
+		return inst.failConfig(fmt.Errorf("%w: unknown provider type %q", ErrInvalidConfig, cfg.Type))
 	}
 
 	return inst, nil

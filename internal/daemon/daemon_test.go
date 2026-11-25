@@ -3109,3 +3109,142 @@ func TestAntigravityOAuthEndpointsAndStatus(t *testing.T) {
 		t.Errorf("antigravity provider not found in GlobalProviders")
 	}
 }
+
+// TestInvalidProviderManifestIsolatedInDaemon verifies that a workspace with
+// one misconfigured provider manifest (e.g. auth.type: "env") alongside a
+// healthy provider does not break ListModels, GetWorkspaceStatus,
+// CreateSession, or ListWorkspaceProviders with HTTP 500.
+func TestInvalidProviderManifestIsolatedInDaemon(t *testing.T) {
+	ctx := context.Background()
+	xdgDir := shortTempDir(t)
+	t.Cleanup(xdg.ClearCache)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(xdgDir, "config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(xdgDir, "data"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(xdgDir, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(xdgDir, "run"))
+	t.Setenv("HEALTHY_TEST_KEY", "sk-healthy-daemon")
+	xdg.ClearCache()
+
+	runDir := shortTempDir(t)
+	sockPath := filepath.Join(runDir, "daemon.sock")
+	lockPath := filepath.Join(runDir, "daemon.lock")
+
+	pool := gateway.NewPool()
+	srv, err := New(Config{
+		SocketPath:            sockPath,
+		LockPath:              lockPath,
+		GatewayPool:           pool,
+		Logger:                log.Default(),
+		DisableMCPAutoConnect: true,
+	})
+	if err != nil {
+		t.Fatalf("daemon.New: %v", err)
+	}
+	if err := srv.Start(ctx); err != nil {
+		t.Fatalf("daemon.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close(context.Background()) })
+
+	wsDir := shortTempDir(t)
+	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	wsManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: fault-isolation\nspec:\n  defaultProvider: healthy\n  defaultModels:\n    completion: gpt-4o\n---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	brokenManifest := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: broken-anthropic
+spec:
+  type: anthropic
+  auth:
+    type: env
+    token: "${env:ANTHROPIC_API_KEY}"
+  models:
+    - id: claude-sonnet-5-5
+      name: claude-sonnet-5-5
+`
+	healthyManifest := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: healthy
+spec:
+  type: openai
+  auth:
+    type: bearer
+    token: "${env:HEALTHY_TEST_KEY}"
+  models:
+    - id: gpt-4o
+      name: gpt-4o
+`
+	if err := os.WriteFile(filepath.Join(provDir, "broken-anthropic.provider.yaml"), []byte(brokenManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(provDir, "healthy.provider.yaml"), []byte(healthyManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := client.New(sockPath, client.WithCWD(wsDir))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	wsProviders, err := cli.ListWorkspaceProviders(ctx)
+	if err != nil {
+		t.Fatalf("ListWorkspaceProviders failed: %v", err)
+	}
+	statusByName := make(map[string]api.WorkspaceProvider)
+	for _, p := range wsProviders {
+		statusByName[p.Name] = p
+	}
+	if got := statusByName["broken-anthropic"]; got.Status != "invalid_config" || got.HasKey {
+		t.Errorf("broken-anthropic provider = %+v, want Status=invalid_config HasKey=false", got)
+	}
+	if got := statusByName["healthy"]; got.Status != "active" || !got.HasKey {
+		t.Errorf("healthy provider = %+v, want Status=active HasKey=true", got)
+	}
+
+	if _, err := cli.GetWorkspaceStatus(ctx); err != nil {
+		t.Fatalf("GetWorkspaceStatus failed: %v", err)
+	}
+	wsInfo, err := cli.GetWorkspace(ctx)
+	if err != nil {
+		t.Fatalf("GetWorkspace failed: %v", err)
+	}
+	if !slices.ContainsFunc(wsInfo.Warnings, func(w string) bool {
+		return strings.Contains(w, "broken-anthropic") && strings.Contains(w, "unknown auth type")
+	}) {
+		t.Errorf("GetWorkspace warnings = %q, want warning naming broken-anthropic and unknown auth type", wsInfo.Warnings)
+	}
+
+	modelList, err := cli.ListModels(ctx)
+	if err != nil {
+		t.Fatalf("ListModels failed: %v", err)
+	}
+	if !slices.ContainsFunc(modelList, func(m api.Model) bool { return m.ID == "healthy/gpt-4o" }) {
+		t.Errorf("ListModels = %+v, want healthy/gpt-4o present", modelList)
+	}
+
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{Config: api.SessionConfig{Model: "healthy/gpt-4o"}})
+	if err != nil {
+		t.Fatalf("CreateSession targeting healthy provider failed: %v", err)
+	}
+	if sess.ID == "" {
+		t.Fatal("CreateSession returned empty ID")
+	}
+
+	// Directly targeting the broken provider through the workspace gateway returns ErrInvalidConfig.
+	rt, err := srv.workspace(ctx, wsDir)
+	if err != nil {
+		t.Fatalf("srv.workspace: %v", err)
+	}
+	if _, err := rt.Gateway().LLM(ctx, models.Model{ID: "broken-anthropic/claude-sonnet-5-5", ProviderType: "anthropic"}, llm.ModelConfig{}); !errors.Is(err, gateway.ErrInvalidConfig) {
+		t.Errorf("gateway.LLM(broken-anthropic) = %v, want ErrInvalidConfig", err)
+	}
+}

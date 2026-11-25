@@ -16,7 +16,7 @@ type WorkspaceProvider struct {
 	Path                 string               `json:"path,omitempty"`     // home-shortened manifest path of the owning file
 	Enabled              bool                 `json:"enabled"`            // spec.enabled (true when omitted)
 	Shadowed             bool                 `json:"shadowed,omitempty"` // a workspace-tier override mutes an inherited provider
-	Status               string               `json:"status,omitempty"`   // "active", "disabled", "missing_auth", "local"
+	Status               string               `json:"status,omitempty"`   // "active", "disabled", "missing_auth", "local", "invalid_config"
 	HasKey               bool                 `json:"has_key,omitempty"`
 	AuthType             string               `json:"auth_type,omitempty"`
 	AuthEnv              string               `json:"auth_env,omitempty"`

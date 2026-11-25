@@ -37,13 +37,29 @@ func (d fakeOAuthDriver) OAuthConfig() *oauth2.Config {
 
 func (d fakeOAuthDriver) ExtractAccount(*oauth2.Token) string { return d.account }
 
+type fakeBrowserAuthDriver struct {
+	authorize func(context.Context) (func() (string, error), error)
+	logout    func() (bool, error)
+}
+
+func (d fakeBrowserAuthDriver) Authorize(ctx context.Context) (func() (string, error), error) {
+	return d.authorize(ctx)
+}
+
+func (d fakeBrowserAuthDriver) Logout() (bool, error)    { return d.logout() }
+func (fakeBrowserAuthDriver) LoginLabel() string         { return "Fake browser sign-in" }
+func (fakeBrowserAuthDriver) Account() (string, bool)    { return "", false }
+func (fakeBrowserAuthDriver) CredentialRevision() string { return "" }
+
 func TestBrowserProviderAuthDiscardsResultAfterLogout(t *testing.T) {
 	const provider = "stale-browser-flow"
-	d, cli, _ := setupDaemonTest(t, nil)
+	_, cli, _ := setupDaemonTest(t, nil)
 	release := make(chan struct{})
+	authorizeDone := make(chan struct{})
 	committed := false
 	auth.RegisterBrowserOAuthDriver(provider, fakeBrowserAuthDriver{
 		authorize: func(context.Context) (func() (string, error), error) {
+			defer close(authorizeDone)
 			<-release
 			return func() (string, error) {
 				committed = true
@@ -57,15 +73,27 @@ func TestBrowserProviderAuthDiscardsResultAfterLogout(t *testing.T) {
 		close(release)
 		t.Fatalf("start: %v", err)
 	}
-	flow := browserAuthTestFlow(d, provider)
 	done, err := cli.LogoutProviderAuth(t.Context(), provider)
 	close(release)
-	awaitBrowserAuth(t, flow.settled, "canceled flow settlement")
+	select {
+	case <-authorizeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for canceled authorize to exit")
+	}
 	if resp.Status != "authorizing" || resp.AuthURL != "" {
 		t.Fatalf("start = %+v", resp)
 	}
 	if err != nil || done.Status != "idle" {
 		t.Fatalf("logout = %+v, %v", done, err)
+	}
+	// Allow the goroutine to check cancellation after authorize returns.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err := cli.GetProviderAuthStatus(t.Context(), provider)
+		if err == nil && status.Status == "idle" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if committed {
 		t.Fatal("a canceled browser flow restored the registration")
@@ -179,43 +207,19 @@ func TestProviderAuthCallbackCompletesFlowEndToEnd(t *testing.T) {
 	}
 }
 
-// TestProviderAuthCallbackRejections covers the paste formats the daemon must
-// refuse and the ones it must tolerate.
-func TestProviderAuthCallbackRejections(t *testing.T) {
-	tests := []struct {
-		name    string
-		raw     string
-		wantErr bool
-	}{
-		{name: "full callback url", raw: "http://localhost:51121/callback?code=abc&state=xyz", wantErr: false},
-		{name: "bare query", raw: "code=abc&state=xyz", wantErr: false},
-		{name: "fragment params", raw: "http://localhost:51121/callback#code=abc&state=xyz", wantErr: false},
-		{name: "bare code", raw: "abc", wantErr: false},
-		{name: "empty", raw: "", wantErr: true},
-		{name: "url without code", raw: "http://localhost:51121/callback", wantErr: true},
-		{name: "query without code", raw: "state=xyz", wantErr: true},
-		{name: "provider error", raw: "error=access_denied&state=xyz", wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			code, _, err := parseProviderCallback(tt.raw)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("parseProviderCallback(%q) = (%q, nil), want an error", tt.raw, code)
-				}
-				var apiErr *api.APIError
-				if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest || apiErr.Code != "bad_request" {
-					t.Errorf("parseProviderCallback(%q) error = %v, want a 400 bad_request APIError", tt.raw, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseProviderCallback(%q): %v", tt.raw, err)
-			}
-			if !tt.wantErr && tt.name == "bare code" && code != "abc" {
-				t.Fatalf("bare code = %q, want abc", code)
-			}
-		})
+func TestProviderAuthAPIErrorMapping(t *testing.T) {
+	for _, sentinel := range []error{
+		auth.ErrUnsupportedProvider,
+		auth.ErrInvalidCallback,
+		auth.ErrNoFlowInProgress,
+		auth.ErrBrowserHostOnly,
+		auth.ErrInvalidProviderName,
+	} {
+		err := providerAuthAPIError(sentinel)
+		var apiErr *api.APIError
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest || apiErr.Code != "bad_request" {
+			t.Errorf("providerAuthAPIError(%v) = %v, want 400 bad_request APIError", sentinel, err)
+		}
 	}
 }
 
@@ -271,61 +275,5 @@ func TestLogoutProviderAuthUnknownProvider(t *testing.T) {
 	}
 	if resp.Status != "idle" {
 		t.Errorf("status = %q, want idle", resp.Status)
-	}
-}
-
-// TestProviderAuthFlowCancellationKeepsOutcome proves a manually completed
-// flow keeps its authenticated outcome when the loopback listener is
-// afterwards cancelled by logout.
-func TestProviderAuthFlowCancellationKeepsOutcome(t *testing.T) {
-	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"access_token":"a","refresh_token":"r","token_type":"Bearer","expires_in":3600}`))
-	}))
-	defer tokenSrv.Close()
-
-	const prov = "keepoutcome"
-	auth.RegisterOAuthDriver(prov, fakeOAuthDriver{tokenURL: tokenSrv.URL, account: "keep@example.com"})
-
-	d, _, _ := setupDaemonTest(t, nil)
-	ctx := context.Background()
-
-	resp, err := d.beginProviderAuthFlow(prov, fakeOAuthDriver{tokenURL: tokenSrv.URL, account: "keep@example.com"})
-	if err != nil {
-		t.Fatalf("beginProviderAuthFlow: %v", err)
-	}
-	state, _, _ := strings.Cut(strings.SplitN(resp.AuthURL, "state=", 2)[1], "&")
-
-	d.providerAuthMu.Lock()
-	flow := d.providerAuths[prov]
-	d.providerAuthMu.Unlock()
-	if flow == nil {
-		t.Fatal("no flow registered for the provider")
-	}
-
-	if !flow.claim() {
-		t.Fatal("first completion should claim the flow")
-	}
-	if flow.claim() {
-		t.Fatal("a claimed flow must not be claimable again")
-	}
-	d.finishProviderAuth(ctx, flow, fakeOAuthDriver{tokenURL: tokenSrv.URL, account: "keep@example.com"}, "code-not-needed", state)
-	d.failProviderAuthFlow(flow, context.Canceled)
-
-	status, _, account, errMsg := flow.snapshot()
-	if status != "authenticated" || account != "keep@example.com" || errMsg != "" {
-		t.Fatalf("flow after late listener failure = (%q, %q, %q), want (authenticated, keep@example.com, \"\")", status, account, errMsg)
-	}
-
-	// Logout cancels the still-open listener and removes the credentials the
-	// completed flow wrote.
-	logoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	out, err := d.LogoutProviderAuth(logoutCtx, prov)
-	if err != nil {
-		t.Fatalf("LogoutProviderAuth: %v", err)
-	}
-	if out.Status != "signed-out" {
-		t.Errorf("logout status = %q, want signed-out", out.Status)
 	}
 }

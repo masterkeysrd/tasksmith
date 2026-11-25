@@ -33,9 +33,6 @@ const (
 //   - Limits fallback: if neither layer sets Context/Output, 128000/16384,
 //     applied once here.
 func Merge(id ID, providerType string, manifest *warp.ProviderModel, base *profile.Profile) Model {
-	if base == nil {
-		base = subscriptionPresetProfile(id, providerType)
-	}
 	out := mergeModel(fromManifest(manifest, id, providerType), fromProfile(base, id, providerType))
 	if out.Name == "" {
 		out.Name = id.Name()

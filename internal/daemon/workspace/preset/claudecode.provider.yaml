@@ -16,6 +16,8 @@ spec:
       limits:
         context: 1000000
         output: 128000
+      capabilities:
+        tools: true
     - id: claude-sonnet-5-5
       name: claude-sonnet-5-5
       label: Claude Sonnet 5.5
@@ -23,6 +25,8 @@ spec:
       limits:
         context: 1000000
         output: 128000
+      capabilities:
+        tools: true
     - id: claude-opus-5-5
       name: claude-opus-5-5
       label: Claude Opus 5.5
@@ -30,6 +34,8 @@ spec:
       limits:
         context: 1000000
         output: 128000
+      capabilities:
+        tools: true
     - id: claude-fable-5-2
       name: claude-fable-5-2
       label: Claude Fable 5.2
@@ -37,3 +43,5 @@ spec:
       limits:
         context: 1000000
         output: 128000
+      capabilities:
+        tools: true

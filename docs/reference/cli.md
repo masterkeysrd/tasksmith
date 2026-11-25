@@ -379,6 +379,7 @@ The detail line below the list shows the highlighted provider’s adapter type a
 | `Ready` | `✔` green | The provider is enabled and its credential requirements are satisfied. |
 | `Local` | `●` cyan | The provider uses a local endpoint or the Ollama adapter. |
 | `Needs sign-in` | `⚠` yellow | The configured credential or OAuth token is unavailable. |
+| `Invalid config` | `⚠` yellow | The provider manifest has an invalid configuration (see `/warnings` for details). |
 | `Disabled` | `○` muted | The manifest sets `spec.enabled: false`. A workspace shadow over an enabled inherited manifest shows `Disabled (shadow)`. |
 
 #### Provider Model Manager

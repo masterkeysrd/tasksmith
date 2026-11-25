@@ -304,7 +304,8 @@ func TestCallMCPToolAndPolicyBlock(t *testing.T) {
 		text.WriteString(chunk.Content.Text())
 		if structured, ok := chunk.StructuredContent.(map[string]any); ok {
 			if value, ok := structured["text"].(string); ok {
-				text.WriteString(" " + value)
+				text.WriteString(" ")
+				text.WriteString(value)
 			}
 		}
 	}

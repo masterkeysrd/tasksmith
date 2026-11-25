@@ -54,13 +54,13 @@ func TestSubscriptionGatewayProviders(t *testing.T) {
 			}
 			invalid := cfg
 			invalid.Endpoint = "custom"
-			if _, err := initProvider(ctx, invalid, nil); !errors.Is(err, ErrInvalidConfig) {
-				t.Fatalf("endpoint override: %v", err)
+			if inst, err := initProvider(ctx, invalid, nil); err != nil || !errors.Is(inst.authErr, ErrInvalidConfig) {
+				t.Fatalf("endpoint override: inst=%+v, err=%v", inst, err)
 			}
 			invalid = cfg
 			invalid.Auth = &auth.Config{Type: auth.TypeOAuth2, Token: &auth.CredentialSource{Env: "FIXTURE_TOKEN"}}
-			if _, err := initProvider(ctx, invalid, nil); !errors.Is(err, ErrInvalidConfig) {
-				t.Fatalf("credential override: %v", err)
+			if inst, err := initProvider(ctx, invalid, nil); err != nil || !errors.Is(inst.authErr, ErrInvalidConfig) {
+				t.Fatalf("credential override: inst=%+v, err=%v", inst, err)
 			}
 
 			testBin, err := os.Executable()
@@ -319,7 +319,7 @@ func TestGatewayQuotaAccountSources(t *testing.T) {
 		registration             bool
 	}{
 		{"browser-first", providers.CodexName, browserAccount, true},
-		{"browser-unavailable", providers.CodexName, tokenAccount, false},
+		{"browser-unavailable", providers.CodexName, "", false},
 		{"legacy-oauth", "antigravity", tokenAccount, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

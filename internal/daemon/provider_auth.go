@@ -1,17 +1,16 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/masterkeysrd/loom/auth"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -19,62 +18,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
-
-type providerAuthFlow struct {
-	mu       sync.Mutex
-	provider string
-	status   string
-	authURL  string
-	account  string
-	err      string
-	cancel   context.CancelFunc
-	session  *auth.AuthSession
-	settled  chan struct{}
-	claimed  bool
-}
-
-// claim atomically takes exclusive ownership of completing the flow. Only the
-// goroutine that claims an authorizing flow may exchange its one-time
-// authorization code, which keeps a manually pasted callback and the loopback
-// listener from exchanging the same code concurrently.
-func (f *providerAuthFlow) claim() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.status != "authorizing" || f.claimed || f.session == nil {
-		return false
-	}
-	f.claimed = true
-	return true
-}
-
-// snapshot returns the flow's observable state under its lock.
-func (f *providerAuthFlow) snapshot() (status, authURL, account, errMsg string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.status, f.authURL, f.account, f.err
-}
-
-// settle records a status, account, and error message under the flow lock.
-func (f *providerAuthFlow) settle(status, account, errMsg string) {
-	f.mu.Lock()
-	f.status = status
-	f.account = account
-	f.err = errMsg
-	f.mu.Unlock()
-}
-
-// toAPI snapshots the flow into its API response representation under the lock.
-func (f *providerAuthFlow) toAPI() api.ProviderAuthResponse {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return api.ProviderAuthResponse{
-		Provider: f.provider,
-		AuthURL:  f.authURL,
-		Status:   f.status,
-		Account:  f.account,
-		Error:    f.err,
-	}
-}
 
 func findPreset(name string) *warp.ModelProvider {
 	for _, p := range workspace.Presets() {
@@ -94,12 +37,12 @@ func loadUserEnv() map[string]string {
 	return userEnv
 }
 
-func resolvePresetAuth(p *warp.ModelProvider, envLayers ...map[string]string) (hasKey bool, account, status string) {
+func (d *Daemon) resolvePresetAuth(p *warp.ModelProvider, envLayers ...map[string]string) (hasKey bool, account, status string) {
 	if p == nil {
 		return false, "", ""
 	}
 	if p.Spec.Auth != nil && p.Spec.Auth.Type == warp.AuthTypeOAuth2 {
-		if email, ok := providerOAuthAccount(p.Metadata.Name); ok {
+		if email, ok := d.auth.Account(cmp.Or(p.Spec.Type, p.Metadata.Name), p.Metadata.Name); ok {
 			if email != "" {
 				return true, email, fmt.Sprintf("✓ %s (OAuth)", email)
 			}
@@ -123,12 +66,39 @@ func resolvePresetAuth(p *warp.ModelProvider, envLayers ...map[string]string) (h
 	return false, "", ""
 }
 
-func providerOAuthAccount(provider string) (string, bool) {
-	if driver, ok := providerauth.GetBrowserOAuthDriver(provider); ok {
-		return driver.Account()
+func flowSnapshotToAPI(snap *providerauth.FlowSnapshot) *api.ProviderAuthResponse {
+	if snap == nil {
+		return nil
 	}
-	token, email, err := providerauth.LoadProviderToken(provider)
-	return email, err == nil && token != nil
+	return &api.ProviderAuthResponse{
+		Provider: snap.Provider,
+		AuthURL:  snap.AuthURL,
+		Status:   snap.Status,
+		Account:  snap.Account,
+		Error:    snap.Error,
+	}
+}
+
+// providerAuthAPIError maps auth.Manager sentinel errors onto HTTP 400
+// bad_request APIError envelopes so clients distinguish validation failures
+// from internal errors without parsing message text.
+func providerAuthAPIError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, providerauth.ErrUnsupportedProvider),
+		errors.Is(err, providerauth.ErrInvalidCallback),
+		errors.Is(err, providerauth.ErrNoFlowInProgress),
+		errors.Is(err, providerauth.ErrBrowserHostOnly),
+		errors.Is(err, providerauth.ErrInvalidProviderName):
+		return &api.APIError{
+			StatusCode: http.StatusBadRequest,
+			Code:       "bad_request",
+			Message:    err.Error(),
+		}
+	default:
+		return err
+	}
 }
 
 func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderRequest) (*api.VerifyProviderResponse, error) {
@@ -173,7 +143,7 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 	}
 
 	if foundPreset != nil && foundPreset.Spec.Auth != nil {
-		hasKey, _, _ := resolvePresetAuth(foundPreset)
+		hasKey, _, _ := d.resolvePresetAuth(foundPreset)
 		if foundPreset.Spec.Auth.Type == warp.AuthTypeOAuth2 {
 			if !hasKey {
 				return &api.VerifyProviderResponse{
@@ -196,134 +166,11 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 }
 
 func (d *Daemon) StartProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
-	prov := strings.TrimSpace(strings.ToLower(provider))
-	if driver, ok := providerauth.GetBrowserOAuthDriver(prov); ok {
-		return d.beginBrowserAuthFlow(prov, driver.Authorize), nil
-	}
-	driver, ok := providerauth.GetOAuthDriver(prov)
-	if !ok {
-		return nil, providerAuthUnsupported(provider)
-	}
-	return d.beginProviderAuthFlow(prov, driver)
-}
-
-// providerAuthUnsupported is the 400 clients see for a provider without a
-// registered OAuth driver, matching the documented bad_request contract.
-func providerAuthUnsupported(provider string) error {
-	return &api.APIError{
-		StatusCode: http.StatusBadRequest,
-		Code:       "bad_request",
-		Message:    fmt.Sprintf("oauth not supported for provider %q", provider),
-	}
-}
-
-// providerAuthBadRequest wraps a client-facing auth validation failure in the
-// documented bad_request envelope.
-func providerAuthBadRequest(format string, args ...any) error {
-	return &api.APIError{
-		StatusCode: http.StatusBadRequest,
-		Code:       "bad_request",
-		Message:    fmt.Sprintf(format, args...),
-	}
-}
-
-// beginProviderAuthFlow opens a PKCE flow for driver and holds it open on a
-// background goroutine until the loopback callback lands or the flow times out.
-func (d *Daemon) registerProviderAuthFlow(prov string) (context.Context, *providerAuthFlow) {
-	d.providerAuthMu.Lock()
-	defer d.providerAuthMu.Unlock()
-	if existing, ok := d.providerAuths[prov]; ok && existing != nil {
-		existing.mu.Lock()
-		if existing.cancel != nil {
-			existing.cancel()
-		}
-		existing.mu.Unlock()
-	}
-
-	flowCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	flow := &providerAuthFlow{
-		provider: prov,
-		status:   "authorizing",
-		cancel:   cancel,
-		settled:  make(chan struct{}),
-	}
-	d.providerAuths[prov] = flow
-	return flowCtx, flow
-}
-
-func (d *Daemon) beginProviderAuthFlow(prov string, driver providerauth.OAuthDriver) (*api.ProviderAuthResponse, error) {
-	flowCtx, flow := d.registerProviderAuthFlow(prov)
-	oauthCfg := driver.OAuthConfig()
-	session, err := auth.BeginAuth(oauthCfg)
+	snap, err := d.auth.Start(ctx, provider)
 	if err != nil {
-		flow.cancel()
-		flow.settle("error", "", err.Error())
-		close(flow.settled)
-		return nil, fmt.Errorf("begin oauth: %w", err)
+		return nil, providerAuthAPIError(err)
 	}
-
-	flow.mu.Lock()
-	flow.authURL = session.AuthURL
-	flow.session = session
-	flow.mu.Unlock()
-
-	go func() {
-		defer flow.cancel()
-		defer close(flow.settled)
-
-		res, err := auth.ReceiveCallback(flowCtx, oauthCfg.RedirectURL, session.AuthURL, auth.LoopbackOptions{
-			Template: oauthCallbackTemplate,
-		})
-		if err != nil {
-			d.failProviderAuthFlow(flow, err)
-			return
-		}
-		if !flow.claim() {
-			return
-		}
-		d.finishProviderAuth(flowCtx, flow, driver, res.Code, res.State)
-	}()
-
-	resp := flow.toAPI()
-	return &resp, nil
-}
-
-// failProviderAuthFlow records a terminal error on the flow. A flow that
-// already settled keeps its outcome, and a flow whose completion has been
-// claimed (a pasted callback cancels the loopback listener while it exchanges
-// the code, and that cancellation surfaces here as an error) belongs to its
-// completer, not to the listener.
-func (d *Daemon) failProviderAuthFlow(flow *providerAuthFlow, err error) {
-	flow.mu.Lock()
-	defer flow.mu.Unlock()
-	if flow.status != "authorizing" || flow.claimed {
-		return
-	}
-	flow.status = "error"
-	flow.err = err.Error()
-}
-
-// finishProviderAuth exchanges the authorization code, persists the token, and
-// reloads workspaces so pooled gateways pick up the new credentials. It is the
-// shared completion path for both the loopback listener and a manually pasted
-// callback URL, and only runs for the goroutine that claimed the flow, so it
-// owns the recorded outcome outright.
-func (d *Daemon) finishProviderAuth(ctx context.Context, flow *providerAuthFlow, driver providerauth.OAuthDriver, code, state string) {
-	tok, err := auth.CompleteAuth(ctx, driver.OAuthConfig(), flow.session, code, state)
-	if err != nil {
-		flow.settle("error", "", err.Error())
-		return
-	}
-
-	account := driver.ExtractAccount(tok)
-	if err := providerauth.SaveProviderToken(flow.provider, tok, account); err != nil {
-		flow.settle("error", "", err.Error())
-		return
-	}
-
-	d.reloadAllWorkspaces(ctx)
-
-	flow.settle("authenticated", account, "")
+	return flowSnapshotToAPI(snap), nil
 }
 
 // CompleteProviderAuth finishes an in-flight provider OAuth flow with a
@@ -331,117 +178,19 @@ func (d *Daemon) finishProviderAuth(ctx context.Context, flow *providerAuthFlow,
 // the browser runs on a different machine (SSH or headless hosts) and cannot
 // reach the daemon's loopback listener.
 func (d *Daemon) CompleteProviderAuth(ctx context.Context, provider string, req api.ProviderAuthCallbackRequest) (*api.ProviderAuthResponse, error) {
-	prov := strings.TrimSpace(strings.ToLower(provider))
-	if _, ok := providerauth.GetBrowserOAuthDriver(prov); ok {
-		return nil, providerAuthBadRequest("finish sign-in for %q in the browser on the daemon host", prov)
-	}
-	driver, ok := providerauth.GetOAuthDriver(prov)
-	if !ok {
-		return nil, providerAuthUnsupported(provider)
-	}
-
-	d.providerAuthMu.Lock()
-	flow := d.providerAuths[prov]
-	d.providerAuthMu.Unlock()
-
-	if flow == nil {
-		return nil, providerAuthBadRequest("no provider auth flow in progress for %q; start it with auth login", prov)
-	}
-
-	code, state, err := parseProviderCallback(req.CallbackURL)
+	snap, err := d.auth.Complete(ctx, provider, req.CallbackURL)
 	if err != nil {
-		return nil, err
+		return nil, providerAuthAPIError(err)
 	}
-
-	// Claiming under the flow lock makes this paste the single completer:
-	// the loopback listener can no longer exchange the same one-time code,
-	// and a duplicate paste just reads the current status.
-	if !flow.claim() {
-		return d.GetProviderAuthStatus(ctx, prov)
-	}
-	flow.mu.Lock()
-	cancel := flow.cancel
-	flow.mu.Unlock()
-	cancel()
-
-	d.finishProviderAuth(ctx, flow, driver, code, state)
-
-	resp := flow.toAPI()
-	if resp.Status == "error" {
-		return nil, fmt.Errorf("complete oauth: %s", resp.Error)
-	}
-
-	return &resp, nil
+	return flowSnapshotToAPI(snap), nil
 }
 
-// parseProviderCallback extracts the authorization code and state from a
-// callback URL the user pasted by hand. It accepts a full callback URL, a
-// query string, or a bare code.
-func parseProviderCallback(raw string) (code, state string, err error) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return "", "", providerAuthBadRequest("callback url is required")
+func (d *Daemon) GetProviderAuthStatus(_ context.Context, provider string) (*api.ProviderAuthResponse, error) {
+	snap, err := d.auth.Status(provider)
+	if err != nil {
+		return nil, providerAuthAPIError(err)
 	}
-	if strings.Contains(value, "://") && !strings.Contains(value, "?") && !strings.Contains(value, "#") {
-		return "", "", providerAuthBadRequest("callback url carries no authorization code")
-	}
-
-	query := value
-	if idx := strings.IndexAny(value, "?#"); idx >= 0 {
-		query = value[idx+1:]
-	}
-	if hash := strings.LastIndex(query, "#"); hash >= 0 {
-		query = query[:hash]
-	}
-
-	params, parseErr := url.ParseQuery(query)
-	if parseErr == nil && (params.Get("code") != "" || params.Get("error") != "" || strings.Contains(value, "=")) {
-		code, state = params.Get("code"), params.Get("state")
-		if oauthErr := params.Get("error"); code == "" && oauthErr != "" {
-			return "", "", providerAuthBadRequest("authorization failed: %s", oauthErr)
-		}
-		if code == "" {
-			return "", "", providerAuthBadRequest("callback url carries no authorization code")
-		}
-		return code, state, nil
-	}
-
-	// A bare code pasted without any query decoration.
-	if strings.Contains(value, "://") || strings.Contains(value, "=") {
-		return "", "", providerAuthBadRequest("callback url carries no authorization code")
-	}
-	return value, "", nil
-}
-
-func (d *Daemon) GetProviderAuthStatus(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
-	prov := strings.TrimSpace(strings.ToLower(provider))
-	if !providerauth.HasOAuthDriver(prov) {
-		return nil, providerAuthUnsupported(provider)
-	}
-
-	d.providerAuthMu.Lock()
-	flow, ok := d.providerAuths[prov]
-	d.providerAuthMu.Unlock()
-
-	if ok && flow != nil {
-		resp := flow.toAPI()
-		if resp.Status == "authorizing" || resp.Status == "error" || (resp.Status == "authenticated" && resp.Error == "") {
-			return &resp, nil
-		}
-	}
-
-	if email, ok := providerOAuthAccount(prov); ok {
-		return &api.ProviderAuthResponse{
-			Provider: prov,
-			Status:   "authenticated",
-			Account:  email,
-		}, nil
-	}
-
-	return &api.ProviderAuthResponse{
-		Provider: prov,
-		Status:   "idle",
-	}, nil
+	return flowSnapshotToAPI(snap), nil
 }
 
 // LogoutProviderAuth cancels any in-flight OAuth flow for provider and removes
@@ -449,12 +198,9 @@ func (d *Daemon) GetProviderAuthStatus(ctx context.Context, provider string) (*a
 // the signed-in client. It reports whether credential material was deleted.
 func (d *Daemon) LogoutProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
 	prov := strings.TrimSpace(strings.ToLower(provider))
-	if prov == "" {
-		return nil, providerAuthBadRequest("provider name is required")
-	}
-	deleted, err := d.deleteProviderCredentials(prov)
+	deleted, err := d.auth.Logout(prov, prov)
 	if err != nil {
-		return nil, err
+		return nil, providerAuthAPIError(err)
 	}
 	d.reloadAllWorkspaces(ctx)
 	status := "idle"
@@ -464,40 +210,9 @@ func (d *Daemon) LogoutProviderAuth(ctx context.Context, provider string) (*api.
 	return &api.ProviderAuthResponse{Provider: prov, Status: status}, nil
 }
 
-func (d *Daemon) deleteProviderCredentials(prov string) (bool, error) {
-	if driver, ok := providerauth.GetBrowserOAuthDriver(prov); ok {
-		return d.logoutBrowserAuth(prov, driver)
-	}
-	d.providerAuthMu.Lock()
-	flow := d.providerAuths[prov]
-	if flow != nil {
-		delete(d.providerAuths, prov)
-	}
-	d.providerAuthMu.Unlock()
-
-	if flow != nil {
-		flow.mu.Lock()
-		cancel, settled := flow.cancel, flow.settled
-		flow.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		// Wait briefly so a flow completing concurrently cannot re-save its
-		// token after the credential file is removed.
-		if settled != nil {
-			select {
-			case <-settled:
-			case <-time.After(5 * time.Second):
-			}
-		}
-	}
-
-	return providerauth.DeleteProviderToken(prov, "")
-}
-
 // ListProviders returns the built-in provider presets with their current
 // credential availability, independent of any workspace.
-func (d *Daemon) ListProviders(ctx context.Context) ([]api.ProviderSummary, error) {
+func (d *Daemon) ListProviders(_ context.Context) ([]api.ProviderSummary, error) {
 	return d.scanGlobalProviders(), nil
 }
 
@@ -513,12 +228,9 @@ func (d *Daemon) scanGlobalProviders() []api.ProviderSummary {
 		if p.Spec.Auth != nil && p.Spec.Auth.Type != "" {
 			authType = string(p.Spec.Auth.Type)
 		}
-		loginLabel := ""
-		if driver, ok := providerauth.GetBrowserOAuthDriver(p.Metadata.Name); ok {
-			loginLabel = driver.LoginLabel()
-		}
+		loginLabel := d.auth.LoginLabel(cmp.Or(p.Spec.Type, p.Metadata.Name))
 
-		hasKey, account, status := resolvePresetAuth(p, userEnv)
+		hasKey, account, status := d.resolvePresetAuth(p, userEnv)
 		if p.Metadata.Name == "ollama" {
 			status = "local"
 		}
@@ -573,7 +285,7 @@ func (d *Daemon) checkMissingCredentials(cleanDir string) []string {
 	if p == nil {
 		return missing
 	}
-	if hasKey, _, _ := resolvePresetAuth(p, localEnv, userEnv); !hasKey {
+	if hasKey, _, _ := d.resolvePresetAuth(p, localEnv, userEnv); !hasKey {
 		if envVar := workspace.ProviderAuthPrimaryEnv(p.Spec.Auth); envVar != "" {
 			missing = append(missing, envVar)
 		}

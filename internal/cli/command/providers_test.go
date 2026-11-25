@@ -736,3 +736,40 @@ func TestProviderRowStatusShadowSuffix(t *testing.T) {
 		t.Errorf("enabled full override row = %q, want Ready without (shadow)", override)
 	}
 }
+
+func TestProvidersBrowserRendersInvalidConfigStatus(t *testing.T) {
+	store.ResetApp()
+	defer store.ResetApp()
+	newProviderFixture(t, []api.WorkspaceProvider{
+		{
+			Name: "healthy", Type: "openai", Scope: "workspace",
+			Path:    "~/proj/.agents/providers/healthy.provider.yaml",
+			Enabled: true, Status: "active", Writable: true,
+			Models: []api.ProviderModelInfo{{ID: "gpt-4o", Name: "gpt-4o"}},
+		},
+		{
+			Name: "broken", Type: "anthropic", Scope: "workspace",
+			Path:    "~/proj/.agents/providers/broken.provider.yaml",
+			Enabled: true, Status: "invalid_config", Writable: true,
+			AuthType: "env",
+			Models:   []api.ProviderModelInfo{{ID: "claude-sonnet-5-5", Name: "claude-sonnet-5-5"}},
+		},
+	})
+	reg := NewRegistry()
+	if err := reg.Execute("/providers"); err != nil {
+		t.Fatalf("Execute(/providers): %v", err)
+	}
+	env := mcpMountActiveSlot(t)
+	frame := env.DumpText()
+	wantRow := "❯ ⚠ broken Invalid config 1 model"
+	found := false
+	for line := range strings.Lines(frame) {
+		if strings.Join(strings.Fields(line), " ") == wantRow {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected %q in rendered /providers view:\n%s", wantRow, frame)
+	}
+}

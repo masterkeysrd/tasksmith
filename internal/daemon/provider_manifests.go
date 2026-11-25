@@ -24,20 +24,41 @@ import (
 	"github.com/masterkeysrd/warp"
 )
 
+// isInvalidProviderManifest checks static manifest fields (provider type and
+// auth scheme) that would prevent the gateway from initializing this provider.
+func isInvalidProviderManifest(def *warp.ModelProvider) bool {
+	if def == nil || strings.TrimSpace(def.Spec.Type) == "" {
+		return true
+	}
+	if def.Spec.Auth != nil {
+		cfg := providerauth.Config{Type: providerauth.Type(def.Spec.Auth.Type)}
+		switch cfg.Scheme() {
+		case providerauth.TypeBearer, providerauth.TypeAPIKey, providerauth.TypeBasic, providerauth.TypeNone, providerauth.TypeOAuth2:
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // providerStatusFor resolves the browser-facing status of one configured
-// provider: a disabled manifest is always "disabled", a local endpoint needs no
-// credential, an OAuth provider reports "missing_auth" until a token is stored,
-// and everything else reports whether its configured secret resolves.
-func providerStatusFor(rec workspace.ProviderRecord, wsEnv map[string]string) (status string, hasKey bool, account string) {
+// provider: a disabled manifest is always "disabled", an invalid manifest or
+// gateway-reported invalid configuration is "invalid_config", a local endpoint
+// needs no credential, an OAuth provider reports "missing_auth" until a token
+// is stored, and everything else reports whether its configured secret resolves.
+func providerStatusFor(rec workspace.ProviderRecord, wsEnv map[string]string, gwInvalid bool, authMgr *providerauth.Manager) (status string, hasKey bool, account string) {
 	if !rec.Enabled {
 		return "disabled", false, ""
+	}
+	if gwInvalid || isInvalidProviderManifest(rec.Def) {
+		return "invalid_config", false, ""
 	}
 	if isLocalEndpoint(rec.Def) || rec.Name == "ollama" {
 		return "local", true, ""
 	}
 	auth := rec.Def.Spec.Auth
 	if auth != nil && auth.Type == warp.AuthTypeOAuth2 {
-		if email, ok := providerOAuthAccount(rec.Name); ok {
+		if email, ok := authMgr.Account(cmp.Or(rec.Def.Spec.Type, rec.Name), rec.Name); ok {
 			return "active", true, email
 		}
 		return "missing_auth", false, ""
@@ -119,10 +140,19 @@ func (d *Daemon) ListWorkspaceProviders(ctx context.Context, rawWS string) ([]ap
 	ws := rt.Workspace()
 	wsEnv := ws.Env()
 
+	invalidByName := make(map[string]bool)
+	if gw := rt.Gateway(); gw != nil {
+		for _, info := range gw.ListProviders() {
+			if info.InvalidConfig {
+				invalidByName[info.Name] = true
+			}
+		}
+	}
+
 	records := ws.ProviderRecords()
 	out := make([]api.WorkspaceProvider, 0, len(records))
 	for _, rec := range records {
-		status, hasKey, account := providerStatusFor(rec, wsEnv)
+		status, hasKey, account := providerStatusFor(rec, wsEnv, invalidByName[rec.Name], d.auth)
 		authEnv := workspace.ProviderAuthPrimaryEnv(rec.Def.Spec.Auth)
 		authType := ""
 		if rec.Def.Spec.Auth != nil {
@@ -409,7 +439,7 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 	apiKey := strings.TrimSpace(req.APIKey)
 	authType := strings.TrimSpace(req.AuthType)
 	for _, kind := range []string{name, provType} {
-		if _, browserOnly := providerauth.GetBrowserOAuthDriver(kind); !browserOnly {
+		if !d.auth.IsCanonicalBrowserOnly(kind) {
 			continue
 		}
 		if name != kind || provType != kind || endpoint != "" || authEnv != "" || apiKey != "" ||

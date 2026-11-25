@@ -14,37 +14,42 @@ import (
 
 const ClaudeCodeName = "claudecode"
 
-var claudeCodeOAuth = &subscriptionDriver[*loomclaudecode.Provider]{
-	name:  ClaudeCodeName,
-	label: "Continue with Claude",
-	newCLI: func(dir string) (vendorCLI, error) {
-		return newVendorCLI("claude", "CLAUDE_CONFIG_DIR", dir)
-	},
-	login:   claudeLogin,
-	account: claudeAccount,
-	logout:  claudeLogout,
-	build:   newClaudeBackend,
+func newClaudeCLI(dir string) (auth.VendorCLI, error) {
+	return auth.NewVendorCLI("claude", "CLAUDE_CONFIG_DIR", dir)
 }
+
+var claudeCodeOAuth = auth.NewCLISessionStore(auth.CLISessionConfig[*loomclaudecode.Provider]{
+	Provider: ClaudeCodeName,
+	Label:    "Continue with Claude",
+	NewCLI:   newClaudeCLI,
+	Login:    claudeLogin,
+	Account:  claudeAccount,
+	Logout:   claudeLogout,
+	Build:    newClaudeBackend,
+})
 
 func init() {
 	auth.RegisterBrowserOAuthDriver(ClaudeCodeName, claudeCodeOAuth)
 }
 
 func NewClaudeCode(name string, credentials *auth.Config, hasOverrides bool) (*loomclaudecode.Provider, error) {
-	return claudeCodeOAuth.open(name, credentials, hasOverrides)
+	if err := requireBrowserOAuth(ClaudeCodeName, name, credentials, hasOverrides); err != nil {
+		return nil, err
+	}
+	return claudeCodeOAuth.SharedRuntime()
 }
 
-func claudeRuntime(cli vendorCLI) loomclaudecode.SpawnedStdio {
+func claudeRuntime(cli auth.VendorCLI) loomclaudecode.SpawnedStdio {
 	return loomclaudecode.SpawnedStdio{
-		Path:             cli.executable,
+		Path:             cli.Executable,
 		Args:             []string{"--setting-sources", "", "--strict-mcp-config", "--no-chrome"},
-		Env:              cli.env,
-		WorkingDirectory: cli.workDir,
-		ConfigDir:        cli.profileDir,
+		Env:              cli.Env,
+		WorkingDirectory: cli.WorkDir,
+		ConfigDir:        cli.ProfileDir,
 	}
 }
 
-func newClaudeBackend(cli vendorCLI) (*loomclaudecode.Provider, error) {
+func newClaudeBackend(cli auth.VendorCLI) (*loomclaudecode.Provider, error) {
 	return loomclaudecode.NewProvider(&loomclaudecode.Config{
 		Runtime: claudeRuntime(cli),
 		Session: loomclaudecode.SessionOptions{PermissionMode: "default"},
@@ -62,14 +67,14 @@ func (s claudeAuthStatus) subscription() bool {
 	return s.LoggedIn != nil && *s.LoggedIn && s.AuthMethod == "claude.ai" && s.APIProvider == "firstParty"
 }
 
-func claudeLogin(ctx context.Context, cli vendorCLI) error {
-	if err := cli.command(ctx, "auth", "login", "--claudeai").Run(); err != nil {
-		return vendorAuthError(ctx, "Claude Code", "login")
+func claudeLogin(ctx context.Context, cli auth.VendorCLI) error {
+	if err := cli.Command(ctx, "auth", "login", "--claudeai").Run(); err != nil {
+		return auth.VendorAuthError(ctx, "Claude Code", "login")
 	}
 	return nil
 }
 
-func claudeAccount(ctx context.Context, cli vendorCLI) (string, bool, error) {
+func claudeAccount(ctx context.Context, cli auth.VendorCLI) (string, bool, error) {
 	status, err := readClaudeAuthStatus(ctx, cli)
 	if err != nil || !status.subscription() {
 		return "", false, err
@@ -82,23 +87,23 @@ func claudeAccount(ctx context.Context, cli vendorCLI) (string, bool, error) {
 	return status.Email, true, nil
 }
 
-func claudeLogout(ctx context.Context, cli vendorCLI) (bool, error) {
+func claudeLogout(ctx context.Context, cli auth.VendorCLI) (bool, error) {
 	status, err := readClaudeAuthStatus(ctx, cli)
 	if err != nil || !status.subscription() {
 		return false, err
 	}
-	if err := cli.command(ctx, "auth", "logout").Run(); err != nil {
-		return false, vendorAuthError(ctx, "Claude Code", "logout")
+	if err := cli.Command(ctx, "auth", "logout").Run(); err != nil {
+		return false, auth.VendorAuthError(ctx, "Claude Code", "logout")
 	}
 	return true, nil
 }
 
-func readClaudeAuthStatus(ctx context.Context, cli vendorCLI) (claudeAuthStatus, error) {
-	output, err := cli.command(ctx, "auth", "status", "--json").Output()
+func readClaudeAuthStatus(ctx context.Context, cli auth.VendorCLI) (claudeAuthStatus, error) {
+	output, err := cli.Command(ctx, "auth", "status", "--json").Output()
 	if err != nil {
 		var exit *exec.ExitError
 		if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			return claudeAuthStatus{}, vendorAuthError(ctx, "Claude Code", "auth status")
+			return claudeAuthStatus{}, auth.VendorAuthError(ctx, "Claude Code", "auth status")
 		}
 	}
 	return parseClaudeAuthStatus(output, err != nil)

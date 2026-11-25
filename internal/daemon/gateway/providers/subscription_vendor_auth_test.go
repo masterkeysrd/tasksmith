@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	copilot "github.com/microsoft/copilot-sdk/go/v2"
 	"github.com/microsoft/copilot-sdk/go/v2/rpc"
 )
@@ -82,7 +83,7 @@ func TestVendorAuthLoginCommands(t *testing.T) {
 		name    string
 		profile string
 		args    string
-		login   func(context.Context, vendorCLI) error
+		login   func(context.Context, auth.VendorCLI) error
 	}{
 		{"Claude", "CLAUDE_CONFIG_DIR", "auth login --claudeai", claudeLogin},
 		{"Copilot", "COPILOT_HOME", "--no-auto-update login --web-flow", copilotLogin},
@@ -118,7 +119,7 @@ exit 1
 	if err := copilotLoginCompatible(t.Context(), cli); err == nil || strings.Contains(err.Error(), "fixture-secret") {
 		t.Fatalf("expected a redacted preflight error, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(cli.workDir, "login-attempted")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(cli.WorkDir, "login-attempted")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("browser login was not gated by the preflight: %v", err)
 	}
 }
@@ -158,7 +159,7 @@ func TestCopilotAccountIdentity(t *testing.T) {
 	}
 }
 
-func fakeVendorAuthCLI(t *testing.T, configKey, script string) vendorCLI {
+func fakeVendorAuthCLI(t *testing.T, configKey, script string) auth.VendorCLI {
 	t.Helper()
 	root := t.TempDir()
 	workDir, profileDir := filepath.Join(root, "work"), filepath.Join(root, "profile")
@@ -172,10 +173,10 @@ func fakeVendorAuthCLI(t *testing.T, configKey, script string) vendorCLI {
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"+checks+script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return vendorCLI{
-		executable: executable,
-		profileDir: profileDir,
-		workDir:    workDir,
-		env:        []string{configKey + "=" + profileDir, "AUTH_TEST_PROFILE=" + profileDir, "AUTH_TEST_WORK=" + workDir},
+	return auth.VendorCLI{
+		Executable: executable,
+		ProfileDir: profileDir,
+		WorkDir:    workDir,
+		Env:        []string{configKey + "=" + profileDir, "AUTH_TEST_PROFILE=" + profileDir, "AUTH_TEST_WORK=" + workDir},
 	}
 }

@@ -49,11 +49,7 @@ func (c *Config) Fingerprint() string {
 		collectSourceFingerprint(p.Name, p.Auth.Token, c.Env, relevantEnv, relevantFiles)
 		collectSourceFingerprint(p.Name+":password", p.Auth.Password, c.Env, relevantEnv, relevantFiles)
 		if p.Auth.Scheme() == auth.TypeOAuth2 {
-			if driver, ok := auth.GetBrowserOAuthDriver(p.Type); ok {
-				relevantOAuth[p.Name] = driver.CredentialRevision()
-			} else {
-				relevantOAuth[p.Name] = auth.OAuthCredentialDigest(p.Name)
-			}
+			relevantOAuth[p.Name] = auth.CredentialRevision(p.Type, p.Name)
 		}
 	}
 
@@ -90,7 +86,11 @@ func (c *Config) Fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Validate checks the configuration for structural integrity (provider names, types, uniqueness).
+// Validate checks the configuration for gateway-level structural integrity
+// (non-nil config, non-empty and unique provider names). Per-provider settings
+// such as provider type and auth scheme are validated and isolated per provider
+// during initialization so one misconfigured manifest cannot disable healthy
+// providers in the same workspace.
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("%w: config cannot be nil", ErrInvalidConfig)
@@ -106,20 +106,6 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%w: duplicate provider name %q", ErrInvalidConfig, name)
 		}
 		providerNames[name] = struct{}{}
-
-		pType := strings.TrimSpace(p.Type)
-		if pType == "" {
-			return fmt.Errorf("%w: provider %q is missing a type", ErrInvalidConfig, name)
-		}
-
-		if p.Auth != nil {
-			switch p.Auth.Scheme() {
-			case auth.TypeBearer, auth.TypeAPIKey, auth.TypeBasic, auth.TypeNone, auth.TypeOAuth2:
-			default:
-				return fmt.Errorf("%w: provider %q has unknown auth type %q (expected bearer, api-key, basic, none, or oauth2)",
-					ErrInvalidConfig, name, p.Auth.Type)
-			}
-		}
 	}
 
 	return nil

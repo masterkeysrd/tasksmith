@@ -710,13 +710,20 @@ func TestOpenAIConfig_InvalidAPIMode(t *testing.T) {
 		},
 	}
 
-	_, err := New(ctx, cfg)
-	if err == nil {
-		t.Fatal("expected error for invalid apiMode, got nil")
+	gw, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatalf("expected New to isolate invalid apiMode instead of failing, got: %v", err)
 	}
+	t.Cleanup(func() { _ = gw.Close() })
+
 	expectedSubstring := `invalid openai apiMode "unsupported_mode"`
-	if !strings.Contains(err.Error(), expectedSubstring) {
-		t.Errorf("expected error containing %q, got: %v", expectedSubstring, err)
+	provs := gw.ListProviders()
+	if len(provs) != 1 || !provs[0].InvalidConfig || !strings.Contains(provs[0].Warning, expectedSubstring) {
+		t.Fatalf("expected InvalidConfig warning containing %q, got: %+v", expectedSubstring, provs)
+	}
+	_, err = gw.LLM(ctx, models.Model{ID: "openai-invalid/gpt-4o", ProviderType: "openai"}, llm.ModelConfig{})
+	if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), expectedSubstring) {
+		t.Errorf("expected ErrInvalidConfig containing %q, got: %v", expectedSubstring, err)
 	}
 }
 
@@ -1235,7 +1242,7 @@ func TestProviderGracefulDegradation(t *testing.T) {
 		}
 	})
 
-	t.Run("single provider invalid config fails fast", func(t *testing.T) {
+	t.Run("single provider invalid config isolates fault", func(t *testing.T) {
 		singleCfg := Config{
 			Providers: []ProviderConfig{
 				{
@@ -1245,9 +1252,86 @@ func TestProviderGracefulDegradation(t *testing.T) {
 				},
 			},
 		}
-		_, err := New(ctx, singleCfg)
-		if err == nil {
-			t.Fatal("expected single provider with broken endpoint to fail fast, got nil")
+		singleGW, err := New(ctx, singleCfg)
+		if err != nil {
+			t.Fatalf("expected single provider with broken endpoint to isolate fault, got: %v", err)
+		}
+		t.Cleanup(func() { _ = singleGW.Close() })
+
+		provs := singleGW.ListProviders()
+		if len(provs) != 1 || !provs[0].InvalidConfig || !strings.Contains(provs[0].Warning, "invalid ollama endpoint") {
+			t.Fatalf("expected InvalidConfig warning on broken-ollama, got: %+v", provs)
+		}
+		if _, err := singleGW.LLM(ctx, models.Model{ID: "broken-ollama/llama3.2", ProviderType: "ollama"}, llm.ModelConfig{}); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("expected ErrInvalidConfig targeting broken-ollama, got: %v", err)
 		}
 	})
+}
+
+func TestInvalidProviderFaultIsolation(t *testing.T) {
+	ctx := context.Background()
+	cfg := Config{
+		Providers: []ProviderConfig{
+			{
+				Name: "broken-auth",
+				Type: "anthropic",
+				Auth: &auth.Config{Type: auth.Type("env")},
+			},
+			{
+				Name: "unknown-kind",
+				Type: "nonexistent-provider-type",
+			},
+			{
+				Name: "missing-kind",
+			},
+			{
+				Name: "healthy",
+				Type: "openai",
+				Auth: &auth.Config{Type: auth.TypeBearer, Token: &auth.CredentialSource{Env: "HEALTHY_OPENAI_KEY"}},
+			},
+		},
+		Env: map[string]string{
+			"HEALTHY_OPENAI_KEY": "sk-healthy",
+		},
+	}
+
+	pool := NewPool()
+	t.Cleanup(func() { _ = pool.Close() })
+
+	gw, err := pool.Acquire(ctx, cfg)
+	if err != nil {
+		t.Fatalf("pool.Acquire should succeed when one provider is invalid, got: %v", err)
+	}
+
+	byName := make(map[string]ProviderInfo)
+	for _, info := range gw.ListProviders() {
+		byName[info.Name] = info
+	}
+	for _, bad := range []string{"broken-auth", "unknown-kind", "missing-kind"} {
+		info := byName[bad]
+		if !info.InvalidConfig || info.Warning == "" {
+			t.Errorf("provider %q: expected InvalidConfig=true with warning, got %+v", bad, info)
+		}
+		modelsList, available, err := gw.ListModels(ctx, bad)
+		if err != nil || available || len(modelsList) != 0 {
+			t.Errorf("ListModels(%q) = (%v, %t, %v), want (nil, false, nil)", bad, modelsList, available, err)
+		}
+		target := models.Model{ID: models.Normalize(bad, "m"), ProviderType: info.Type}
+		if _, err := gw.LLM(ctx, target, llm.ModelConfig{}); !errors.Is(err, ErrInvalidConfig) {
+			t.Errorf("LLM(%q) error = %v, want ErrInvalidConfig", bad, err)
+		}
+		if _, err := gw.Decision(ctx, target, llm.ModelConfig{}); !errors.Is(err, ErrInvalidConfig) {
+			t.Errorf("Decision(%q) error = %v, want ErrInvalidConfig", bad, err)
+		}
+		if _, err := gw.Embedding(ctx, target); !errors.Is(err, ErrInvalidConfig) {
+			t.Errorf("Embedding(%q) error = %v, want ErrInvalidConfig", bad, err)
+		}
+	}
+
+	if info := byName["healthy"]; info.InvalidConfig || info.Warning != "" {
+		t.Errorf("healthy provider should have no warning or InvalidConfig, got %+v", info)
+	}
+	if _, err := gw.LLM(ctx, models.Model{ID: "healthy/gpt-4o", ProviderType: "openai"}, llm.ModelConfig{}); err != nil {
+		t.Fatalf("LLM targeting healthy provider failed: %v", err)
+	}
 }

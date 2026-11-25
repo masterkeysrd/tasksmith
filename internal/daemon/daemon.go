@@ -121,10 +121,8 @@ type Daemon struct {
 	closeErr     error
 	serveErrCh   chan error
 
-	providerInstallMu  sync.Mutex
-	providerAuthMu     sync.Mutex
-	providerAuths      map[string]*providerAuthFlow
-	browserAuthWriteMu map[string]*sync.Mutex
+	providerInstallMu sync.Mutex
+	auth              *auth.Manager
 }
 
 var _ server.Backend = (*Daemon)(nil)
@@ -170,21 +168,22 @@ func New(cfg Config) (*Daemon, error) {
 	})
 
 	d := &Daemon{
-		db:                 db,
-		metricsStore:       store,
-		usage:              usage,
-		cfg:                cfg,
-		logger:             daemonLogger,
-		startedAt:          time.Now().UTC(),
-		broker:             b,
-		srv:                server.NewServer(serverLogger),
-		workspaces:         make(map[string]*workspaceRuntime),
-		dirToRoot:          make(map[string]string),
-		providerAuths:      make(map[string]*providerAuthFlow),
-		browserAuthWriteMu: make(map[string]*sync.Mutex),
-		shutdownCh:         make(chan struct{}),
-		serveErrCh:         make(chan error, 1),
+		db:           db,
+		metricsStore: store,
+		usage:        usage,
+		cfg:          cfg,
+		logger:       daemonLogger,
+		startedAt:    time.Now().UTC(),
+		broker:       b,
+		srv:          server.NewServer(serverLogger),
+		workspaces:   make(map[string]*workspaceRuntime),
+		dirToRoot:    make(map[string]string),
+		shutdownCh:   make(chan struct{}),
+		serveErrCh:   make(chan error, 1),
 	}
+	d.auth = auth.NewManager(auth.ManagerConfig{
+		OnAuthenticated: d.reloadAllWorkspaces,
+	})
 
 	mux := d.srv.CreateMux(
 		context.Background(),
@@ -369,7 +368,7 @@ func (d *Daemon) Close(ctx context.Context) error {
 		if err := d.cfg.GatewayPool.Close(); err != nil {
 			errs = append(errs, err)
 		}
-		if err := auth.CloseBrowserOAuthDrivers(); err != nil {
+		if err := d.auth.Close(); err != nil {
 			errs = append(errs, err)
 		}
 

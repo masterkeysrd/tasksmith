@@ -49,7 +49,7 @@ func providerStatusIcon(status string) string {
 		return "✔"
 	case "local":
 		return "●"
-	case "missing_auth":
+	case "missing_auth", "invalid_config":
 		return "⚠"
 	default:
 		return "○"
@@ -62,7 +62,7 @@ func providerStatusIconStyle(scheme *theme.Scheme, status string) style.Style {
 		return style.S().Foreground(scheme.Color.Text.Success)
 	case "local":
 		return style.S().Foreground(scheme.Color.Text.Info)
-	case "missing_auth":
+	case "missing_auth", "invalid_config":
 		return style.S().Foreground(scheme.Color.Text.Warning)
 	default:
 		return style.S().Foreground(scheme.Color.Text.Muted)
@@ -79,6 +79,8 @@ func providerStatusLabel(status string) string {
 		return "Disabled"
 	case "missing_auth":
 		return "Needs sign-in"
+	case "invalid_config":
+		return "Invalid config"
 	default:
 		return status
 	}

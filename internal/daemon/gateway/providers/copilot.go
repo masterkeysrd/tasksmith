@@ -16,44 +16,49 @@ import (
 
 const GitHubCopilotName = "github-copilot"
 
-var copilotOAuth = &subscriptionDriver[*loomcopilot.Provider]{
-	name:  GitHubCopilotName,
-	label: "Continue with GitHub",
-	newCLI: func(dir string) (vendorCLI, error) {
-		return newVendorCLI("copilot", "COPILOT_HOME", dir, "COPILOT_DISABLE_KEYTAR=1", "COPILOT_PLUGIN_DIR_ONLY=true", "USE_TGREP=false")
-	},
-	login:   copilotLoginCompatible,
-	account: copilotAccount,
-	logout:  copilotLogout,
-	build:   newCopilotBackend,
+func newCopilotCLI(dir string) (auth.VendorCLI, error) {
+	return auth.NewVendorCLI("copilot", "COPILOT_HOME", dir, "COPILOT_DISABLE_KEYTAR=1", "COPILOT_PLUGIN_DIR_ONLY=true", "USE_TGREP=false")
 }
+
+var copilotOAuth = auth.NewCLISessionStore(auth.CLISessionConfig[*loomcopilot.Provider]{
+	Provider: GitHubCopilotName,
+	Label:    "Continue with GitHub",
+	NewCLI:   newCopilotCLI,
+	Login:    copilotLoginCompatible,
+	Account:  copilotAccount,
+	Logout:   copilotLogout,
+	Build:    newCopilotBackend,
+})
 
 func init() {
 	auth.RegisterBrowserOAuthDriver(GitHubCopilotName, copilotOAuth)
 }
 
 func NewCopilot(name string, credentials *auth.Config, hasOverrides bool) (*loomcopilot.Provider, error) {
-	return copilotOAuth.open(name, credentials, hasOverrides)
+	if err := requireBrowserOAuth(GitHubCopilotName, name, credentials, hasOverrides); err != nil {
+		return nil, err
+	}
+	return copilotOAuth.SharedRuntime()
 }
 
-func copilotRuntime(cli vendorCLI) copilot.SpawnedStdioConnection {
+func copilotRuntime(cli auth.VendorCLI) copilot.SpawnedStdioConnection {
 	return copilot.SpawnedStdioConnection{
-		Path:             cli.executable,
+		Path:             cli.Executable,
 		Args:             []string{"--disable-builtin-mcps", "--no-custom-instructions", "--no-bash-env", "--sync-session=off"},
-		Env:              cli.env,
-		BaseDirectory:    cli.profileDir,
-		WorkingDirectory: cli.workDir,
+		Env:              cli.Env,
+		BaseDirectory:    cli.ProfileDir,
+		WorkingDirectory: cli.WorkDir,
 	}
 }
 
-func newCopilotBackend(cli vendorCLI) (*loomcopilot.Provider, error) {
+func newCopilotBackend(cli auth.VendorCLI) (*loomcopilot.Provider, error) {
 	return loomcopilot.NewProvider(&loomcopilot.Config{
-		Connection: copilotRuntime(cli), WorkingDir: cli.workDir,
+		Connection: copilotRuntime(cli), WorkingDir: cli.WorkDir,
 		ClientMode: copilot.ModeEmpty, ClientName: "TaskSmith", LogLevel: "error",
 	})
 }
 
-func copilotLoginCompatible(ctx context.Context, cli vendorCLI) error {
+func copilotLoginCompatible(ctx context.Context, cli auth.VendorCLI) error {
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	client, err := startCopilotAuthClient(probeCtx, cli)
 	cancel()
@@ -64,14 +69,14 @@ func copilotLoginCompatible(ctx context.Context, cli vendorCLI) error {
 	return copilotLogin(ctx, cli)
 }
 
-func copilotLogin(ctx context.Context, cli vendorCLI) error {
-	if err := cli.command(ctx, "--no-auto-update", "login", "--web-flow").Run(); err != nil {
-		return vendorAuthError(ctx, "GitHub Copilot", "login")
+func copilotLogin(ctx context.Context, cli auth.VendorCLI) error {
+	if err := cli.Command(ctx, "--no-auto-update", "login", "--web-flow").Run(); err != nil {
+		return auth.VendorAuthError(ctx, "GitHub Copilot", "login")
 	}
 	return nil
 }
 
-func copilotAccount(ctx context.Context, cli vendorCLI) (string, bool, error) {
+func copilotAccount(ctx context.Context, cli auth.VendorCLI) (string, bool, error) {
 	client, err := startCopilotAuthClient(ctx, cli)
 	if err != nil {
 		return "", false, err
@@ -81,7 +86,7 @@ func copilotAccount(ctx context.Context, cli vendorCLI) (string, bool, error) {
 	return account, account != "", err
 }
 
-func copilotLogout(ctx context.Context, cli vendorCLI) (bool, error) {
+func copilotLogout(ctx context.Context, cli auth.VendorCLI) (bool, error) {
 	client, err := startCopilotAuthClient(ctx, cli)
 	if err != nil {
 		return false, err
@@ -92,12 +97,12 @@ func copilotLogout(ctx context.Context, cli vendorCLI) (bool, error) {
 		return false, err
 	}
 	if _, err := client.RPC.Account.Logout(ctx, &rpc.AccountLogoutRequest{AuthInfo: identity}); err != nil {
-		return false, vendorAuthError(ctx, "GitHub Copilot", "logout")
+		return false, auth.VendorAuthError(ctx, "GitHub Copilot", "logout")
 	}
 	return true, nil
 }
 
-func startCopilotAuthClient(ctx context.Context, cli vendorCLI) (*copilot.Client, error) {
+func startCopilotAuthClient(ctx context.Context, cli auth.VendorCLI) (*copilot.Client, error) {
 	client := copilot.NewClient(&copilot.ClientOptions{
 		Runtime:       copilotRuntime(cli),
 		Observability: copilot.ClientObservabilityOptions{LogLevel: "none"},
@@ -118,7 +123,7 @@ var copilotLoginPattern = regexp.MustCompile(`^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?:
 func readCopilotAccount(ctx context.Context, client *copilot.Client) (string, rpc.AuthInfo, error) {
 	status, err := client.GetAuthStatus(ctx)
 	if err != nil {
-		return "", nil, vendorAuthError(ctx, "GitHub Copilot", "auth status")
+		return "", nil, auth.VendorAuthError(ctx, "GitHub Copilot", "auth status")
 	}
 	return parseCopilotAccount(*status)
 }

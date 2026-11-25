@@ -90,9 +90,8 @@ func (d *codexDriver) hostID() (string, error) {
 
 // NewCodex builds a Loom client using the active ChatGPT registration.
 func NewCodex(name string, credentials *auth.Config, hasOverrides bool) (*loomcodex.Provider, error) {
-	hasAuthOverride := credentials != nil && (credentials.Token != nil || credentials.Header != "")
-	if name != CodexName || credentials.Scheme() != auth.TypeOAuth2 || hasOverrides || hasAuthOverride {
-		return nil, fmt.Errorf("%w: Codex requires the provider name %q and browser OAuth without endpoint, header, or config overrides", ErrInvalidConfig, CodexName)
+	if err := requireBrowserOAuth(CodexName, name, credentials, hasOverrides); err != nil {
+		return nil, err
 	}
 	source, err := codexOAuth.TokenSource()
 	if err != nil {

@@ -36,10 +36,11 @@ type ProviderConfig struct {
 
 // ProviderInfo provides read-only summary information about an initialized provider.
 type ProviderInfo struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Endpoint string `json:"endpoint,omitempty"`
-	Warning  string `json:"warning,omitempty"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Endpoint      string `json:"endpoint,omitempty"`
+	Warning       string `json:"warning,omitempty"`
+	InvalidConfig bool   `json:"invalid_config,omitempty"`
 }
 
 // Gateway provides access to initialized AI models across providers.
