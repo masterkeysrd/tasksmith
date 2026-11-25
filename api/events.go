@@ -17,6 +17,13 @@ const ErrCodeNeedSync = "need_sync"
 // distinguish a mistyped workflow from other rejected requests.
 const ErrCodeUnknownCommand = "unknown_command"
 
+// Structured auth error codes carried on [ErrorEvent.Code] when a provider
+// rejects credentials at runtime.
+const (
+	ErrCodeProviderAuthExpired = "provider_auth_expired"
+	ErrCodeProviderAuthInvalid = "provider_auth_invalid"
+)
+
 // TopicSessions is the broker topic for session lifecycle and metadata events.
 const TopicSessions = "sessions"
 
@@ -184,6 +191,8 @@ func (QueueUpdatedEvent) EventType() string { return string(EventQueueUpdated) }
 type ErrorEvent struct {
 	SessionID string `json:"session_id"`
 	Error     string `json:"error"`
+	Code      string `json:"code,omitempty"`
+	Provider  string `json:"provider,omitempty"`
 }
 
 func (ErrorEvent) EventType() string { return string(EventError) }

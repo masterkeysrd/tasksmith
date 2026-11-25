@@ -1434,3 +1434,66 @@ func TestPlanReviewTypesAndEventRoundTrip(t *testing.T) {
 		PendingPlanReviews: []PlanReviewRequest{req},
 	})
 }
+
+func TestErrorEventAuthFieldsJSONRoundTrip(t *testing.T) {
+	cases := []struct {
+		name     string
+		payload  ErrorEvent
+		wantOmit bool
+	}{
+		{
+			name: "plain_error_omits_code_and_provider",
+			payload: ErrorEvent{
+				SessionID: "s1",
+				Error:     "network timeout",
+			},
+			wantOmit: true,
+		},
+		{
+			name: "expired_oauth",
+			payload: ErrorEvent{
+				SessionID: "s1",
+				Error:     "Authentication for provider \"codex\" has expired.",
+				Code:      ErrCodeProviderAuthExpired,
+				Provider:  "codex",
+			},
+		},
+		{
+			name: "invalid_api_key",
+			payload: ErrorEvent{
+				SessionID: "s1",
+				Error:     "Authentication failed for provider \"openai\" (401 Unauthorized).",
+				Code:      ErrCodeProviderAuthInvalid,
+				Provider:  "openai",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := Event{
+				Type:    EventError,
+				Topic:   SessionStreamTopic(tc.payload.SessionID),
+				Payload: tc.payload,
+			}
+			raw, err := json.Marshal(ev)
+			if err != nil {
+				t.Fatalf("Marshal ErrorEvent: %v", err)
+			}
+			if tc.wantOmit && (strings.Contains(string(raw), `"code"`) || strings.Contains(string(raw), `"provider"`)) {
+				t.Fatalf("expected code/provider omitted when empty, got %s", raw)
+			}
+			var decoded Event
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatalf("Unmarshal ErrorEvent: %v", err)
+			}
+			got, ok := decoded.Payload.(ErrorEvent)
+			if !ok {
+				t.Fatalf("decoded payload = %T, want ErrorEvent", decoded.Payload)
+			}
+			if got != tc.payload {
+				t.Fatalf("decoded ErrorEvent = %+v, want %+v", got, tc.payload)
+			}
+		})
+	}
+}

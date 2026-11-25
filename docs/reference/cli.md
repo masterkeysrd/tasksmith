@@ -369,16 +369,19 @@ Allowed prompts and resources run immediately. A prohibited one opens `Prohibite
 | `↑` / `↓` | Providers Browser | Moves the highlighted provider. |
 | `Enter` / `m` | Providers Browser | Opens the [model manager](#provider-model-manager) for the highlighted provider. |
 | `Space` / `e` | Providers Browser | Toggles `spec.enabled`: patches the owning manifest, or writes a Workspace-tier mute shadow (enable flag only) when disabling an inherited User provider. Re-enabling removes a mute shadow when the inherited manifest is already enabled, clears the flag in place when a hand-authored full workspace override shares the name, and promotes a disabled inherited manifest into a full workspace copy otherwise. |
+| `l` | Providers Browser | Opens the sign-in screen for an OAuth provider and refreshes its row status upon completion. |
 | `a` / `n` | Providers Browser | Opens the [add-provider flow](#adding-a-provider). With no providers configured, the empty screen accepts `a` / `n` the same way. |
 | `Esc` | Providers Browser | Closes the browser and leaves `Exited /providers command` in the transcript. |
 
-The detail line below the list shows the highlighted provider’s adapter type and configured endpoint.
+The detail line below the list shows the highlighted provider’s adapter type, signed-in account email (when present), and configured endpoint.
 
 | Status | Icon | Meaning |
 | :--- | :--- | :--- |
 | `Ready` | `✔` green | The provider is enabled and its credential requirements are satisfied. |
 | `Local` | `●` cyan | The provider uses a local endpoint or the Ollama adapter. |
 | `Needs sign-in` | `⚠` yellow | The configured credential or OAuth token is unavailable. |
+| `Session expired` | `⚠` yellow | The stored OAuth session expired or was rejected; press `l` or run `/login <provider>` to sign in again. |
+| `Invalid key` | `⚠` yellow | The configured API credential was rejected with `401 Unauthorized`; update the credential and reload. |
 | `Invalid config` | `⚠` yellow | The provider manifest has an invalid configuration (see `/warnings` for details). |
 | `Disabled` | `○` muted | The manifest sets `spec.enabled: false`. A workspace shadow over an enabled inherited manifest shows `Disabled (shadow)`. |
 
@@ -453,7 +456,7 @@ Saving sends the exact set the model should own: each reassigned alias is stripp
 | `Enter` | Antigravity Sign-In | Submits whatever the paste field holds (full address-bar URL, bare query string, or authorization code alone) to the waiting flow. |
 | `Esc` | Provider Sign-In | Dismisses the screen while the daemon's flow continues. |
 
-With no `[provider]` argument, the command resolves automatically when exactly one OAuth preset is available. To select one explicitly, use `/login antigravity`, `/login codex`, `/login claudecode`, or `/login github-copilot`. When the flow settles, the screen closes and posts the outcome to the conversation timeline. See [Subcommands](#subcommands) for signing in, checking status, or signing out from a shell.
+With no `[provider]` argument, the command resolves automatically when exactly one OAuth preset is available. To select one explicitly, use `/login antigravity`, `/login codex`, `/login claudecode`, or `/login github-copilot`. When the flow settles, the screen closes and posts the outcome to the conversation timeline. When an interactive REPL turn fails because an OAuth session expired, TaskSmith also offers an inline prompt to re-authenticate immediately. See [Subcommands](#subcommands) for signing in, checking status, or signing out from a shell.
 
 ---
 
@@ -540,6 +543,7 @@ While browsing history, the composer's bottom border is replaced by a centered r
 | :--- | :--- | :--- |
 | `Enter` / `m` | Providers Browser | Opens the model manager for the highlighted provider. |
 | `Space` / `e` | Providers Browser | Toggles `spec.enabled` on the highlighted provider's manifest. |
+| `l` | Providers Browser | Opens the OAuth sign-in screen for the highlighted provider. |
 | `a` / `n` | Providers Browser | Starts adding a provider from a preset or a custom manifest. |
 | `F2` | Model Manager / Model Picker | Opens the shared model alias editor (see [Model Alias Editor](#model-alias-editor-f2)). |
 | `Esc` | Providers Browser | Closes the browser and returns to the composer. |
@@ -860,7 +864,7 @@ These existing endpoints drive provider sign-in behind `tasksmith auth` and `/lo
 | :--- | :--- | :--- |
 | `GET` | `/v1/providers` | Lists provider presets as `ProviderSummary` with `name`, `display_name`, `status`, `has_key`, `auth_type`, `auth_env`, `account`, `default_model`, `models`, and `scope`. The optional `browser_auth_label` is the sign-in label for providers that open the browser on the daemon host. |
 | `POST` | `/v1/providers/{name}/auth` | Starts an OAuth flow and returns `ProviderAuthResponse`. The optional `auth_url` is omitted for browser-owned flows on the daemon host. |
-| `GET` | `/v1/providers/{name}/auth` | Returns the current `ProviderAuthResponse` for one provider; `status` is `idle`, `authorizing`, `authenticated`, `error`, or `signed-out`. |
+| `GET` | `/v1/providers/{name}/auth` | Returns the current `ProviderAuthResponse` for one provider; `status` is `idle`, `authorizing`, `authenticated`, `expired_auth`, `error`, or `signed-out`. |
 | `POST` | `/v1/providers/{name}/auth/callback` | Completes a flow that accepts pasted redirects. The body field `callbackUrl` accepts the full URL, a bare query string, or an authorization code. Returns the settled `ProviderAuthResponse`. Returns `400` `bad_request` when the paste is malformed, the flow is absent, or the provider requires a browser callback. |
 | `DELETE` | `/v1/providers/{name}/auth` | Removes stored OAuth credentials for one provider and cancels any in-flight flow. Returns `ProviderAuthResponse` with `status` `signed-out` when credentials were removed or `idle` when the provider was not signed in. |
 

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -200,6 +201,7 @@ type conversationHooks struct {
 	onTimelineMetadata func(entry api.TimelineEntry)
 	onTaskUpdated      func(task api.Task)
 	onError            func(title, detail string)
+	onRefreshWarnings  func()
 }
 
 // conversationAccumulator folds TimelineEntries and SSE events into view messages,
@@ -336,8 +338,9 @@ func newConversationAccumulator() *conversationAccumulator {
 				}
 			}
 		},
-		onTaskUpdated: UpsertTask,
-		onError:       AppendError,
+		onTaskUpdated:     UpsertTask,
+		onError:           AppendError,
+		onRefreshWarnings: RefreshWorkspaceWarnings,
 	}
 	return acc
 }
@@ -1012,6 +1015,23 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		acc.publishLocked()
 		if acc.hooks.onError != nil {
 			acc.hooks.onError("Error", p.Error)
+		}
+		if p.Code == api.ErrCodeProviderAuthExpired || p.Code == api.ErrCodeProviderAuthInvalid {
+			if acc.hooks.onRefreshWarnings != nil {
+				acc.hooks.onRefreshWarnings()
+			}
+		}
+		if p.Code == api.ErrCodeProviderAuthExpired {
+			if prov := strings.TrimSpace(p.Provider); prov != "" {
+				acc.enqueueSlot(SlotItem{
+					ID:   "reauth-" + prov,
+					Kind: SlotKindProviderReauth,
+					Data: ProviderReauthRequest{
+						Provider: prov,
+						Message:  p.Error,
+					},
+				})
+			}
 		}
 	}
 }

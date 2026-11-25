@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +14,36 @@ import (
 
 	loomauth "github.com/masterkeysrd/loom/auth"
 )
+
+// HealthState classifies the runtime authentication health of a provider.
+type HealthState string
+
+const (
+	HealthOK      HealthState = ""
+	HealthExpired HealthState = "expired_auth"
+	HealthInvalid HealthState = "invalid_auth"
+)
+
+// HealthStatus records the most recent observed runtime auth failure for a
+// provider along with the credential revision that failed.
+type HealthStatus struct {
+	State     HealthState
+	Reason    string
+	Revision  string
+	UpdatedAt time.Time
+}
+
+// SecretRevision returns a SHA-256 hex digest of secret (trimmed) so runtime
+// auth health entries can detect credential rotation without storing raw
+// secrets in memory. Returns "" when secret is empty.
+func SecretRevision(secret string) string {
+	trimmed := strings.TrimSpace(secret)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:])
+}
 
 // Sentinel errors returned by Manager and callback parsing so transport layers
 // can map them onto HTTP status codes without parsing error text.
@@ -61,6 +93,7 @@ type Manager struct {
 	mu                 sync.Mutex
 	flows              map[string]*authFlow
 	browserAuthWriteMu map[string]*sync.Mutex
+	health             map[string]HealthStatus
 }
 
 // NewManager constructs a provider authentication Manager.
@@ -79,6 +112,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		browserDrivers:     browserDrivers,
 		flows:              make(map[string]*authFlow),
 		browserAuthWriteMu: make(map[string]*sync.Mutex),
+		health:             make(map[string]HealthStatus),
 	}
 }
 
@@ -258,6 +292,7 @@ func (m *Manager) finishPKCEFlow(ctx context.Context, flow *authFlow, driver OAu
 		return
 	}
 
+	m.ClearHealth(flow.provider)
 	m.notifyAuthenticated(ctx)
 	flow.settle("authenticated", account, "")
 }
@@ -279,6 +314,7 @@ func (m *Manager) beginBrowserFlow(provider string, authorize func(context.Conte
 			m.failFlow(flow, err)
 			return
 		}
+		m.ClearHealth(provider)
 		m.notifyAuthenticated(ctx)
 
 		m.mu.Lock()
@@ -376,9 +412,32 @@ func (m *Manager) Status(provider string) (*FlowSnapshot, error) {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedProvider, provider)
 	}
 	if snap, ok := m.FlowStatus(prov); ok {
+		if snap.Status == "authorizing" || snap.Status == "error" {
+			return snap, nil
+		}
+		if h, expired := m.OAuthHealth(prov, prov); expired && h.State == HealthExpired {
+			account := snap.Account
+			if account == "" {
+				account, _ = m.Account(prov, prov)
+			}
+			return &FlowSnapshot{
+				Provider: prov,
+				Status:   string(HealthExpired),
+				Account:  account,
+				Error:    h.Reason,
+			}, nil
+		}
 		return snap, nil
 	}
 	if email, ok := m.Account(prov, prov); ok {
+		if h, expired := m.OAuthHealth(prov, prov); expired && h.State == HealthExpired {
+			return &FlowSnapshot{
+				Provider: prov,
+				Status:   string(HealthExpired),
+				Account:  email,
+				Error:    h.Reason,
+			}, nil
+		}
 		return &FlowSnapshot{
 			Provider: prov,
 			Status:   "authenticated",
@@ -389,6 +448,125 @@ func (m *Manager) Status(provider string) (*FlowSnapshot, error) {
 		Provider: prov,
 		Status:   "idle",
 	}, nil
+}
+
+// RecordFailure records a runtime authentication failure for providerName.
+// When state is [HealthExpired], any settled non-authorizing flow snapshot is
+// cleared so [Manager.Status] surfaces expired_auth instead of a stale
+// authenticated flow.
+func (m *Manager) RecordFailure(providerName string, state HealthState, revision, reason string) {
+	prov := strings.TrimSpace(strings.ToLower(providerName))
+	if prov == "" || state == HealthOK {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.health[prov] = HealthStatus{
+		State:     state,
+		Reason:    strings.TrimSpace(reason),
+		Revision:  strings.TrimSpace(revision),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if state == HealthExpired {
+		if flow := m.flows[prov]; flow != nil && flow.snapshot().Status != "authorizing" {
+			delete(m.flows, prov)
+		}
+	}
+}
+
+// RecordAuthFailure records a runtime authentication failure, mirroring it to
+// the canonical browser provider key when a manifest uses a browser-only type.
+func (m *Manager) RecordAuthFailure(providerName, providerType string, state HealthState, revision, reason string) {
+	m.RecordFailure(providerName, state, revision, reason)
+	provType := strings.TrimSpace(strings.ToLower(providerType))
+	provName := strings.TrimSpace(strings.ToLower(providerName))
+	if provType != "" && provType != provName && m.IsCanonicalBrowserOnly(provType) {
+		m.RecordFailure(provType, state, revision, reason)
+	}
+}
+
+// RecordAuthSuccess clears any recorded runtime authentication failure for
+// providerName.
+func (m *Manager) RecordAuthSuccess(providerName string) {
+	m.ClearHealth(providerName)
+}
+
+// ClearHealth removes any recorded runtime authentication failure for providerName.
+func (m *Manager) ClearHealth(providerName string) {
+	prov := strings.TrimSpace(strings.ToLower(providerName))
+	if prov == "" {
+		return
+	}
+	m.mu.Lock()
+	delete(m.health, prov)
+	m.mu.Unlock()
+}
+
+// Health returns the recorded runtime authentication failure for providerName,
+// automatically clearing and suppressing stale entries when currentRevision
+// differs from the revision that failed.
+func (m *Manager) Health(providerName, currentRevision string) (HealthStatus, bool) {
+	prov := strings.TrimSpace(strings.ToLower(providerName))
+	if prov == "" {
+		return HealthStatus{}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h, ok := m.health[prov]
+	if !ok || h.State == HealthOK {
+		return HealthStatus{}, false
+	}
+	cur := strings.TrimSpace(currentRevision)
+	if h.Revision != "" && cur != "" && h.Revision != cur {
+		delete(m.health, prov)
+		return HealthStatus{}, false
+	}
+	return h, true
+}
+
+// OAuthHealth reports whether the named OAuth provider has a runtime auth
+// failure or statically expired unrefreshable credentials on disk.
+func (m *Manager) OAuthHealth(providerType, providerName string) (HealthStatus, bool) {
+	provType := strings.TrimSpace(strings.ToLower(providerType))
+	provName := strings.TrimSpace(strings.ToLower(providerName))
+	if provName == "" {
+		provName = provType
+	}
+	if provType == "" {
+		provType = provName
+	}
+	if provName == "" {
+		return HealthStatus{}, false
+	}
+
+	rev := m.CredentialRevision(provType, provName)
+	if h, ok := m.Health(provName, rev); ok {
+		return h, true
+	}
+	if provType != provName && m.IsCanonicalBrowserOnly(provType) {
+		if h, ok := m.Health(provType, rev); ok {
+			return h, true
+		}
+	}
+
+	if driver, ok := m.browserDriver(provType); ok {
+		if ec, ok := driver.(ExpiryChecker); ok && ec.IsExpired() {
+			return HealthStatus{
+				State:  HealthExpired,
+				Reason: "authentication session expired",
+			}, true
+		}
+		return HealthStatus{}, false
+	}
+
+	if tok, _, err := LoadProviderToken(provName); err == nil && tok != nil &&
+		!tok.Expiry.IsZero() && tok.Expiry.Before(time.Now()) && tok.RefreshToken == "" {
+		return HealthStatus{
+			State:  HealthExpired,
+			Reason: "authentication token expired",
+		}, true
+	}
+	return HealthStatus{}, false
 }
 
 // Logout cancels any in-flight OAuth flow and deletes stored credentials for
@@ -414,6 +592,10 @@ func (m *Manager) Logout(providerType, providerName string) (bool, error) {
 	flow := m.flows[provName]
 	if flow != nil {
 		delete(m.flows, provName)
+	}
+	delete(m.health, provName)
+	if provType != provName {
+		delete(m.health, provType)
 	}
 	m.mu.Unlock()
 
@@ -447,6 +629,7 @@ func (m *Manager) logoutBrowser(provider string, driver BrowserOAuthDriver) (boo
 		flow.cancel()
 		delete(m.flows, provider)
 	}
+	delete(m.health, provider)
 	m.mu.Unlock()
 	return driver.Logout()
 }

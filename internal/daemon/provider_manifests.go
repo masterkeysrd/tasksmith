@@ -53,12 +53,23 @@ func providerStatusFor(rec workspace.ProviderRecord, wsEnv map[string]string, gw
 	if gwInvalid || isInvalidProviderManifest(rec.Def) {
 		return "invalid_config", false, ""
 	}
+	auth := rec.Def.Spec.Auth
 	if isLocalEndpoint(rec.Def) || rec.Name == "ollama" {
+		if auth != nil && auth.Type != warp.AuthTypeNone && auth.Type != warp.AuthTypeOAuth2 && (auth.Token != "" || auth.Password != "") {
+			if rev := providerSecretRevision(auth, wsEnv, rec.Def.GetDir()); rev != "" {
+				if h, failed := authMgr.Health(rec.Name, rev); failed && h.State == providerauth.HealthInvalid {
+					return string(providerauth.HealthInvalid), false, ""
+				}
+			}
+		}
 		return "local", true, ""
 	}
-	auth := rec.Def.Spec.Auth
 	if auth != nil && auth.Type == warp.AuthTypeOAuth2 {
-		if email, ok := authMgr.Account(cmp.Or(rec.Def.Spec.Type, rec.Name), rec.Name); ok {
+		provType := cmp.Or(rec.Def.Spec.Type, rec.Name)
+		if email, ok := authMgr.Account(provType, rec.Name); ok {
+			if _, expired := authMgr.OAuthHealth(provType, rec.Name); expired {
+				return string(providerauth.HealthExpired), false, email
+			}
 			return "active", true, email
 		}
 		return "missing_auth", false, ""
@@ -70,7 +81,23 @@ func providerStatusFor(rec workspace.ProviderRecord, wsEnv map[string]string, gw
 	if !hasKey {
 		return "missing_auth", false, ""
 	}
+	if rev := providerSecretRevision(auth, wsEnv, rec.Def.GetDir()); rev != "" {
+		if h, failed := authMgr.Health(rec.Name, rev); failed && h.State == providerauth.HealthInvalid {
+			return string(providerauth.HealthInvalid), false, ""
+		}
+	}
 	return "active", true, ""
+}
+
+func providerSecretRevision(pa *warp.ProviderAuth, wsEnv map[string]string, providerDir string) string {
+	if pa == nil {
+		return ""
+	}
+	secret, err := providerauth.ResolveCredential(toGatewayAuth(pa, providerDir), wsEnv)
+	if err != nil || strings.TrimSpace(secret) == "" {
+		return ""
+	}
+	return providerauth.SecretRevision(secret)
 }
 
 func isLocalEndpoint(def *warp.ModelProvider) bool {

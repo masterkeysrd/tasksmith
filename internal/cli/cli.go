@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
+	"github.com/masterkeysrd/tasksmith/internal/cli/command"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
@@ -70,6 +71,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	store.SetHeaderMeta(opts.Version, opts.Workspace)
 	store.SetClient(opts.Client)
+	store.SetProviderAuthLauncher(command.EnqueueProviderAuth)
 
 	for _, notice := range opts.StartupNotices {
 		store.AppendWarning(notice)

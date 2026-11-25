@@ -3,6 +3,7 @@ package store
 import (
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/masterkeysrd/kite/extras/kites"
@@ -12,12 +13,13 @@ import (
 type SlotKind string
 
 const (
-	SlotKindPermission   SlotKind = "permission"
-	SlotKindQuestion     SlotKind = "question"
-	SlotKindPlanReview   SlotKind = "plan_review"
-	SlotKindPicker       SlotKind = "picker"
-	SlotKindAutocomplete SlotKind = "autocomplete"
-	SlotKindModelSwitch  SlotKind = "model_switch"
+	SlotKindPermission     SlotKind = "permission"
+	SlotKindQuestion       SlotKind = "question"
+	SlotKindPlanReview     SlotKind = "plan_review"
+	SlotKindPicker         SlotKind = "picker"
+	SlotKindAutocomplete   SlotKind = "autocomplete"
+	SlotKindModelSwitch    SlotKind = "model_switch"
+	SlotKindProviderReauth SlotKind = "provider_reauth"
 )
 
 // ModelSwitchRequest describes a pending confirmation prompt when switching
@@ -27,10 +29,17 @@ type ModelSwitchRequest struct {
 	MissingModalities []string
 }
 
+// ProviderReauthRequest describes a pending inline re-authentication prompt
+// shown when a turn fails because an OAuth provider session expired.
+type ProviderReauthRequest struct {
+	Provider string
+	Message  string
+}
+
 // HidesComposer reports whether this slot kind should hide the Composer while active.
 func (k SlotKind) HidesComposer() bool {
 	switch k {
-	case SlotKindPermission, SlotKindQuestion, SlotKindPlanReview, SlotKindPicker, SlotKindModelSwitch:
+	case SlotKindPermission, SlotKindQuestion, SlotKindPlanReview, SlotKindPicker, SlotKindModelSwitch, SlotKindProviderReauth:
 		return true
 	default:
 		return false
@@ -163,4 +172,27 @@ func ClearSlot() {
 	slot.Set(func(SlotState) SlotState {
 		return SlotState{}
 	})
+}
+
+var (
+	providerAuthLauncherMu sync.RWMutex
+	providerAuthLauncher   func(provider string)
+)
+
+// SetProviderAuthLauncher registers the callback invoked when the inline
+// re-authentication prompt starts a provider sign-in flow.
+func SetProviderAuthLauncher(fn func(provider string)) {
+	providerAuthLauncherMu.Lock()
+	providerAuthLauncher = fn
+	providerAuthLauncherMu.Unlock()
+}
+
+// LaunchProviderAuth triggers the registered provider sign-in screen, if any.
+func LaunchProviderAuth(provider string) {
+	providerAuthLauncherMu.RLock()
+	fn := providerAuthLauncher
+	providerAuthLauncherMu.RUnlock()
+	if fn != nil {
+		fn(provider)
+	}
 }

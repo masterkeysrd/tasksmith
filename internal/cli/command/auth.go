@@ -36,6 +36,10 @@ func goAuthBackground(fn func()) {
 	authBackground.Go(fn)
 }
 
+func init() {
+	store.SetProviderAuthLauncher(EnqueueProviderAuth)
+}
+
 func (r *Registry) registerAuthCommands() {
 	r.Register(Command{
 		Name:        "login",
@@ -49,7 +53,7 @@ func (r *Registry) registerAuthCommands() {
 
 func handleLogin(args []string) error {
 	provider := strings.TrimSpace(strings.Join(args, " "))
-	enqueueProviderAuth(provider)
+	EnqueueProviderAuth(provider)
 	return nil
 }
 
@@ -81,9 +85,9 @@ func completeOAuthProviders(ctx context.Context, _ autocomplete.Request) ([]auto
 	return candidates, nil
 }
 
-// enqueueProviderAuth opens the sign-in screen for one provider. An empty name
+// EnqueueProviderAuth opens the sign-in screen for one provider. An empty name
 // lets the daemon resolve the sole OAuth preset.
-func enqueueProviderAuth(provider string) {
+func EnqueueProviderAuth(provider string) {
 	store.EnqueueSlot(store.SlotItem{
 		Kind: store.SlotKindPicker,
 		Data: func(slotID string) trail.Node {
@@ -380,9 +384,11 @@ func (f *providerAuthFlow) submit(ctx context.Context, callbackURL string) {
 }
 
 type providerAuthViewProps struct {
-	slotID   string
-	provider string
-	state    *kites.Store[providerAuthState]
+	slotID    string
+	provider  string
+	state     *kites.Store[providerAuthState]
+	onSettled func(failed bool, message string)
+	onCancel  func(inFlight bool)
 }
 
 // providerAuthView is the /login screen: the page to open, a way to copy it
@@ -435,22 +441,34 @@ var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewP
 	}, []any{})
 
 	// A sign-in that finishes while the screen is open reports itself once in
-	// the timeline and closes the slot so the outcome is immediately visible.
+	// the timeline (or hands off to the hosting pane) so the outcome is
+	// immediately visible and workspace warnings refresh.
 	kitex.UseEffect(func() {
 		if !state.settled || reported() {
 			return
 		}
 		setReported(true)
 		message := strings.TrimSpace(state.report)
+		if !state.failed {
+			goAuthBackground(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				refreshProviderWorkspaceContext(ctx)
+			})
+		}
+		if flowRef.Current != nil {
+			flowRef.Current.cancel()
+		}
+		if props.onSettled != nil {
+			props.onSettled(state.failed, message)
+			return
+		}
 		if message != "" {
 			if state.failed {
 				store.AppendError("Auth", message)
 			} else {
 				store.AppendCommandOutput("/login", message)
 			}
-		}
-		if flowRef.Current != nil {
-			flowRef.Current.cancel()
 		}
 		store.RemoveSlot(props.slotID)
 	}, []any{state.settled, state.report})
@@ -459,7 +477,12 @@ var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewP
 		if flowRef.Current != nil {
 			flowRef.Current.cancel()
 		}
-		if !state.settled && (state.authURL != "" || state.browserOnly) {
+		inFlight := !state.settled && (state.authURL != "" || state.browserOnly)
+		if props.onCancel != nil {
+			props.onCancel(inFlight)
+			return
+		}
+		if inFlight {
 			store.AppendCommandOutput("/login", "Left the sign-in screen. The daemon keeps the flow open for five more minutes, so finishing in the browser still signs you in.")
 		}
 		store.RemoveSlot(props.slotID)
@@ -469,12 +492,16 @@ var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewP
 	if provider != "" {
 		title += " to " + provider
 	}
+	escLabel := "Close"
+	if props.onCancel != nil {
+		escLabel = "Back"
+	}
 
 	return mcpAuthPane(mcpAuthPaneProps{
 		server:      provider,
 		title:       title + "…",
 		browserOnly: state.browserOnly,
-		escLabel:    "Close",
+		escLabel:    escLabel,
 		state:       paneStore,
 		notice:      notice(),
 		onCopy:      func() { setNotice(mcpAuthCopiedNotice) },

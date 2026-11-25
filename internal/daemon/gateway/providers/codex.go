@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	loomcodex "github.com/masterkeysrd/loom/providers/codex"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
@@ -30,6 +32,12 @@ func newCodexDriver() *codexDriver {
 			CodexName,
 			func(account loomcodex.Credentials) string { return account.Email },
 			loomcodex.NewTokenSource,
+			auth.WithBrowserSessionExpire(func(c *loomcodex.Credentials) {
+				c.Token.Expiry = time.Unix(1, 0).UTC()
+			}),
+			auth.WithBrowserSessionExpiredCheck(func(c loomcodex.Credentials) bool {
+				return !c.Token.Expiry.IsZero() && c.Token.Expiry.Before(time.Now()) && c.Token.RefreshToken == ""
+			}),
 		),
 	}
 }
@@ -97,7 +105,9 @@ func NewCodex(name string, credentials *auth.Config, hasOverrides bool) (*loomco
 	if err != nil {
 		return nil, err
 	}
-	provider, err := loomcodex.NewProvider(source, nil)
+	baseClient := *http.DefaultClient
+	baseClient.Transport = auth.NewRefreshOnUnauthorizedTransport(baseClient.Transport, codexOAuth.ForceRefresh)
+	provider, err := loomcodex.NewProvider(source, &baseClient)
 	if err != nil {
 		return nil, fmt.Errorf("%w: initialize Codex: %w", ErrInvalidConfig, err)
 	}

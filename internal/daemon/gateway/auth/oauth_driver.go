@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	loomauth "github.com/masterkeysrd/loom/auth"
 	loomantigravity "github.com/masterkeysrd/loom/providers/antigravity"
@@ -27,6 +30,13 @@ type BrowserOAuthDriver interface {
 	Account() (string, bool)
 	Logout() (bool, error)
 	CredentialRevision() string
+}
+
+// ExpiryChecker is optionally implemented by [BrowserOAuthDriver] values that
+// can report whether stored credentials on disk are statically expired with no
+// refresh path.
+type ExpiryChecker interface {
+	IsExpired() bool
 }
 
 var (
@@ -118,15 +128,97 @@ func ProviderTokenSource(ctx context.Context, provider, providerType, token stri
 	if driver == nil {
 		return nil, false, fmt.Errorf("gateway: nil oauth driver for provider %q", provider)
 	}
-	source := loomauth.NewPersistentTokenSource(ctx, driver.OAuthConfig(), loomauth.PersistentConfig{
+	source := newRefreshableOAuthTokenSource(ctx, provider, driver)
+	return source, HasProviderToken(provider), nil
+}
+
+type refreshableOAuthTokenSource struct {
+	ctx      context.Context
+	provider string
+	driver   OAuthDriver
+
+	mu    sync.Mutex
+	inner oauth2.TokenSource
+}
+
+var _ RefreshableTokenSource = (*refreshableOAuthTokenSource)(nil)
+
+func newRefreshableOAuthTokenSource(ctx context.Context, provider string, driver OAuthDriver) *refreshableOAuthTokenSource {
+	s := &refreshableOAuthTokenSource{
+		ctx:      ctx,
+		provider: provider,
+		driver:   driver,
+	}
+	s.inner = s.buildInner()
+	return s
+}
+
+func (s *refreshableOAuthTokenSource) buildInner() oauth2.TokenSource {
+	return loomauth.NewPersistentTokenSource(s.ctx, s.driver.OAuthConfig(), loomauth.PersistentConfig{
 		Load: func() (*oauth2.Token, error) {
-			tok, _, err := LoadProviderToken(provider)
+			tok, _, err := LoadProviderToken(s.provider)
 			return tok, err
 		},
 		Save: func(tok *oauth2.Token) error {
-			account := driver.ExtractAccount(tok)
-			return SaveProviderToken(provider, tok, account)
+			account := s.driver.ExtractAccount(tok)
+			return SaveProviderToken(s.provider, tok, account)
 		},
 	})
-	return source, HasProviderToken(provider), nil
+}
+
+func (s *refreshableOAuthTokenSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.Token()
+}
+
+func (s *refreshableOAuthTokenSource) ForceRefresh(ctx context.Context, failedAccessToken string) (*oauth2.Token, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored, account, err := LoadProviderToken(s.provider)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, loomauth.ErrAuthRequired
+		}
+		return nil, err
+	}
+	if stored != nil && stored.AccessToken != "" && failedAccessToken != "" && stored.AccessToken != failedAccessToken {
+		s.inner = s.buildInner()
+		return stored, nil
+	}
+	if stored == nil || strings.TrimSpace(stored.RefreshToken) == "" {
+		return nil, loomauth.ErrAuthRequired
+	}
+
+	refreshCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	tok, err := s.driver.OAuthConfig().TokenSource(refreshCtx, &oauth2.Token{
+		RefreshToken: stored.RefreshToken,
+	}).Token()
+	if err != nil {
+		var rErr *oauth2.RetrieveError
+		if errors.As(err, &rErr) && rErr != nil &&
+			(strings.EqualFold(rErr.ErrorCode, "invalid_grant") ||
+				(rErr.Response != nil && (rErr.Response.StatusCode == http.StatusBadRequest || rErr.Response.StatusCode == http.StatusUnauthorized))) {
+			return nil, fmt.Errorf("%w: %w", loomauth.ErrAuthRequired, err)
+		}
+		return nil, err
+	}
+	if tok.RefreshToken == "" {
+		tok.RefreshToken = stored.RefreshToken
+	}
+	if extracted := s.driver.ExtractAccount(tok); extracted != "" {
+		account = extracted
+	}
+	if err := SaveProviderToken(s.provider, tok, account); err != nil {
+		return nil, err
+	}
+	s.inner = s.buildInner()
+	return tok, nil
 }

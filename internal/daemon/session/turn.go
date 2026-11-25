@@ -928,6 +928,20 @@ func isTurnCanceled(runCtx context.Context, err error) bool {
 func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 	canceled := isTurnCanceled(runCtx, err)
 
+	var (
+		errMsg      string
+		errCode     string
+		errProvider string
+	)
+	if !canceled {
+		errMsg = err.Error()
+		if authErr, isAuth := gateway.ClassifyAuthError(err); isAuth && authErr.Provider != "" {
+			errMsg = authErr.UserMessage()
+			errCode = string(authErr.Kind)
+			errProvider = authErr.Provider
+		}
+	}
+
 	s.Lock()
 	s.Running = false
 	s.PendingPermissions = nil
@@ -944,7 +958,7 @@ func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 	s.FinishedAt = time.Now().UTC()
 	s.err = err
 	if !canceled {
-		s.Error = err.Error()
+		s.Error = errMsg
 	}
 	s.Unlock()
 
@@ -965,7 +979,9 @@ func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 		s.logger.Error("session turn failed", log.String("session_id", s.ID), log.String("error", err.Error()))
 		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ErrorEvent{
 			SessionID: s.ID,
-			Error:     err.Error(),
+			Error:     errMsg,
+			Code:      errCode,
+			Provider:  errProvider,
 		})
 		// A rate limit means the quota window just changed; start the fresh
 		// read immediately. The deferred finishTurn refresh above is then
@@ -977,7 +993,7 @@ func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 	s.notifyParentUpdate()
 	if s.parent != nil && !canceled {
 		text := fmt.Sprintf("<subagent_completed session_id=%q agent=%q title=%q status=\"failed\" error=%q work_dir=%q>\n</subagent_completed>",
-			s.ID, s.Config.Agent, s.Title, err.Error(), s.WorkDir)
+			s.ID, s.Config.Agent, s.Title, errMsg, s.WorkDir)
 		s.parent.Enqueue(message.NewUserTextMeta(text, map[string]any{harness.MetaSystemKind: harness.SystemKindSubagent}))
 	}
 }

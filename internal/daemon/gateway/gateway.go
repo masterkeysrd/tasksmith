@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	loomauth "github.com/masterkeysrd/loom/auth"
 	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
@@ -271,7 +272,7 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 	}
 	id := m.ID.Name()
 	if inst.authErr != nil {
-		return nil, inst.authErr
+		return nil, g.wrapInitAuthError(inst)
 	}
 	if inst.llmProv == nil || !m.Capabilities.SupportsCompletion() {
 		return nil, fmt.Errorf("%w: model %q does not support completion", ErrUnsupportedCapability, m.ID)
@@ -282,7 +283,7 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 	}
 	p := m.Profile()
 	model = model.WithProfile(&p)
-	model = model.WithMiddleware(errorEnrichingLLMMiddleware(g.quotaReaderFor(m)))
+	model = model.WithMiddleware(errorEnrichingLLMMiddleware(g.quotaReaderFor(m), inst, g.cfg.AuthObserver))
 	if mw := openAIResponsesOptionsMiddleware(inst.openaiResponsesOpts); mw != nil {
 		model = model.WithMiddleware(mw)
 	}
@@ -315,7 +316,7 @@ func (g *gatewayImpl) Decision(ctx context.Context, m models.Model, cfg llm.Mode
 	}
 	if inst.authErr != nil {
 		g.mu.RUnlock()
-		return nil, inst.authErr
+		return nil, g.wrapInitAuthError(inst)
 	}
 	provider := inst.decisionProv
 	g.mu.RUnlock()
@@ -334,7 +335,7 @@ func (g *gatewayImpl) Decision(ctx context.Context, m models.Model, cfg llm.Mode
 		p := m.Profile()
 		return model.WithProfile(&p).
 			WithMiddleware(
-				errorEnrichingDecisionMiddleware(),
+				errorEnrichingDecisionMiddleware(inst, g.cfg.AuthObserver),
 				metricsDecisionMiddleware(m, g.cfg.Metrics, inst.quotaBilled(m)),
 			), nil
 	}
@@ -346,7 +347,7 @@ func (g *gatewayImpl) Decision(ctx context.Context, m models.Model, cfg llm.Mode
 	if err != nil {
 		return nil, fmt.Errorf("gateway: failed to adapt completion model: %w", err)
 	}
-	return model.WithMiddleware(errorEnrichingDecisionMiddleware()), nil
+	return model.WithMiddleware(errorEnrichingDecisionMiddleware(inst, g.cfg.AuthObserver)), nil
 }
 
 func (g *gatewayImpl) Embedding(ctx context.Context, m models.Model) (*embedding.Model, error) {
@@ -363,7 +364,7 @@ func (g *gatewayImpl) Embedding(ctx context.Context, m models.Model) (*embedding
 		return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, m.ID.Provider())
 	}
 	if inst.authErr != nil {
-		return nil, inst.authErr
+		return nil, g.wrapInitAuthError(inst)
 	}
 	if inst.embeddingProv == nil || !m.Capabilities.SupportsEmbedding() {
 		return nil, fmt.Errorf("%w: model %q does not support embeddings", ErrUnsupportedCapability, m.ID)
@@ -373,7 +374,15 @@ func (g *gatewayImpl) Embedding(ctx context.Context, m models.Model) (*embedding
 		return nil, fmt.Errorf("gateway: failed to create embedding model: %w", err)
 	}
 	p := m.Profile()
-	return model.WithProfile(&p).WithMiddleware(errorEnrichingEmbeddingMiddleware()), nil
+	return model.WithProfile(&p).WithMiddleware(errorEnrichingEmbeddingMiddleware(inst, g.cfg.AuthObserver)), nil
+}
+
+func (g *gatewayImpl) wrapInitAuthError(inst *providerInstance) error {
+	if !errors.Is(inst.authErr, ErrInvalidConfig) &&
+		(errors.Is(inst.authErr, ErrMissingCredential) || errors.Is(inst.authErr, loomauth.ErrAuthRequired)) {
+		return wrapProviderAuthError(inst, g.cfg.AuthObserver, inst.authErr)
+	}
+	return inst.authErr
 }
 
 func (inst *providerInstance) isSubscriptionCLI() bool {

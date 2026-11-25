@@ -25,6 +25,10 @@ type Config struct {
 	// Metrics receives a record for every LLM call. It is not part of the
 	// configuration fingerprint. A nil recorder disables LLM call metrics.
 	Metrics metrics.Recorder `json:"-"`
+
+	// AuthObserver receives live authentication failure and recovery signals.
+	// It is not part of the configuration fingerprint. Optional.
+	AuthObserver AuthObserver `json:"-"`
 }
 
 // Fingerprint returns a canonical SHA-256 hex fingerprint of the effective configuration.

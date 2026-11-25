@@ -89,6 +89,19 @@ var Slot = trail.SimpleFC("Slot", func() trail.Node {
 				},
 			})
 		}
+	case store.SlotKindProviderReauth:
+		if req, ok := active.Data.(store.ProviderReauthRequest); ok {
+			child = ProviderReauthPrompt(ProviderReauthPromptProps{
+				Request: req,
+				OnSignIn: func() {
+					store.RemoveSlot(active.ID)
+					store.LaunchProviderAuth(req.Provider)
+				},
+				OnDismiss: func() {
+					store.RemoveSlot(active.ID)
+				},
+			})
+		}
 	default:
 		return nil
 	}

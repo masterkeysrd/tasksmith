@@ -47,6 +47,12 @@ func warningPreview(warning store.Warning) (title, body, fix string) {
 		switch {
 		case strings.HasPrefix(subject, `provider "`) && strings.HasPrefix(reason, "missing required environment variable "):
 			return "Provider " + strings.TrimPrefix(subject, "provider ") + " is missing configuration", reason, "Set the required variable. See /providers for provider configuration."
+		case strings.HasPrefix(subject, `provider "`) && strings.Contains(reason, " — run "):
+			body, fix, _ = strings.Cut(reason, " — run ")
+			return subject, body, fix
+		case strings.HasPrefix(subject, `provider "`) && strings.Contains(reason, " — "):
+			body, fix, _ = strings.Cut(reason, " — ")
+			return subject, body, fix
 		case strings.HasPrefix(strings.ToLower(subject), "skill ") && strings.Contains(strings.ToLower(reason), "front matter"):
 			return subject + " could not load", reason, "Correct the front matter and reload the workspace."
 		default:

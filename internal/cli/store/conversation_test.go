@@ -351,6 +351,93 @@ func TestConversationErrorWithUnconfirmedPendingUserEndsTurn(t *testing.T) {
 	}
 }
 
+func TestConversationEventErrorProviderReauthSlot(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	ClearSlot()
+	FreezeTranscript()
+	t.Cleanup(func() {
+		ResetStream()
+		ClearTranscript()
+		ClearSlot()
+	})
+
+	t.Run("expired_oauth_enqueues_reauth_slot_and_refreshes_warnings", func(t *testing.T) {
+		ClearSlot()
+		var slots []SlotItem
+		var refreshed int
+		acc := newIsolatedConversationAccumulator("sess-auth")
+		acc.hooks.onEnqueueSlot = func(item SlotItem) { slots = append(slots, item) }
+		acc.hooks.onRefreshWarnings = func() { refreshed++ }
+
+		acc.applyEvent(api.Event{
+			Type: api.EventError,
+			Payload: api.ErrorEvent{
+				SessionID: "sess-auth",
+				Error:     `Authentication for provider "codex" has expired.`,
+				Code:      api.ErrCodeProviderAuthExpired,
+				Provider:  "codex",
+			},
+		})
+
+		if refreshed != 1 {
+			t.Fatalf("onRefreshWarnings called %d times, want 1", refreshed)
+		}
+		if len(slots) != 1 || slots[0].Kind != SlotKindProviderReauth || slots[0].ID != "reauth-codex" {
+			t.Fatalf("enqueued slots = %+v, want single SlotKindProviderReauth for codex", slots)
+		}
+		req, ok := slots[0].Data.(ProviderReauthRequest)
+		if !ok || req.Provider != "codex" || !strings.Contains(req.Message, "expired") {
+			t.Fatalf("ProviderReauthRequest = %+v, ok=%v", req, ok)
+		}
+	})
+
+	t.Run("invalid_api_key_refreshes_warnings_without_slot", func(t *testing.T) {
+		var slots []SlotItem
+		var refreshed int
+		acc := newIsolatedConversationAccumulator("sess-auth")
+		acc.hooks.onEnqueueSlot = func(item SlotItem) { slots = append(slots, item) }
+		acc.hooks.onRefreshWarnings = func() { refreshed++ }
+
+		acc.applyEvent(api.Event{
+			Type: api.EventError,
+			Payload: api.ErrorEvent{
+				SessionID: "sess-auth",
+				Error:     `Authentication failed for provider "openai" (401 Unauthorized).`,
+				Code:      api.ErrCodeProviderAuthInvalid,
+				Provider:  "openai",
+			},
+		})
+
+		if refreshed != 1 {
+			t.Fatalf("onRefreshWarnings called %d times, want 1", refreshed)
+		}
+		if len(slots) != 0 {
+			t.Fatalf("expected no reauth slot for invalid API key, got %+v", slots)
+		}
+	})
+
+	t.Run("generic_error_enqueues_nothing", func(t *testing.T) {
+		var slots []SlotItem
+		var refreshed int
+		acc := newIsolatedConversationAccumulator("sess-auth")
+		acc.hooks.onEnqueueSlot = func(item SlotItem) { slots = append(slots, item) }
+		acc.hooks.onRefreshWarnings = func() { refreshed++ }
+
+		acc.applyEvent(api.Event{
+			Type: api.EventError,
+			Payload: api.ErrorEvent{
+				SessionID: "sess-auth",
+				Error:     "upstream 502 bad gateway",
+			},
+		})
+
+		if refreshed != 0 || len(slots) != 0 {
+			t.Fatalf("generic error triggered refreshed=%d slots=%+v, want 0", refreshed, slots)
+		}
+	})
+}
+
 func TestConversationCancelPendingUser(t *testing.T) {
 	ResetStream()
 	ClearTranscript()

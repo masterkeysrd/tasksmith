@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
+	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
@@ -175,6 +176,23 @@ func (f *providerFixture) RoundTrip(r *http.Request) (*http.Response, error) {
 
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/providers":
 		return mcpJSONResponse(http.StatusOK, f.presets)
+
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/workspace":
+		return mcpJSONResponse(http.StatusOK, api.Workspace{Name: "test-ws"})
+
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/providers/") && strings.HasSuffix(r.URL.Path, "/auth"):
+		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/providers/"), "/auth")
+		return mcpJSONResponse(http.StatusOK, api.ProviderAuthResponse{
+			Provider: name,
+			Status:   "authorizing",
+		})
+
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/providers/") && strings.HasSuffix(r.URL.Path, "/auth"):
+		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/providers/"), "/auth")
+		return mcpJSONResponse(http.StatusOK, api.ProviderAuthResponse{
+			Provider: name,
+			Status:   "authorizing",
+		})
 	}
 
 	return mcpJSONResponse(http.StatusNotFound, api.APIError{Code: "not_found", Message: "unhandled path " + r.URL.Path})
@@ -772,4 +790,67 @@ func TestProvidersBrowserRendersInvalidConfigStatus(t *testing.T) {
 	if !found {
 		t.Fatalf("expected %q in rendered /providers view:\n%s", wantRow, frame)
 	}
+}
+
+func TestProvidersBrowserAuthHealthStatusesAndLoginKey(t *testing.T) {
+	store.ResetApp()
+	defer store.ResetApp()
+	t.Cleanup(func() { authBackground.Wait() })
+
+	newProviderFixture(t, []api.WorkspaceProvider{
+		{
+			Name: "codex", Type: "codex", Scope: "workspace",
+			Path:    "~/proj/.agents/providers/codex.provider.yaml",
+			Enabled: true, Status: "expired_auth", AuthType: "oauth2",
+			Account:  "dev@example.test",
+			Writable: true,
+			Models:   []api.ProviderModelInfo{{ID: "gpt-5.3-codex", Name: "gpt-5.3-codex"}},
+		},
+		{
+			Name: "openai", Type: "openai", Scope: "workspace",
+			Path:    "~/proj/.agents/providers/openai.provider.yaml",
+			Enabled: true, Status: "invalid_auth", AuthType: "bearer",
+			Endpoint: "https://api.openai.com/v1",
+			Writable: true,
+			Models:   []api.ProviderModelInfo{{ID: "gpt-4o", Name: "gpt-4o"}},
+		},
+	})
+
+	reg := NewRegistry()
+	if err := reg.Execute("/providers"); err != nil {
+		t.Fatalf("Execute(/providers): %v", err)
+	}
+	app := testutils.NewApp(t, components.Slot(), 120, 24)
+	out := app.WaitFor(func(s string) bool {
+		return strings.Contains(s, "Session expired") && strings.Contains(s, "Invalid key")
+	})
+	if !strings.Contains(out, "dev@example.test") {
+		t.Fatalf("expected account email in footer for codex:\n%s", out)
+	}
+	if !strings.Contains(out, "Sign in") {
+		t.Fatalf("expected Sign in keybinding hint:\n%s", out)
+	}
+
+	// Move to openai (non-OAuth) and press l -> notice explains no OAuth sign-in.
+	app.Press(key.Key{Code: key.KeyDown})
+	out = app.Press(key.Key{Code: 'l', Text: "l"})
+	if !strings.Contains(out, "Provider openai does not use OAuth sign-in.") {
+		t.Fatalf("expected non-OAuth notice after pressing l on openai:\n%s", out)
+	}
+
+	// Move back to codex (oauth2) and press l -> opens inline sign-in pane.
+	app.Press(key.Key{Code: key.KeyUp})
+	app.Press(key.Key{Code: 'l', Text: "l"})
+	out = app.WaitFor(func(s string) bool {
+		return strings.Contains(s, "Signing in to codex")
+	})
+	if !strings.Contains(out, "Back") {
+		t.Fatalf("expected Back hint on embedded /providers auth pane:\n%s", out)
+	}
+
+	// Pressing Esc returns to the providers browser without closing the slot.
+	app.Press(key.Key{Code: key.KeyEscape})
+	app.WaitFor(func(s string) bool {
+		return strings.Contains(s, "Manage model providers") && strings.Contains(s, "Session expired")
+	})
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	loomauth "github.com/masterkeysrd/loom/auth"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"golang.org/x/oauth2"
@@ -22,12 +23,34 @@ type browserRegistration[C any] struct {
 	Account  C      `json:"account"`
 }
 
+// BrowserSessionOption configures optional behaviors on [BrowserSessionStore].
+type BrowserSessionOption[C any] func(*BrowserSessionStore[C])
+
+// WithBrowserSessionExpire supplies a callback that mutates a copy of stored
+// credentials so newSource treats the access token as expired and performs a
+// refresh_token grant on the next Token call.
+func WithBrowserSessionExpire[C any](fn func(*C)) BrowserSessionOption[C] {
+	return func(s *BrowserSessionStore[C]) {
+		s.expire = fn
+	}
+}
+
+// WithBrowserSessionExpiredCheck supplies a predicate reporting whether stored
+// credentials on disk are statically expired with no refresh path.
+func WithBrowserSessionExpiredCheck[C any](fn func(C) bool) BrowserSessionOption[C] {
+	return func(s *BrowserSessionStore[C]) {
+		s.isStaticExpired = fn
+	}
+}
+
 // BrowserSessionStore keeps one rotating source per active registration. Its
 // lock serializes token refresh with sign-in and sign-out.
 type BrowserSessionStore[C any] struct {
-	provider    string
-	accountName func(C) string
-	newSource   func(context.Context, *C, func(C) error) (oauth2.TokenSource, error)
+	provider        string
+	accountName     func(C) string
+	newSource       func(context.Context, *C, func(C) error) (oauth2.TokenSource, error)
+	expire          func(*C)
+	isStaticExpired func(C) bool
 
 	mu     sync.Mutex
 	active *browserSession[C]
@@ -35,8 +58,23 @@ type BrowserSessionStore[C any] struct {
 
 // NewBrowserSessionStore manages registrations for a provider. The token source
 // must save refreshed credentials synchronously during Token.
-func NewBrowserSessionStore[C any](provider string, accountName func(C) string, newSource func(context.Context, *C, func(C) error) (oauth2.TokenSource, error)) *BrowserSessionStore[C] {
-	return &BrowserSessionStore[C]{provider: provider, accountName: accountName, newSource: newSource}
+func NewBrowserSessionStore[C any](
+	provider string,
+	accountName func(C) string,
+	newSource func(context.Context, *C, func(C) error) (oauth2.TokenSource, error),
+	opts ...BrowserSessionOption[C],
+) *BrowserSessionStore[C] {
+	s := &BrowserSessionStore[C]{
+		provider:    provider,
+		accountName: accountName,
+		newSource:   newSource,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 func (s *BrowserSessionStore[C]) path() (string, error) {
@@ -149,7 +187,7 @@ func (s *BrowserSessionStore[C]) TokenSource() (oauth2.TokenSource, error) {
 
 	// Refresh is shared, so its HTTP deadline is independent of any inference
 	// request or gateway lifetime.
-	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 15 * time.Second})
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, browserRefreshHTTPClient())
 	source, err := s.newSource(ctx, &record.Account, func(account C) error {
 		record.Account = account
 		return writeBrowserRegistration(path, record)
@@ -161,15 +199,105 @@ func (s *BrowserSessionStore[C]) TokenSource() (oauth2.TokenSource, error) {
 	return s.active, nil
 }
 
+// IsExpired reports whether stored credentials on disk are statically expired
+// with no refresh path.
+func (s *BrowserSessionStore[C]) IsExpired() bool {
+	if s.isStaticExpired == nil {
+		return false
+	}
+	_, record, err := s.load()
+	if err != nil {
+		return false
+	}
+	return s.isStaticExpired(record.Account)
+}
+
+// ForceRefresh exchanges the stored refresh token for a fresh access token
+// after an upstream 401 response. Concurrent callers presenting the same failed
+// access token share a single refresh and reuse the rotated token.
+func (s *BrowserSessionStore[C]) ForceRefresh(ctx context.Context, failedAccessToken string) (*oauth2.Token, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path, record, err := s.load()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, s.signInRequired()
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if active := s.active; active != nil &&
+		active.path == path &&
+		active.revision == record.Revision &&
+		active.lastAccessToken != "" &&
+		failedAccessToken != "" &&
+		active.lastAccessToken != failedAccessToken {
+		tok, err := active.source.Token()
+		if err == nil && tok != nil {
+			active.lastAccessToken = tok.AccessToken
+		}
+		return tok, err
+	}
+
+	if s.expire == nil {
+		return nil, loomauth.ErrAuthRequired
+	}
+
+	expired := record.Account
+	s.expire(&expired)
+
+	refreshCtx := context.WithValue(context.Background(), oauth2.HTTPClient, browserRefreshHTTPClient())
+	source, err := s.newSource(refreshCtx, &expired, func(account C) error {
+		record.Account = account
+		return writeBrowserRegistration(path, record)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	tok, err := source.Token()
+	if err != nil {
+		return nil, err
+	}
+
+	if s.active != nil && s.active.path == path && s.active.revision == record.Revision {
+		s.active.source = source
+		if tok != nil {
+			s.active.lastAccessToken = tok.AccessToken
+		}
+	} else {
+		active := &browserSession[C]{store: s, path: path, revision: record.Revision, source: source}
+		if tok != nil {
+			active.lastAccessToken = tok.AccessToken
+		}
+		s.active = active
+	}
+	return tok, nil
+}
+
 func (s *BrowserSessionStore[C]) signInRequired() error {
 	return fmt.Errorf("%w: run tasksmith auth login %s", ErrMissingCredential, s.provider)
 }
 
+func browserRefreshHTTPClient() *http.Client {
+	client := &http.Client{Timeout: 15 * time.Second}
+	if http.DefaultClient != nil && http.DefaultClient.Transport != nil {
+		client.Transport = http.DefaultClient.Transport
+	}
+	return client
+}
+
 type browserSession[C any] struct {
-	store    *BrowserSessionStore[C]
-	path     string
-	revision string
-	source   oauth2.TokenSource
+	store           *BrowserSessionStore[C]
+	path            string
+	revision        string
+	source          oauth2.TokenSource
+	lastAccessToken string
 }
 
 func (s *browserSession[C]) Token() (*oauth2.Token, error) {
@@ -178,5 +306,9 @@ func (s *browserSession[C]) Token() (*oauth2.Token, error) {
 	if s.store.active != s {
 		return nil, s.store.signInRequired()
 	}
-	return s.source.Token()
+	tok, err := s.source.Token()
+	if err == nil && tok != nil {
+		s.lastAccessToken = tok.AccessToken
+	}
+	return tok, err
 }

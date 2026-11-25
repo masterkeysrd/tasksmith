@@ -39,7 +39,19 @@ type providerInstance struct {
 	profileDiscovery    *profileDiscovery
 	authErr             error
 	warning             string
+	credRevision        string
 	openaiResponsesOpts *loomopenai.ResponsesOptions
+}
+
+func (inst *providerInstance) isOAuth() bool {
+	return (inst.cfg.Auth != nil && inst.cfg.Auth.Scheme() == auth.TypeOAuth2) || auth.HasOAuth(inst.cfg.Type)
+}
+
+func (inst *providerInstance) authRevision() string {
+	if inst.isOAuth() {
+		return auth.CredentialRevision(inst.cfg.Type, inst.cfg.Name)
+	}
+	return inst.credRevision
 }
 
 func (inst *providerInstance) clients() [3]any {
@@ -137,6 +149,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		inst.warning = inst.authErr.Error()
 		return inst, nil
 	}
+	inst.credRevision = auth.SecretRevision(token)
 
 	transport := auth.BuildHTTPTransport(nil, cfg.Auth, token, cfg.Headers, pType)
 	httpClient := &http.Client{Transport: transport}
@@ -259,6 +272,9 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		if err != nil {
 			return inst.failConfig(err)
 		}
+		if rts, ok := ts.(auth.RefreshableTokenSource); ok && !hasCustomAuthOverride(cfg) {
+			httpClient.Transport = auth.NewRefreshOnUnauthorizedTransport(httpClient.Transport, rts.ForceRefresh)
+		}
 		agCfg.TokenSource = ts
 		agCfg.BaseURL = cfg.Endpoint
 		agCfg.HTTPClient = httpClient
@@ -276,6 +292,18 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 	}
 
 	return inst, nil
+}
+
+func hasCustomAuthOverride(cfg ProviderConfig) bool {
+	if cfg.Auth != nil && strings.TrimSpace(cfg.Auth.Header) != "" {
+		return true
+	}
+	for k := range cfg.Headers {
+		if http.CanonicalHeaderKey(strings.TrimSpace(k)) == "Authorization" {
+			return true
+		}
+	}
+	return false
 }
 
 func parseOpenAIConfig(provName string, raw map[string]any) ([]loomopenai.Option, *loomopenai.ResponsesOptions, error) {

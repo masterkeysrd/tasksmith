@@ -43,6 +43,13 @@ type ProviderInfo struct {
 	InvalidConfig bool   `json:"invalid_config,omitempty"`
 }
 
+// AuthObserver receives live authentication failure and recovery notifications
+// from provider calls. Optional; nil disables runtime health tracking.
+type AuthObserver interface {
+	RecordAuthFailure(providerName, providerType string, state auth.HealthState, revision, reason string)
+	RecordAuthSuccess(providerName string)
+}
+
 // Gateway provides access to initialized AI models across providers.
 type Gateway interface {
 	LLM(ctx context.Context, model models.Model, cfg llm.ModelConfig) (*llm.Model, error)

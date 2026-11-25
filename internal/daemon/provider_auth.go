@@ -42,7 +42,14 @@ func (d *Daemon) resolvePresetAuth(p *warp.ModelProvider, envLayers ...map[strin
 		return false, "", ""
 	}
 	if p.Spec.Auth != nil && p.Spec.Auth.Type == warp.AuthTypeOAuth2 {
-		if email, ok := d.auth.Account(cmp.Or(p.Spec.Type, p.Metadata.Name), p.Metadata.Name); ok {
+		provType := cmp.Or(p.Spec.Type, p.Metadata.Name)
+		if email, ok := d.auth.Account(provType, p.Metadata.Name); ok {
+			if _, expired := d.auth.OAuthHealth(provType, p.Metadata.Name); expired {
+				if email != "" {
+					return false, email, fmt.Sprintf("⚠ %s (session expired)", email)
+				}
+				return false, "", "⚠ session expired"
+			}
 			if email != "" {
 				return true, email, fmt.Sprintf("✓ %s (OAuth)", email)
 			}
@@ -60,6 +67,9 @@ func (d *Daemon) resolvePresetAuth(p *warp.ModelProvider, envLayers ...map[strin
 			}
 		}
 		if strings.TrimSpace(val) != "" {
+			if h, failed := d.auth.Health(p.Metadata.Name, providerauth.SecretRevision(val)); failed && h.State == providerauth.HealthInvalid {
+				return false, "", fmt.Sprintf("⚠ %s rejected (invalid key)", authEnv)
+			}
 			return true, "", fmt.Sprintf("✓ %s detected", authEnv)
 		}
 	}

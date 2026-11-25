@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
@@ -49,7 +50,7 @@ func providerStatusIcon(status string) string {
 		return "✔"
 	case "local":
 		return "●"
-	case "missing_auth", "invalid_config":
+	case "missing_auth", "expired_auth", "invalid_auth", "invalid_config":
 		return "⚠"
 	default:
 		return "○"
@@ -62,7 +63,7 @@ func providerStatusIconStyle(scheme *theme.Scheme, status string) style.Style {
 		return style.S().Foreground(scheme.Color.Text.Success)
 	case "local":
 		return style.S().Foreground(scheme.Color.Text.Info)
-	case "missing_auth", "invalid_config":
+	case "missing_auth", "expired_auth", "invalid_auth", "invalid_config":
 		return style.S().Foreground(scheme.Color.Text.Warning)
 	default:
 		return style.S().Foreground(scheme.Color.Text.Muted)
@@ -79,6 +80,10 @@ func providerStatusLabel(status string) string {
 		return "Disabled"
 	case "missing_auth":
 		return "Needs sign-in"
+	case "expired_auth":
+		return "Session expired"
+	case "invalid_auth":
+		return "Invalid key"
 	case "invalid_config":
 		return "Invalid config"
 	default:
@@ -177,12 +182,14 @@ const (
 	providersPaneCatalog
 	providersPaneAdd
 	providersPaneAlias
+	providersPaneAuth
 )
 
 type providersBrowserState struct {
-	pane     providersPane
-	provider *api.WorkspaceProvider
-	model    *api.ProviderModelInfo
+	pane      providersPane
+	provider  *api.WorkspaceProvider
+	model     *api.ProviderModelInfo
+	authStore *kites.Store[providerAuthState]
 }
 
 // providersBrowser renders the interactive provider browser inside <Slot />.
@@ -408,6 +415,26 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 				setState(providersBrowserState{pane: providersPaneModels, provider: &live})
 			},
 		})
+	case providersPaneAuth:
+		if current.provider == nil || current.authStore == nil {
+			break
+		}
+		return providerAuthView(providerAuthViewProps{
+			slotID:   props.slotID,
+			provider: current.provider.Name,
+			state:    current.authStore,
+			onSettled: func(_ bool, message string) {
+				refetchProviders()
+				setNotice(message)
+				setState(providersBrowserState{})
+			},
+			onCancel: func(inFlight bool) {
+				if inFlight {
+					setNotice("Left sign-in screen; browser flow continues in background.")
+				}
+				setState(providersBrowserState{})
+			},
+		})
 	}
 
 	if loading() {
@@ -472,13 +499,17 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 	}
 	pickerProps.Footer = func(opt uicomponents.Option) string {
 		p := providerByName(listed, opt.Value)
-		if p.Endpoint == "" {
-			return p.Type
+		var parts []string
+		if p.Type != "" {
+			parts = append(parts, p.Type)
 		}
-		if p.Type == "" {
-			return p.Endpoint
+		if p.Account != "" {
+			parts = append(parts, p.Account)
 		}
-		return p.Type + " · " + p.Endpoint
+		if p.Endpoint != "" {
+			parts = append(parts, p.Endpoint)
+		}
+		return strings.Join(parts, " · ")
 	}
 	pickerProps.GroupLabel = func(opt uicomponents.Option) string {
 		for _, p := range listed {
@@ -494,6 +525,7 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "Manage models"},
 		{Key: "space / e", Label: "Enable/Disable"},
+		{Key: "l", Label: "Sign in"},
 		{Key: "m", Label: "Manage models"},
 		{Key: "a / n", Label: "Add provider"},
 		{Key: "esc", Label: "Close"},
@@ -501,9 +533,22 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 	pickerProps.Keys = map[string]func(uicomponents.Option){
 		"space": func(opt uicomponents.Option) { toggleEnabled(providerByName(listed, opt.Value)) },
 		"e":     func(opt uicomponents.Option) { toggleEnabled(providerByName(listed, opt.Value)) },
-		"m":     func(opt uicomponents.Option) { enterModels(opt.Value) },
-		"a":     func(_ uicomponents.Option) { setNotice(""); setState(providersBrowserState{pane: providersPaneAdd}) },
-		"n":     func(_ uicomponents.Option) { setNotice(""); setState(providersBrowserState{pane: providersPaneAdd}) },
+		"l": func(opt uicomponents.Option) {
+			p := providerByName(listed, opt.Value)
+			if !strings.EqualFold(p.AuthType, "oauth2") {
+				setNotice("Provider " + p.Name + " does not use OAuth sign-in.")
+				return
+			}
+			setNotice("")
+			setState(providersBrowserState{
+				pane:      providersPaneAuth,
+				provider:  &p,
+				authStore: newProviderAuthStore(),
+			})
+		},
+		"m": func(opt uicomponents.Option) { enterModels(opt.Value) },
+		"a": func(_ uicomponents.Option) { setNotice(""); setState(providersBrowserState{pane: providersPaneAdd}) },
+		"n": func(_ uicomponents.Option) { setNotice(""); setState(providersBrowserState{pane: providersPaneAdd}) },
 	}
 	pickerProps.OnCancel = func() {
 		store.RemoveSlot(props.slotID)

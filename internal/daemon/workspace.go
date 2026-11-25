@@ -77,6 +77,7 @@ type workspaceRuntime struct {
 	gw           *gatewaySlot
 	catalog      *catalogSlot
 	pool         gateway.Pool
+	authObserver gateway.AuthObserver
 	metrics      metrics.Service
 	perms        permissions.Manager
 	sandboxCfg   sandboxcfg.Manager
@@ -168,7 +169,7 @@ func (r *workspaceRuntime) reloadLocked(ctx context.Context) error {
 			return err
 		}
 	}
-	next, err := r.pool.Acquire(ctx, buildGatewayConfig(sessionWorkspace, recorderOf(r.metrics)))
+	next, err := r.pool.Acquire(ctx, buildGatewayConfig(sessionWorkspace, recorderOf(r.metrics), r.authObserver))
 	if err != nil {
 		return err
 	}
@@ -391,7 +392,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 	}
 
 	if owner.sessionStore == nil {
-		gwCfg := buildGatewayConfig(ws, recorderOf(d.usage))
+		gwCfg := buildGatewayConfig(ws, recorderOf(d.usage), d.auth)
 		gw, err := d.cfg.GatewayPool.Acquire(ctx, gwCfg)
 		if err != nil {
 			d.wsMu.Unlock()
@@ -474,6 +475,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		owner.publisher = d.broker
 		owner.logger = d.logger
 		owner.metrics = d.usage
+		owner.authObserver = d.auth
 
 		// The manager begins connecting in the background so opening a workspace is
 		// never blocked by a slow or unreachable MCP server.
@@ -516,6 +518,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 			reloadMu:     reloadMu,
 			gw:           owner.gw,
 			pool:         d.cfg.GatewayPool,
+			authObserver: d.auth,
 			metrics:      d.usage,
 			perms:        permMgr,
 			sandboxCfg:   sandboxMgr,
@@ -530,6 +533,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		rt.reloadMu = reloadMu
 		rt.gw = owner.gw
 		rt.pool = d.cfg.GatewayPool
+		rt.authObserver = d.auth
 		rt.metrics = d.usage
 		rt.perms = permMgr
 		rt.sandboxCfg = sandboxMgr
@@ -615,7 +619,7 @@ func (d *Daemon) closeWorkspaces() error {
 	return errors.Join(errs...)
 }
 
-func buildGatewayConfig(ws *workspace.Workspace, rec metrics.Recorder) gateway.Config {
+func buildGatewayConfig(ws *workspace.Workspace, rec metrics.Recorder, authObserver gateway.AuthObserver) gateway.Config {
 	wsEnv := ws.Env()
 	wsProviders := ws.Catalog().Providers()
 	providers := make([]gateway.ProviderConfig, 0, len(wsProviders))
@@ -636,9 +640,10 @@ func buildGatewayConfig(ws *workspace.Workspace, rec metrics.Recorder) gateway.C
 	}
 
 	return gateway.Config{
-		Providers: providers,
-		Env:       wsEnv,
-		Metrics:   rec,
+		Providers:    providers,
+		Env:          wsEnv,
+		Metrics:      rec,
+		AuthObserver: authObserver,
 	}
 }
 

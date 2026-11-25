@@ -539,11 +539,30 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 	if wsWarnings := rt.Workspace().Catalog().Warnings(); len(wsWarnings) > 0 {
 		warnings = append(warnings, wsWarnings...)
 	}
+	warnedProviders := make(map[string]bool)
+	invalidByName := make(map[string]bool)
 	if gw := rt.Gateway(); gw != nil {
 		for _, p := range gw.ListProviders() {
+			if p.InvalidConfig {
+				invalidByName[p.Name] = true
+			}
 			if p.Warning != "" {
 				warnings = append(warnings, p.Warning)
+				warnedProviders[p.Name] = true
 			}
+		}
+	}
+	wsEnv := rt.Workspace().Env()
+	for _, rec := range rt.Workspace().ProviderRecords() {
+		if !rec.Enabled || rec.Shadowed || warnedProviders[rec.Name] {
+			continue
+		}
+		status, _, _ := providerStatusFor(rec, wsEnv, invalidByName[rec.Name], d.auth)
+		switch status {
+		case string(auth.HealthExpired):
+			warnings = append(warnings, fmt.Sprintf("provider %q: authentication session expired — run /login %s to re-authenticate", rec.Name, rec.Name))
+		case string(auth.HealthInvalid):
+			warnings = append(warnings, fmt.Sprintf("provider %q: API credential rejected (401 Unauthorized) — update your key or check /providers", rec.Name))
 		}
 	}
 

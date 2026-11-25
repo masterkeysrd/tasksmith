@@ -82,20 +82,24 @@ func formatProviderError(err error) error {
 // non-nil, supplies the model's live quota so a rate-limited call can state
 // objective facts about when capacity returns instead of just relaying the
 // provider's message.
-func errorEnrichingLLMMiddleware(readQuota quotaReader) llm.Middleware {
+func errorEnrichingLLMMiddleware(readQuota quotaReader, inst *providerInstance, observer AuthObserver) llm.Middleware {
 	return func(next llm.Streamer) llm.Streamer {
 		return func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
 			resp, err := next(ctx, req)
 			if err != nil {
-				return nil, enrichRateLimit(ctx, formatProviderError(err), readQuota)
+				formatted := wrapProviderAuthError(inst, observer, formatProviderError(err))
+				return nil, enrichRateLimit(ctx, formatted, readQuota)
 			}
 			if resp == nil {
 				return nil, nil
 			}
 			wrappedStream := func(yield func(message.AssistantChunk, error) bool) {
+				hadError := false
 				for chunk, sErr := range resp {
 					if sErr != nil {
-						enriched := enrichRateLimit(ctx, formatProviderError(sErr), readQuota)
+						hadError = true
+						formatted := wrapProviderAuthError(inst, observer, formatProviderError(sErr))
+						enriched := enrichRateLimit(ctx, formatted, readQuota)
 						if !yield(chunk, enriched) {
 							return
 						}
@@ -105,30 +109,39 @@ func errorEnrichingLLMMiddleware(readQuota quotaReader) llm.Middleware {
 						}
 					}
 				}
+				if !hadError && ctx.Err() == nil && observer != nil && inst != nil {
+					observer.RecordAuthSuccess(inst.cfg.Name)
+				}
 			}
 			return wrappedStream, nil
 		}
 	}
 }
 
-func errorEnrichingDecisionMiddleware() decision.Middleware {
+func errorEnrichingDecisionMiddleware(inst *providerInstance, observer AuthObserver) decision.Middleware {
 	return func(next decision.Evaluator) decision.Evaluator {
 		return func(ctx context.Context, req *decision.Request) (*decision.Response, error) {
 			resp, err := next(ctx, req)
 			if err != nil {
-				return nil, formatProviderError(err)
+				return nil, wrapProviderAuthError(inst, observer, formatProviderError(err))
+			}
+			if observer != nil && inst != nil {
+				observer.RecordAuthSuccess(inst.cfg.Name)
 			}
 			return resp, nil
 		}
 	}
 }
 
-func errorEnrichingEmbeddingMiddleware() embedding.Middleware {
+func errorEnrichingEmbeddingMiddleware(inst *providerInstance, observer AuthObserver) embedding.Middleware {
 	return func(next embedding.Embedder) embedding.Embedder {
 		return func(ctx context.Context, req *embedding.Request) (*embedding.Response, error) {
 			resp, err := next(ctx, req)
 			if err != nil {
-				return nil, formatProviderError(err)
+				return nil, wrapProviderAuthError(inst, observer, formatProviderError(err))
+			}
+			if observer != nil && inst != nil {
+				observer.RecordAuthSuccess(inst.cfg.Name)
 			}
 			return resp, nil
 		}

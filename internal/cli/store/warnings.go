@@ -1,6 +1,30 @@
 package store
 
-import "github.com/masterkeysrd/tasksmith/api"
+import (
+	"context"
+	"time"
+
+	"github.com/masterkeysrd/tasksmith/api"
+)
+
+// RefreshWorkspaceWarnings fetches the latest workspace warnings from the
+// daemon on a background goroutine so runtime auth-health diagnostics appear
+// in the statusline immediately.
+func RefreshWorkspaceWarnings() {
+	c := Client()
+	if c == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ws, err := c.GetWorkspace(ctx)
+		if err != nil || ws == nil {
+			return
+		}
+		SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
+	}()
+}
 
 type Warning struct {
 	Source  string
