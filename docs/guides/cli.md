@@ -153,7 +153,7 @@ The bottom composer is your command center:
 
 By default, the status line under the composer has two rows:
 
-- **Top row**: The shortcut hint sits on the left. The permission mode, model, thinking effort, and active warning count (`⚠ N warnings`) sit on the right. The warning indicator is hidden when there are no active warnings.
+- **Top row**: The shortcut hint sits on the left. The permission mode, model and provider (e.g. `Gemini 4 Neon (antigravity)`), thinking effort, and active warning count (`⚠ N warnings`) sit on the right. The warning indicator is hidden when there are no active warnings.
 - **Bottom row**: Context sits on the left. Cost (or Quota for subscription-billed models) and Tokens stay together on the right, separated by `·`.
 
 Run `/statusline` to customize the layout with a live preview. Use `↑`/`↓` to select a segment, `Space` to toggle it, `←`/`→` to reorder it within its row, and `r` to move an enabled segment to the other row. Press `c` for shorter text, `s` to save, or `Esc` to discard. Rows with nothing visible are omitted. Changes are saved to `~/.config/tasksmith/statusline.json`; direct edits take effect the next time the REPL starts. See [Status Line Fields](../reference/cli.md#status-line-fields) for the file format.
@@ -215,7 +215,7 @@ Resolve any pending permission request or question before using `/compact`. Comm
 
 If compaction fails, TaskSmith reports the error and preserves the existing conversation instead of continuing with an incomplete summary.
 
-For `/effort`, `/budget`, and `/thinking`, the active model determines supported controls. Unsupported commands remain visible and report why they cannot be used. `/thinking` accepts `on` and `off` for a model with a thinking toggle and `adaptive` for a model with an adaptive strategy, so a model supporting either makes the command usable. `default` clears the session thinking override and returns to the agent or model default, which the commands report as `default (<strategy>)`. When neither the agent nor the model declares a default, the UI shows `provider default` and leaves the choice to the provider. Changing one control replaces the previous thinking override.
+For `/effort`, `/budget`, and `/thinking`, the active model determines supported controls. Unsupported commands remain visible and report why they cannot be used. `/thinking` accepts `on` and `off` for a model with a thinking toggle and `adaptive` for a model with an adaptive strategy, so a model supporting either makes the command usable. `default` clears the session thinking override and returns to the agent or model default, which the commands report as `default (<strategy>)`. When neither the agent nor the model declares a default, the commands report `provider default`. The banner and status line label this `default effort`. Changing one control replaces the previous thinking override.
 
 For a complete reference of flags, keybindings, and autocomplete shortcuts, see the [CLI Reference](../reference/cli.md).
 

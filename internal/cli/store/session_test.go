@@ -156,6 +156,13 @@ func TestModelDisplayWithoutModel(t *testing.T) {
 	if got := GetSession(); got.Thinking != ThinkingProviderDefault || got.Config.Thinking != nil {
 		t.Fatalf("expected provider default after reset, got %+v", got)
 	}
+	unresolved := SessionState{
+		Config:     api.SessionConfig{Model: "codex/missing"},
+		ModelLabel: "default",
+	}
+	if got := unresolved.ModelLabels(); got != (ModelLabels{Full: "default", Compact: "default"}) {
+		t.Fatalf("unresolved ModelLabels() = %+v, want default/default", got)
+	}
 	ResetSession()
 }
 

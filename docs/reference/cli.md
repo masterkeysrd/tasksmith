@@ -77,7 +77,7 @@ Headless execution has its own reference page: [Headless Execution Reference](./
 
 ## 2. Interactive Slash Commands
 
-Inside the TaskSmith interactive REPL, slash commands provide instant control over session state, permission modes, thinking, and resource inspection. The session status shows the model resolved by the daemon and the thinking that model will apply when nothing overrides it. When no thinking default is known, the UI shows `provider default` and leaves the choice to the provider:
+Inside the TaskSmith interactive REPL, slash commands provide instant control over session state, permission modes, thinking, and resource inspection. The session status shows the model resolved by the daemon and the thinking that model will apply when nothing overrides it. When no thinking default is known, the banner and status line say `default effort`; the thinking commands call this `provider default`:
 
 | Slash Command | Aliases | Arguments | Description |
 | :--- | :--- | :--- | :--- |
@@ -741,8 +741,8 @@ Edit `~/.config/tasksmith/statusline.json` to configure the status line on the n
 | :--- | :--- | :--- |
 | `hint` | `Shift+Tab mode · /help`, or the Ctrl+C cancel prompt. | Unchanged. |
 | `mode` | Permission mode badge, e.g. `[accept edits]`. | `[edits]` for accept edits; other modes are unchanged. |
-| `model` | Active model. | Unchanged. |
-| `effort` | Thinking effort. | Unchanged. |
+| `model` | Active model with its provider when known, e.g. `Gemini 4 Neon (antigravity)`. | Model only; also used when space is tight. |
+| `effort` | Thinking setting, or `default effort` when the provider chooses. | Unchanged. |
 | `warnings` | Active workspace and MCP warning count (`⚠ N warnings`); hidden at zero. | `⚠ N` |
 | `context` | Context window usage, e.g. `Context 109.5k/400.0k (27%)`. | `27%` |
 | `cost` | Session cost, e.g. `Cost $0.42`. A leading `≥` means some calls had no pricing data. For subscription-billed models, shows remaining quota with a reset countdown when available, e.g. `Quota 94% (↻ 3h40m)`. | Amount or remaining quota, without the label or countdown. |

@@ -27,8 +27,8 @@ This is the default layout. The top row places the shortcut hint on the left and
 | --- | --- | --- |
 | `hint` | `Shift+Tab mode · /help`, or the Ctrl+C cancel prompt. | Unchanged. |
 | `mode` | Permission mode badge. Do not remove unless the user explicitly asks. | `[edits]` for accept edits; other modes are unchanged. |
-| `model` | Active model. | Unchanged. |
-| `effort` | Thinking effort. | Unchanged. |
+| `model` | Active model with its provider when known, e.g. `Gemini 4 Neon (antigravity)`. | Model only; also used when space is tight. |
+| `effort` | Thinking setting, or `default effort` when the provider chooses. | Unchanged. |
 | `warnings` | Active workspace and MCP warning count (`⚠ N warnings`); hidden at zero. | `⚠ N` |
 | `context` | Context window usage, e.g. `Context 109.5k/400.0k (27%)`. | `27%` |
 | `cost` | Session cost, or remaining quota with its reset countdown for subscription-billed models, when available. Do not invent a dollar cost or reset time for a subscription. | Amount or remaining quota, without the label or countdown. |

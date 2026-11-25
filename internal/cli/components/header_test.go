@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
@@ -70,6 +71,16 @@ func TestHeaderRender(t *testing.T) {
 	}
 }
 
+func TestHeaderResolvedProvider(t *testing.T) {
+	store.ResetSession()
+	t.Cleanup(store.ResetSession)
+	store.SetSession(&api.Session{Model: &api.Model{Provider: "antigravity", Label: "Gemini 4 Neon"}})
+	out := testutils.Render(t, Header(HeaderProps{HeaderData: store.CurrentHeaderData()}), 80, 12)
+	if !strings.Contains(out, "Gemini 4 Neon (antigravity) with default effort") {
+		t.Fatalf("unexpected banner:\n%s", out)
+	}
+}
+
 func TestHeaderDefaults(t *testing.T) {
 	env := testutils.NewEnv(t, 80, 24)
 	text := env.Render(Header(HeaderProps{HeaderData: store.HeaderData{
@@ -81,7 +92,7 @@ func TestHeaderDefaults(t *testing.T) {
 		"█▜▛█",
 		"▟▛▀▀▜▙",
 		"TaskSmith v0.0.0-dev",
-		"default · provider default",
+		"default with default effort",
 		"/work",
 	} {
 		if !strings.Contains(text, want) {

@@ -73,9 +73,12 @@ var Header = trail.FC("Header", func(props HeaderProps) trail.Node {
 
 	version := NormalizeVersion(props.Version)
 	model := cmp.Or(strings.TrimSpace(props.Model), "default")
-	thinking := cmp.Or(strings.TrimSpace(props.Thinking), store.ThinkingProviderDefault)
+	thinking := strings.TrimSpace(props.Thinking)
+	if thinking == "" || thinking == store.ThinkingProviderDefault {
+		thinking = "default"
+	}
 	modelThinking := fmt.Sprintf("%s with %s effort", model, thinking)
-	if thinking == store.ThinkingProviderDefault || strings.HasPrefix(thinking, "budget ") || strings.HasPrefix(thinking, "thinking ") {
+	if strings.HasPrefix(thinking, "budget ") || strings.HasPrefix(thinking, "thinking ") {
 		modelThinking = fmt.Sprintf("%s · %s", model, thinking)
 	}
 	workspace := ShortenHomePath(props.Workspace)

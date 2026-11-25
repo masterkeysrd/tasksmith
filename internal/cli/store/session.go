@@ -72,6 +72,40 @@ func (s SessionState) ActiveModelID() string {
 	return strings.TrimSpace(s.Config.Model)
 }
 
+type ModelLabels struct {
+	Full, Compact string
+}
+
+func (s SessionState) ModelLabels() ModelLabels {
+	label := cmp.Or(strings.Join(strings.Fields(s.ModelLabel), " "), "default")
+	if s.Model == nil && strings.TrimSpace(s.ModelID) == "" {
+		return ModelLabels{label, label}
+	}
+	var provider string
+	if s.Model != nil {
+		provider = strings.Join(strings.Fields(s.Model.Provider), " ")
+	}
+	for _, id := range []string{s.ModelID, s.Config.Model} {
+		if provider != "" {
+			break
+		}
+		if prefix, model, ok := strings.Cut(id, "/"); ok && strings.TrimSpace(model) != "" {
+			provider = strings.Join(strings.Fields(prefix), " ")
+		}
+	}
+	if provider == "" {
+		return ModelLabels{label, label}
+	}
+	suffix := " (" + provider + ")"
+	if short, ok := strings.CutPrefix(label, provider+"/"); ok && short != "" {
+		return ModelLabels{label, short}
+	}
+	if short, ok := strings.CutSuffix(label, suffix); ok && short != "" {
+		return ModelLabels{label, short}
+	}
+	return ModelLabels{label + suffix, label}
+}
+
 type sessionLifecycle struct {
 	gen    uint64
 	ctx    context.Context
@@ -1491,6 +1525,7 @@ func SetSessionModelInfo(model *api.Model, setting *api.ThinkingSetting) {
 			s.Quota = nil
 		}
 		s.ModelQuotaBilled = quotaBilled
+		s.Model = model
 		s.ModelID = modelIdentifier(model)
 		s.ModelLabel = label
 		s.Thinking = thinking
@@ -1510,6 +1545,9 @@ func SetSessionModelInfo(model *api.Model, setting *api.ThinkingSetting) {
 func SetActiveModelID(id string) {
 	session.Set(func(s SessionState) SessionState {
 		s.ModelID = strings.TrimSpace(id)
+		if modelIdentifier(s.Model) != s.ModelID {
+			s.Model = nil
+		}
 		return s
 	})
 }

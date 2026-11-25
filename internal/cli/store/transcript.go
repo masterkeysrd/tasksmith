@@ -85,7 +85,7 @@ func CurrentHeaderData() HeaderData {
 	return HeaderData{
 		Version:     appState.Version,
 		Workspace:   appState.Workspace,
-		Model:       sess.ModelLabel,
+		Model:       sess.ModelLabels().Full,
 		Thinking:    sess.Thinking,
 		SandboxMode: sess.SandboxMode,
 		Warnings:    warnings,
@@ -116,7 +116,7 @@ func UseHeaderData() HeaderData {
 	})
 	sessionInfo := UseSession(func(s SessionState) headerSessionMeta {
 		return headerSessionMeta{
-			model:       s.ModelLabel,
+			model:       s.ModelLabels().Full,
 			thinking:    s.Thinking,
 			sandboxMode: s.SandboxMode,
 		}

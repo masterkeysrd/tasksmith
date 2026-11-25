@@ -1,7 +1,6 @@
 package components
 
 import (
-	"cmp"
 	"fmt"
 	"image/color"
 	"strings"
@@ -140,7 +139,7 @@ func planStatusRow(width int, compact bool, row []store.StatusLineSegmentID, fie
 	if width > 0 && total() > width {
 		gap = 1
 		for _, id := range []store.StatusLineSegmentID{
-			store.StatusLineWarnings, store.StatusLineContext, store.StatusLineCost, store.StatusLineTokens, store.StatusLineMode,
+			store.StatusLineModel, store.StatusLineWarnings, store.StatusLineContext, store.StatusLineCost, store.StatusLineTokens, store.StatusLineMode,
 		} {
 			for i := range parts {
 				if total() <= width {
@@ -259,7 +258,7 @@ var DefaultStatusLine = trail.SimpleFC("DefaultStatusLine", func() trail.Node {
 	billed := store.UseSession(func(s store.SessionState) bool { return s.ModelQuotaBilled })
 	quotaNow := useQuotaClock()
 	ready := store.UseSession(func(s store.SessionState) bool { return s.Ready })
-	model := store.UseSession(func(s store.SessionState) string { return s.ModelLabel })
+	model := store.UseSession(store.SessionState.ModelLabels)
 	effort := store.UseSession(func(s store.SessionState) string { return s.Thinking })
 	warningCount := len(store.UseWarnings())
 
@@ -285,8 +284,12 @@ var DefaultStatusLine = trail.SimpleFC("DefaultStatusLine", func() trail.Node {
 	}
 	if ready {
 		fields[store.StatusLineContext] = statusContext(ctx, scheme)
-		fields[store.StatusLineModel] = statusField{full: cmp.Or(strings.Join(strings.Fields(model), " "), "default"), color: secondary}
-		fields[store.StatusLineEffort] = statusField{full: cmp.Or(strings.Join(strings.Fields(effort), " "), store.ThinkingProviderDefault), color: secondary}
+		fields[store.StatusLineModel] = statusField{full: model.Full, compact: model.Compact, color: secondary}
+		effort = strings.Join(strings.Fields(effort), " ")
+		if effort == "" || effort == store.ThinkingProviderDefault {
+			effort = "default effort"
+		}
+		fields[store.StatusLineEffort] = statusField{full: effort, color: secondary}
 	}
 	if usage.Calls > 0 {
 		text := fmt.Sprintf("↑%s ↓%s", format.Tokens(int(usage.InputTokens)), format.Tokens(int(usage.OutputTokens)))

@@ -69,6 +69,34 @@ func TestDefaultStatusLine(t *testing.T) {
 	}
 }
 
+func TestStatusLineModelProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, id, config, label, want string
+		width                                   int
+		compact                                 bool
+	}{
+		{"resolved", "antigravity", "other/neon", "", "Gemini 4 Neon", "Gemini 4 Neon (antigravity)", 100, false},
+		{"id", "", "google-genai/neon", "", "Gemini 4 Neon", "Gemini 4 Neon (google-genai)", 100, false},
+		{"configured", "", "neon", "codex/neon", "Neon", "Neon (codex)", 100, false},
+		{"qualified", "", "codex/neon", "", "", "codex/neon", 100, false},
+		{"no provider", "", "mock", "@default", "Mock", "Mock", 100, false},
+		{"compact", "antigravity", "neon", "", "Gemini 4 Neon", "Gemini 4 Neon", 100, true},
+		{"narrow", "antigravity", "neon", "", "Gemini 4 Neon", "Gemini 4 Neon", 35, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initStatusLineTest(t)
+			store.SetSession(&api.Session{Config: api.SessionConfig{Model: tc.config, Mode: api.ModeAuto}})
+			store.SetSessionModelInfo(&api.Model{ID: tc.id, Provider: tc.provider, Label: tc.label}, nil)
+			_, _ = store.ApplyStatusLine(store.StatusLineConfig{Rows: [][]store.StatusLineSegmentID{{store.StatusLineMode, store.StatusLineModel, store.StatusLineEffort}}, Compact: tc.compact})
+			out := testutils.Render(t, DefaultStatusLine(), tc.width, 5)
+			lines := testutils.TrimmedLines(out)
+			if len(lines) != 1 || strings.Join(strings.Fields(lines[0]), " ") != "[auto] "+tc.want+" default effort" {
+				t.Fatalf("unexpected status line:\n%s", out)
+			}
+		})
+	}
+}
+
 func TestStatusLineHintAndCustomRows(t *testing.T) {
 	initStatusLineTest(t)
 	store.SetMode(api.ModePlan)

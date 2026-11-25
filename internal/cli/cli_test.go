@@ -333,7 +333,7 @@ func TestRunStartupHeader(t *testing.T) {
 	// The startup banner is initially rendered live on the surface (not in static scrollback)
 	waitFor(t, func() bool {
 		return strings.Contains(testutils.SurfaceText(b), "TaskSmith v0.2.0") &&
-			strings.Contains(testutils.SurfaceText(b), "default · provider default") &&
+			strings.Contains(testutils.SurfaceText(b), "default with default effort") &&
 			strings.Contains(testutils.SurfaceText(b), "/tmp/ws")
 	}, 2*time.Second, "live startup banner on screen surface")
 
