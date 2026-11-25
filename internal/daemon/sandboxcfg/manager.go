@@ -71,6 +71,11 @@ type Manager interface {
 	// Restricted reports whether the workspace is currently untrusted.
 	Restricted() bool
 
+	// WithRestricted returns a view sharing the same underlying sandbox.json
+	// store and lock while tracking an independent restricted posture (for
+	// sibling subproject runtimes under a shared workspace root).
+	WithRestricted(restricted bool) Manager
+
 	// Get returns the stored [api.SandboxSettings] for ScopeProject or
 	// ScopeGlobal. A missing file yields zero settings.
 	Get(scope api.PermissionScope) (api.SandboxSettings, error)
@@ -90,12 +95,17 @@ type Manager interface {
 	EffectiveFor(workDir string) (Effective, error)
 }
 
-type manager struct {
+type store struct {
 	mu          sync.RWMutex
 	workDir     string
-	restricted  bool
 	globalPath  string
 	projectPath string
+}
+
+type manager struct {
+	*store
+	restMu     sync.RWMutex
+	restricted bool
 }
 
 var _ Manager = (*manager)(nil)
@@ -126,25 +136,34 @@ func New(cfg Config) (Manager, error) {
 	}
 
 	return &manager{
-		workDir:     workDir,
-		restricted:  cfg.Restricted,
-		globalPath:  globalPath,
-		projectPath: projectPath,
+		store: &store{
+			workDir:     workDir,
+			globalPath:  globalPath,
+			projectPath: projectPath,
+		},
+		restricted: cfg.Restricted,
 	}, nil
 }
 
 func (m *manager) WorkDir() string { return m.workDir }
 
 func (m *manager) SetRestricted(restricted bool) {
-	m.mu.Lock()
+	m.restMu.Lock()
 	m.restricted = restricted
-	m.mu.Unlock()
+	m.restMu.Unlock()
 }
 
 func (m *manager) Restricted() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.restMu.RLock()
+	defer m.restMu.RUnlock()
 	return m.restricted
+}
+
+func (m *manager) WithRestricted(restricted bool) Manager {
+	return &manager{
+		store:      m.store,
+		restricted: restricted,
+	}
 }
 
 func (m *manager) filePath(scope api.PermissionScope) (string, error) {

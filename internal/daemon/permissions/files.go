@@ -45,7 +45,7 @@ func NewFileAccessChecker(cfg FileAccessConfig) *FileAccessChecker {
 	mgr := cfg.Manager
 	if sm, ok := cfg.Session.(*sessionManager); ok && sm != nil {
 		if ws == nil {
-			ws = sm.ws
+			ws = sm.workspace()
 		}
 		if mgr == nil {
 			mgr = sm.manager

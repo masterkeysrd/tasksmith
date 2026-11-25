@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -149,7 +150,7 @@ func initSession(ctx context.Context, sess *Session, cfg Config) error {
 	}
 	sess.commandDelegated = cfg.CommandDelegated || (sess.ParentID != "" && strings.HasPrefix(strings.TrimSpace(sess.Title), "/"))
 	if strings.TrimSpace(sess.WorkDir) == "" {
-		sess.WorkDir = cfg.Workspace.RootDir()
+		sess.WorkDir = cmp.Or(cfg.Workspace.CWD(), cfg.Workspace.RootDir())
 	}
 	sess.Diagnostics = sess.modelDiagnostics(sess.Config)
 	return sess.initSubsystems(ctx, cfg.DB)
@@ -759,6 +760,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 			s.Unlock()
 			return s.checkpoint(s.bgCtx)
 		})
+		s.PermManager.SetWorkspace(s.workspace)
 	}
 	s.PermManager.SetPlansDir(s.plansDir())
 	s.pushRuntimePolicy()
@@ -1112,6 +1114,11 @@ func (s *Session) IsCommandDelegated() bool {
 		return false
 	}
 	return s.commandDelegated
+}
+
+// Workspace returns the workspace configuration snapshot bound to this session.
+func (s *Session) Workspace() *workspace.Workspace {
+	return s.workspace
 }
 
 // Close closes session-scoped runtime resources like the Sandbox.

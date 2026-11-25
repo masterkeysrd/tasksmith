@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
@@ -20,6 +21,16 @@ type ListFilter struct {
 	ParentID *string
 }
 
+// LatestFilter specifies optional scoping for [Store.Latest].
+type LatestFilter struct {
+	// WorkDir restricts matching to top-level sessions with this WorkDir when
+	// non-empty.
+	WorkDir string
+	// IncludeEmptyWorkDir also matches legacy top-level sessions whose WorkDir
+	// is empty (used when querying from the workspace root).
+	IncludeEmptyWorkDir bool
+}
+
 // sessionColumns lists the sessions table columns in scanSession order.
 const sessionColumns = "id, title, config, permissions, parent_id, work_dir, forked_from, created_at, updated_at"
 
@@ -29,8 +40,8 @@ type Store interface {
 	Get(ctx context.Context, id string) (*Session, error)
 	List(ctx context.Context, filter ListFilter) ([]*Session, error)
 	// Latest returns the most recently updated top-level (non-subagent)
-	// session, or ErrSessionNotFound when the workspace has none.
-	Latest(ctx context.Context) (*Session, error)
+	// session matching filter, or ErrSessionNotFound when none exists.
+	Latest(ctx context.Context, filter LatestFilter) (*Session, error)
 	Delete(ctx context.Context, id string) error
 }
 
@@ -121,14 +132,32 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*Session, error) {
 	return sess, nil
 }
 
-// Latest returns the most recently updated top-level (non-subagent) session.
-// Subagent sessions are excluded because `--continue` resumes a human thread,
-// and the workspace database only ever holds this workspace's sessions.
-func (s *sqliteStore) Latest(ctx context.Context) (*Session, error) {
-	row := s.db.QueryRowContext(
-		ctx,
-		`SELECT `+sessionColumns+` FROM sessions WHERE parent_id = '' ORDER BY updated_at DESC, id DESC LIMIT 1`,
-	)
+// Latest returns the most recently updated top-level (non-subagent) session
+// matching filter. Subagent sessions are excluded because `--continue` resumes
+// a human thread, and WorkDir scoping separates subprojects sharing one root
+// database.
+func (s *sqliteStore) Latest(ctx context.Context, filter LatestFilter) (*Session, error) {
+	var row *sql.Row
+	workDir := strings.TrimSpace(filter.WorkDir)
+	switch {
+	case workDir != "" && filter.IncludeEmptyWorkDir:
+		row = s.db.QueryRowContext(
+			ctx,
+			`SELECT `+sessionColumns+` FROM sessions WHERE parent_id = '' AND (work_dir = ? OR work_dir = '') ORDER BY updated_at DESC, id DESC LIMIT 1`,
+			workDir,
+		)
+	case workDir != "":
+		row = s.db.QueryRowContext(
+			ctx,
+			`SELECT `+sessionColumns+` FROM sessions WHERE parent_id = '' AND work_dir = ? ORDER BY updated_at DESC, id DESC LIMIT 1`,
+			workDir,
+		)
+	default:
+		row = s.db.QueryRowContext(
+			ctx,
+			`SELECT `+sessionColumns+` FROM sessions WHERE parent_id = '' ORDER BY updated_at DESC, id DESC LIMIT 1`,
+		)
+	}
 	sess, err := scanSession(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

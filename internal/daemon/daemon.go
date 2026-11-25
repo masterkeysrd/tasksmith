@@ -484,15 +484,14 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		return nil, err
 	}
 
-	owner := rt.SessionRuntime()
 	var resolvedDefault *api.Model
-	cat := owner.Workspace().Catalog()
+	cat := rt.Workspace().Catalog()
 	defaultAgent := cat.DefaultAgentName()
 	var candidates []string
 	if resolvedAgent, err := cat.ResolveAgent(defaultAgent); err == nil && resolvedAgent != nil && resolvedAgent.Agent != nil {
 		candidates = resolvedAgent.Agent.Spec.Models
 	}
-	if model, ok := owner.Catalog().ResolveContext(ctx, models.RoleCompletion, candidates...); ok {
+	if model, ok := rt.Catalog().ResolveContext(ctx, models.RoleCompletion, candidates...); ok {
 		converted := model.ToAPI()
 		var agentThinking *api.ThinkingSetting
 		if ag, ok := cat.GetAgent(defaultAgent); ok {
@@ -570,7 +569,7 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		Name:            rt.Workspace().Name(),
 		RootDir:         rt.Workspace().RootDir(),
 		CWD:             cleanDir,
-		DefaultAgent:    owner.Workspace().Catalog().DefaultAgentName(),
+		DefaultAgent:    defaultAgent,
 		DefaultModel:    resolvedDefault,
 		Warnings:        warnings,
 		SandboxWarnings: sandboxWarnings,
@@ -766,6 +765,7 @@ func (d *Daemon) ListWorkspaceFiles(ctx context.Context, rawWS string, req api.L
 	var sessPerms permissions.SessionManager
 
 	workDir := rt.Dir()
+	checkWS := rt.Workspace()
 
 	if strings.TrimSpace(req.SessionID) != "" {
 		sess, err := rt.getLiveSession(ctx, req.SessionID)
@@ -780,6 +780,9 @@ func (d *Daemon) ListWorkspaceFiles(ctx context.Context, rawWS string, req api.L
 			sessPerms = sess.PermManager
 			if sess.WorkDir != "" {
 				workDir = sess.WorkDir
+			}
+			if sessWS := sess.Workspace(); sessWS != nil {
+				checkWS = sessWS
 			}
 		}
 	}
@@ -803,7 +806,7 @@ func (d *Daemon) ListWorkspaceFiles(ctx context.Context, rawWS string, req api.L
 
 	checker := permissions.NewFileAccessChecker(permissions.FileAccessConfig{
 		WorkDir:   workDir,
-		Workspace: rt.Workspace(),
+		Workspace: checkWS,
 		Manager:   rt.perms,
 		Session:   sessPerms,
 	})
@@ -1247,7 +1250,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 	if hasModel {
 		converted := model.ToAPI()
 		var agentThinking *api.ThinkingSetting
-		if ag, ok := rt.SessionRuntime().Workspace().Catalog().GetAgent(cfg.Agent); ok {
+		if ag, ok := rt.Workspace().Catalog().GetAgent(cfg.Agent); ok {
 			agentThinking = ag.Thinking
 		}
 		converted.ThinkingDefault = model.EffectiveThinking(cfg.Thinking, agentThinking)

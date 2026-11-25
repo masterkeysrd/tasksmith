@@ -192,10 +192,10 @@ func (m *manager) Effective() (Effective, error) {
 // ["./secrets"] mask the worktree copy, not only the main checkout. An empty
 // workDir falls back to the manager's workspace root.
 func (m *manager) EffectiveFor(workDir string) (Effective, error) {
-	m.mu.RLock()
+	m.restMu.RLock()
 	restricted := m.restricted
+	m.restMu.RUnlock()
 	root := m.workDir
-	m.mu.RUnlock()
 	if wd := strings.TrimSpace(workDir); wd != "" {
 		root = wd
 	}

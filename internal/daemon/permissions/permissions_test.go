@@ -1496,3 +1496,42 @@ func TestPlansDirAutoAllowAndRestrictedWorkspace(t *testing.T) {
 		t.Fatalf("restricted plansDir remove: expected AccessAllow, got %s", dec)
 	}
 }
+
+func TestSessionManagerSetWorkspaceEnforcesSubprojectTrust(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-perm-subws-test")
+	t.Cleanup(xdg.ClearCache)
+
+	rootDir := t.TempDir()
+	subDir := filepath.Join(rootDir, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootDir, "WORKSPACE.md"), []byte("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: mono\nspec:\n  projects: [\".\", \"sub\"]\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootWS, err := workspace.Open(context.Background(), rootDir, workspace.WithRestrictedMode(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subRestrictedWS, err := workspace.Open(context.Background(), subDir, workspace.WithRestrictedMode(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  rootWS,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	subSess := mgr.Attach(api.ModeAuto, api.Permissions{}, nil)
+	subSess.SetWorkspace(subRestrictedWS)
+
+	repoWrite := &tools.Plan{ToolName: "write", Action: api.ActionWrite, Safety: api.SafetySafe, Target: "file.txt"}
+	if dec, _, _ := subSess.Evaluate(repoWrite); dec != tools.AccessDeny {
+		t.Fatalf("expected restricted subproject workspace to deny repo write even under trusted root manager, got %s", dec)
+	}
+}

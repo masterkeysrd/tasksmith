@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -36,6 +37,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/tasksmith/internal/version"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/oauth2"
 )
 
@@ -1950,8 +1952,64 @@ func TestHeaderCWDFallbackToQueryParam(t *testing.T) {
 }
 
 func TestSubprojectPreservesCWDAndLocalConfigs(t *testing.T) {
-	ctx := context.Background()
-	_, cli, wsDir := setupDaemonTest(t, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+
+	var (
+		mu             sync.Mutex
+		seenSubPrompts []string
+		step           int
+	)
+	provider := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			if len(req.Messages) > 0 {
+				sysText := req.Messages[0].GetContent().Text()
+				if !strings.Contains(sysText, "title-generator") {
+					mu.Lock()
+					seenSubPrompts = append(seenSubPrompts, sysText)
+					step++
+					curStep := step
+					mu.Unlock()
+
+					var content message.Content
+					switch curStep {
+					case 1:
+						content = message.Content{&message.ToolCall{
+							ID:   "bash-pwd",
+							Name: "bash",
+							Args: map[string]any{"command": "pwd"},
+						}}
+					case 2:
+						content = message.Content{&message.ToolCall{
+							ID:   "view-sub",
+							Name: "view",
+							Args: map[string]any{"path": "sub.txt"},
+						}}
+					default:
+						content = message.Content{&message.TextBlock{Text: "Done."}}
+					}
+					return func(yield func(message.AssistantChunk, error) bool) {
+						yield(message.AssistantChunk{
+							BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+							Model:     req.Model,
+							Content:   content,
+							Done:      true,
+						}, nil)
+					}, nil
+				}
+			}
+			return func(yield func(message.AssistantChunk, error) bool) {
+				yield(message.AssistantChunk{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content:   message.Content{&message.TextBlock{Text: "Title"}},
+					Done:      true,
+				}, nil)
+			}, nil
+		},
+	}
+
+	_, cli, wsDir := setupDaemonTest(t, provider)
 
 	// Workspace root configuration
 	wsManifest := `---
@@ -1960,18 +2018,53 @@ kind: Workspace
 metadata:
   name: mono-repo
 spec:
-  projects: [".", "packages/sub"]
+  projects: [".", "packages/sub", "packages/other"]
 ---
 Root workspace.
 `
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
 		t.Fatalf("WriteFile WORKSPACE.md: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(wsDir, "AGENTS.md"), []byte("Root AGENTS instructions."), 0o644); err != nil {
+		t.Fatalf("WriteFile root AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "root-only.txt"), []byte("from-root\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile root-only.txt: %v", err)
+	}
 
 	rootAgentsDir := filepath.Join(wsDir, ".agents")
-	if err := os.MkdirAll(rootAgentsDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll rootAgentsDir: %v", err)
+	rootProvDir := filepath.Join(rootAgentsDir, "providers")
+	if err := os.MkdirAll(rootProvDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll rootProvDir: %v", err)
 	}
+	provYAML := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: fake
+spec:
+  type: ollama
+  defaultModels:
+    completion: root-model
+  models:
+    - id: root-model
+      capabilities:
+        completion: true
+        thinking:
+          - type: effort
+            default: high
+            allowedEfforts: ["low", "high"]
+    - id: sub-model
+      capabilities:
+        completion: true
+        thinking:
+          - type: effort
+            default: high
+            allowedEfforts: ["low", "high"]
+`
+	if err := os.WriteFile(filepath.Join(rootProvDir, "fake.yaml"), []byte(provYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile fake.yaml: %v", err)
+	}
+
 	rootAgentMD := `---
 apiVersion: warp/v1alpha1
 kind: Agent
@@ -1979,11 +2072,13 @@ metadata:
   name: main
   description: "Root agent"
 spec:
+  models: ["fake/root-model"]
   thinking:
     type: effort
     effort: high
 ---
 Root agent instructions.
+{{if .Context}}<project_context path="{{.Context.Path}}">{{.Context.Instructions}}</project_context>{{end}}
 `
 	if err := os.WriteFile(filepath.Join(rootAgentsDir, "main.agent.md"), []byte(rootAgentMD), 0o644); err != nil {
 		t.Fatalf("WriteFile root main.agent.md: %v", err)
@@ -1995,6 +2090,15 @@ Root agent instructions.
 	if err := os.MkdirAll(subAgentsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll subAgentsDir: %v", err)
 	}
+	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatalf("TrustFolder subDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "AGENTS.md"), []byte("Subproject AGENTS instructions."), 0o644); err != nil {
+		t.Fatalf("WriteFile sub AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "sub.txt"), []byte("from-subproject\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile sub.txt: %v", err)
+	}
 	subAgentMD := `---
 apiVersion: warp/v1alpha1
 kind: Agent
@@ -2002,20 +2106,32 @@ metadata:
   name: main
   description: "Subproject agent"
 spec:
+  tools: ["bash", "view"]
+  models: ["fake/sub-model"]
   thinking:
     type: effort
     effort: low
 ---
 Subproject agent instructions.
+{{if .Context}}<project_context path="{{.Context.Path}}">{{.Context.Instructions}}</project_context>{{end}}
 `
 	if err := os.WriteFile(filepath.Join(subAgentsDir, "main.agent.md"), []byte(subAgentMD), 0o644); err != nil {
 		t.Fatalf("WriteFile sub main.agent.md: %v", err)
 	}
 
+	otherDir := filepath.Join(wsDir, "packages", "other")
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll otherDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(otherDir, "other.txt"), []byte("from-other\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile other.txt: %v", err)
+	}
+
 	rootCLI := cli.WithCWD(wsDir)
 	subCLI := cli.WithCWD(subDir)
+	otherCLI := cli.WithCWD(otherDir)
 
-	// Verify Root workspace
+	// Open rootCLI FIRST and verify root workspace & session
 	rootWS, err := rootCLI.GetWorkspace(ctx)
 	if err != nil {
 		t.Fatalf("rootCLI.GetWorkspace: %v", err)
@@ -2030,8 +2146,18 @@ Subproject agent instructions.
 	if rootAgent.Thinking == nil || rootAgent.Thinking.Effort != "high" || rootAgent.Description != "Root agent" {
 		t.Errorf("rootAgent = %+v, want Effort='high' and Description='Root agent'", rootAgent)
 	}
+	rootSess, err := rootCLI.CreateSession(ctx, api.CreateSessionRequest{Title: "root-session"})
+	if err != nil {
+		t.Fatalf("rootCLI.CreateSession: %v", err)
+	}
+	if rootSess.WorkDir != wsDir {
+		t.Errorf("rootSess.WorkDir = %q, want %q", rootSess.WorkDir, wsDir)
+	}
+	if rootSess.Config.Model != "fake/root-model" {
+		t.Errorf("rootSess.Config.Model = %q, want fake/root-model", rootSess.Config.Model)
+	}
 
-	// Verify Subproject preserves subDir CWD and shadows local agent config
+	// Verify Subproject preserves subDir CWD, local agent/model overrides, and WorkDir
 	subWS, err := subCLI.GetWorkspace(ctx)
 	if err != nil {
 		t.Fatalf("subCLI.GetWorkspace: %v", err)
@@ -2042,12 +2168,1021 @@ Subproject agent instructions.
 	if subWS.RootDir != wsDir {
 		t.Errorf("subWS.RootDir = %q, want %q", subWS.RootDir, wsDir)
 	}
+	if subWS.DefaultModel == nil || subWS.DefaultModel.ID != "fake/sub-model" || subWS.DefaultModel.ThinkingDefault == nil || subWS.DefaultModel.ThinkingDefault.Effort != "low" {
+		t.Errorf("subWS.DefaultModel = %+v, want fake/sub-model with Effort='low'", subWS.DefaultModel)
+	}
 	subAgent, err := subCLI.GetAgent(ctx, "main")
 	if err != nil {
 		t.Fatalf("subCLI.GetAgent('main'): %v", err)
 	}
 	if subAgent.Thinking == nil || subAgent.Thinking.Effort != "low" || subAgent.Description != "Subproject agent" {
 		t.Errorf("subAgent = %+v, want Effort='low' and Description='Subproject agent'", subAgent)
+	}
+
+	subPreview, err := subCLI.PreviewSession(ctx, api.PreviewSessionRequest{})
+	if err != nil {
+		t.Fatalf("subCLI.PreviewSession: %v", err)
+	}
+	if subPreview.Config.Model != "fake/sub-model" {
+		t.Errorf("subPreview.Config.Model = %q, want fake/sub-model", subPreview.Config.Model)
+	}
+	if subPreview.Model == nil || subPreview.Model.ThinkingDefault == nil || subPreview.Model.ThinkingDefault.Effort != "low" {
+		t.Errorf("subPreview.Model = %+v, want ThinkingDefault.Effort='low'", subPreview.Model)
+	}
+
+	subSess, err := subCLI.CreateSession(ctx, api.CreateSessionRequest{
+		Title:  "sub-session",
+		Config: api.SessionConfig{Mode: api.ModeAuto},
+	})
+	if err != nil {
+		t.Fatalf("subCLI.CreateSession: %v", err)
+	}
+	if subSess.WorkDir != subDir {
+		t.Fatalf("subSess.WorkDir = %q, want %q", subSess.WorkDir, subDir)
+	}
+	if subSess.Config.Model != "fake/sub-model" {
+		t.Errorf("subSess.Config.Model = %q, want fake/sub-model", subSess.Config.Model)
+	}
+	if subSess.Model == nil || subSess.Model.ThinkingDefault == nil || subSess.Model.ThinkingDefault.Effort != "low" {
+		t.Errorf("subSess.Model = %+v, want ThinkingDefault.Effort='low'", subSess.Model)
+	}
+
+	// Execute bash (pwd) and view (sub.txt) in subSess
+	ready := make(chan struct{})
+	doneTurn := make(chan struct{})
+	var (
+		turnErr     error
+		toolOutputs = make(map[string]api.Message)
+	)
+	go func() {
+		for event, err := range subCLI.EventsWithReady(ctx, "", "", func(string) { close(ready) }, api.SessionStreamTopic(subSess.ID)) {
+			if err != nil {
+				return
+			}
+			switch event.Type {
+			case api.EventError:
+				if ev, ok := event.Payload.(api.ErrorEvent); ok {
+					turnErr = errors.New(ev.Error)
+				}
+				close(doneTurn)
+				return
+			case api.EventEntryAdded:
+				if ev, ok := event.Payload.(api.EntryAddedEvent); ok && ev.Entry.Message != nil && ev.Entry.Message.Role == api.RoleTool {
+					toolOutputs[ev.Entry.Message.ToolCallID] = *ev.Entry.Message
+				}
+			case api.EventCompleted:
+				close(doneTurn)
+				return
+			}
+		}
+	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := subCLI.Send(ctx, subSess.ID, api.SendRequest{Content: "Run pwd and read sub.txt"}); err != nil {
+		t.Fatalf("subCLI.Send: %v", err)
+	}
+	select {
+	case <-doneTurn:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if turnErr != nil {
+		t.Fatalf("subSess turn error: %v", turnErr)
+	}
+
+	mu.Lock()
+	if len(seenSubPrompts) == 0 {
+		mu.Unlock()
+		t.Fatal("expected subproject turn to invoke provider")
+	}
+	sysPrompt := seenSubPrompts[0]
+	mu.Unlock()
+	if !strings.Contains(sysPrompt, "Subproject agent instructions.") || !strings.Contains(sysPrompt, "Subproject AGENTS instructions.") {
+		t.Errorf("subSess system prompt missing subproject agent/AGENTS.md: %q", sysPrompt)
+	}
+	if strings.Contains(sysPrompt, "Root agent instructions.") || strings.Contains(sysPrompt, "Root AGENTS instructions.") {
+		t.Errorf("subSess system prompt leaked root agent/AGENTS.md: %q", sysPrompt)
+	}
+
+	bashMsg, ok := toolOutputs["bash-pwd"]
+	if !ok || bashMsg.IsError {
+		t.Fatalf("bash-pwd result = %+v (ok=%v)", bashMsg, ok)
+	}
+	var bashOut api.BashOutput
+	if err := json.Unmarshal(bashMsg.StructuredContent, &bashOut); err != nil {
+		t.Fatalf("decode bash output: %v", err)
+	}
+	if strings.TrimSpace(bashOut.Output) != subDir {
+		t.Errorf("bash pwd = %q, want %q", strings.TrimSpace(bashOut.Output), subDir)
+	}
+
+	viewMsg, ok := toolOutputs["view-sub"]
+	if !ok || viewMsg.IsError {
+		t.Fatalf("view-sub result = %+v (ok=%v)", viewMsg, ok)
+	}
+	var viewOut api.ViewOutput
+	if err := json.Unmarshal(viewMsg.StructuredContent, &viewOut); err != nil {
+		t.Fatalf("decode view output: %v", err)
+	}
+	if !strings.Contains(viewOut.Content, "from-subproject") {
+		t.Errorf("view sub.txt content = %q, want 'from-subproject'", viewOut.Content)
+	}
+
+	// Verify file indexing scopes to subDir (with and without SessionID)
+	for _, sessID := range []string{"", subSess.ID} {
+		files, err := subCLI.ListWorkspaceFiles(ctx, api.ListFilesRequest{SessionID: sessID, Limit: 50})
+		if err != nil {
+			t.Fatalf("subCLI.ListWorkspaceFiles(sessionID=%q): %v", sessID, err)
+		}
+		var sawSub, sawRoot, sawOther bool
+		for _, f := range files {
+			switch f.Path {
+			case "sub.txt":
+				sawSub = true
+			case "root-only.txt":
+				sawRoot = true
+			case "other.txt":
+				sawOther = true
+			}
+		}
+		if !sawSub || sawRoot || sawOther {
+			t.Errorf("subCLI.ListWorkspaceFiles(sessionID=%q) = %+v (sawSub=%v, sawRoot=%v, sawOther=%v)", sessID, files, sawSub, sawRoot, sawOther)
+		}
+	}
+
+	// Verify LatestSession scopes per WorkDir (-c / --continue)
+	latestRoot, err := rootCLI.LatestSession(ctx)
+	if err != nil {
+		t.Fatalf("rootCLI.LatestSession: %v", err)
+	}
+	if latestRoot == nil || latestRoot.ID != rootSess.ID {
+		t.Errorf("rootCLI.LatestSession = %+v, want %q", latestRoot, rootSess.ID)
+	}
+	latestSub, err := subCLI.LatestSession(ctx)
+	if err != nil {
+		t.Fatalf("subCLI.LatestSession: %v", err)
+	}
+	if latestSub == nil || latestSub.ID != subSess.ID {
+		t.Errorf("subCLI.LatestSession = %+v, want %q", latestSub, subSess.ID)
+	}
+	latestOther, err := otherCLI.LatestSession(ctx)
+	if err != nil {
+		t.Fatalf("otherCLI.LatestSession: %v", err)
+	}
+	if latestOther != nil {
+		t.Errorf("otherCLI.LatestSession = %+v, want nil when subproject has no sessions", latestOther)
+	}
+
+	// Deleting a subproject session must never delete subDir on disk.
+	disposable, err := subCLI.CreateSession(ctx, api.CreateSessionRequest{Title: "disposable"})
+	if err != nil {
+		t.Fatalf("CreateSession disposable: %v", err)
+	}
+	if err := subCLI.DeleteSession(ctx, disposable.ID); err != nil {
+		t.Fatalf("DeleteSession disposable: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(subDir, "sub.txt")); err != nil {
+		t.Fatalf("DeleteSession removed subproject files: %v", err)
+	}
+}
+
+func TestSubprojectSessionRestoreFromSQLite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-subproject-restore-test")
+	t.Cleanup(xdg.ClearCache)
+
+	wsDir := shortTempDir(t)
+	subDir := filepath.Join(wsDir, "packages", "sub")
+	if err := os.MkdirAll(filepath.Join(wsDir, ".agents", "providers"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(subDir, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+
+	wsManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: restore-mono\nspec:\n  projects: [\".\", \"packages/sub\"]\n---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provYAML := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: fake
+spec:
+  type: ollama
+  defaultModels:
+    completion: root-model
+  models:
+    - id: root-model
+      capabilities:
+        completion: true
+        thinking:
+          - type: effort
+            default: high
+            allowedEfforts: ["low", "high"]
+    - id: sub-model
+      capabilities:
+        completion: true
+        thinking:
+          - type: effort
+            default: high
+            allowedEfforts: ["low", "high"]
+`
+	if err := os.WriteFile(filepath.Join(wsDir, ".agents", "providers", "fake.yaml"), []byte(provYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rootAgentMD := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: main\nspec:\n  models: [\"fake/root-model\"]\n  thinking:\n    type: effort\n    effort: high\n---\nRoot agent.\n{{if .Context}}<project_context path=\"{{.Context.Path}}\">{{.Context.Instructions}}</project_context>{{end}}\n"
+	if err := os.WriteFile(filepath.Join(wsDir, ".agents", "main.agent.md"), []byte(rootAgentMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "AGENTS.md"), []byte("Root context."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	subAgentMD := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: main\nspec:\n  tools: [\"bash\"]\n  models: [\"fake/sub-model\"]\n  thinking:\n    type: effort\n    effort: low\n---\nSubagent restored.\n{{if .Context}}<project_context path=\"{{.Context.Path}}\">{{.Context.Instructions}}</project_context>{{end}}\n"
+	if err := os.WriteFile(filepath.Join(subDir, ".agents", "main.agent.md"), []byte(subAgentMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "AGENTS.md"), []byte("Subproject restored context."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, ".env"), []byte("SUBPROJECT_RESTORE_ENV=sub-env-ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	startDaemon := func(prov *fakeProvider) (*Daemon, *client.Client) {
+		runDir := shortTempDir(t)
+		srv, err := New(Config{
+			SocketPath:            filepath.Join(runDir, "b.sock"),
+			LockPath:              filepath.Join(runDir, "b.lock"),
+			GatewayPool:           newFakeGatewayPool(prov),
+			Logger:                log.Default(),
+			DisableMCPAutoConnect: true,
+		})
+		if err != nil {
+			t.Fatalf("daemon.New: %v", err)
+		}
+		if err := srv.Start(ctx); err != nil {
+			t.Fatalf("srv.Start: %v", err)
+		}
+		c, err := client.New(srv.SocketPath(), client.WithCWD(wsDir))
+		if err != nil {
+			_ = srv.Close(ctx)
+			t.Fatalf("client.New: %v", err)
+		}
+		return srv, c
+	}
+
+	srv1, cli1 := startDaemon(&fakeProvider{})
+	rootSess, err := cli1.WithCWD(wsDir).CreateSession(ctx, api.CreateSessionRequest{Title: "root"})
+	if err != nil {
+		t.Fatalf("cli1 root CreateSession: %v", err)
+	}
+	subSess, err := cli1.WithCWD(subDir).CreateSession(ctx, api.CreateSessionRequest{
+		Title:  "sub",
+		Config: api.SessionConfig{Mode: api.ModeAuto},
+	})
+	if err != nil {
+		t.Fatalf("cli1 sub CreateSession: %v", err)
+	}
+	if err := srv1.Close(ctx); err != nil {
+		t.Fatalf("srv1.Close: %v", err)
+	}
+
+	var (
+		mu             sync.Mutex
+		restoredPrompt string
+		step           int
+	)
+	prov2 := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			if len(req.Messages) > 0 {
+				sysText := req.Messages[0].GetContent().Text()
+				if !strings.Contains(sysText, "title-generator") {
+					mu.Lock()
+					restoredPrompt = sysText
+					step++
+					cur := step
+					mu.Unlock()
+
+					var content message.Content
+					if cur == 1 {
+						content = message.Content{&message.ToolCall{
+							ID:   "bash-env",
+							Name: "bash",
+							Args: map[string]any{"command": "pwd && printf '%s' \"$SUBPROJECT_RESTORE_ENV\""},
+						}}
+					} else {
+						content = message.Content{&message.TextBlock{Text: "Restored."}}
+					}
+					return func(yield func(message.AssistantChunk, error) bool) {
+						yield(message.AssistantChunk{
+							BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+							Model:     req.Model,
+							Content:   content,
+							Done:      true,
+						}, nil)
+					}, nil
+				}
+			}
+			return func(yield func(message.AssistantChunk, error) bool) {
+				yield(message.AssistantChunk{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content:   message.Content{&message.TextBlock{Text: "Title"}},
+					Done:      true,
+				}, nil)
+			}, nil
+		},
+	}
+
+	srv2, cli2 := startDaemon(prov2)
+	t.Cleanup(func() { _ = srv2.Close(context.Background()) })
+
+	rootCLI2 := cli2.WithCWD(wsDir)
+	subCLI2 := cli2.WithCWD(subDir)
+
+	// Open root workspace FIRST in srv2 so owner is rootDir, then restore subSess via SQLite.
+	if _, err := rootCLI2.GetWorkspace(ctx); err != nil {
+		t.Fatalf("rootCLI2.GetWorkspace: %v", err)
+	}
+
+	restored, err := rootCLI2.GetSession(ctx, subSess.ID)
+	if err != nil {
+		t.Fatalf("rootCLI2.GetSession(subSess): %v", err)
+	}
+	if restored.WorkDir != subDir {
+		t.Errorf("restored.WorkDir = %q, want %q", restored.WorkDir, subDir)
+	}
+	if restored.Config.Model != "fake/sub-model" {
+		t.Errorf("restored.Config.Model = %q, want fake/sub-model", restored.Config.Model)
+	}
+	if restored.Model == nil || restored.Model.ThinkingDefault == nil || restored.Model.ThinkingDefault.Effort != "low" {
+		t.Errorf("restored.Model = %+v, want ThinkingDefault.Effort='low'", restored.Model)
+	}
+
+	// Verify LatestSession scoping after cold restart
+	if latestRoot, err := rootCLI2.LatestSession(ctx); err != nil || latestRoot == nil || latestRoot.ID != rootSess.ID {
+		t.Errorf("rootCLI2.LatestSession = (%+v, %v), want %q", latestRoot, err, rootSess.ID)
+	}
+	if latestSub, err := subCLI2.LatestSession(ctx); err != nil || latestSub == nil || latestSub.ID != subSess.ID {
+		t.Errorf("subCLI2.LatestSession = (%+v, %v), want %q", latestSub, err, subSess.ID)
+	}
+
+	// Verify restored session executes tools in subDir with subproject .env and AGENTS.md
+	ready := make(chan struct{})
+	doneTurn := make(chan struct{})
+	var bashMsg api.Message
+	var turnErr error
+	go func() {
+		for event, err := range subCLI2.EventsWithReady(ctx, "", "", func(string) { close(ready) }, api.SessionStreamTopic(subSess.ID)) {
+			if err != nil {
+				return
+			}
+			switch event.Type {
+			case api.EventError:
+				if ev, ok := event.Payload.(api.ErrorEvent); ok {
+					turnErr = errors.New(ev.Error)
+				}
+				close(doneTurn)
+				return
+			case api.EventEntryAdded:
+				if ev, ok := event.Payload.(api.EntryAddedEvent); ok && ev.Entry.Message != nil && ev.Entry.Message.Role == api.RoleTool {
+					bashMsg = *ev.Entry.Message
+				}
+			case api.EventCompleted:
+				close(doneTurn)
+				return
+			}
+		}
+	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := subCLI2.Send(ctx, subSess.ID, api.SendRequest{Content: "Verify restored subproject env and pwd"}); err != nil {
+		t.Fatalf("subCLI2.Send: %v", err)
+	}
+	select {
+	case <-doneTurn:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if turnErr != nil {
+		t.Fatalf("restored turn error: %v", turnErr)
+	}
+
+	mu.Lock()
+	gotPrompt := restoredPrompt
+	mu.Unlock()
+	if !strings.Contains(gotPrompt, "Subagent restored.") || !strings.Contains(gotPrompt, "Subproject restored context.") {
+		t.Errorf("restored system prompt missing subproject agent/AGENTS.md: %q", gotPrompt)
+	}
+	if strings.Contains(gotPrompt, "Root agent.") || strings.Contains(gotPrompt, "Root context.") {
+		t.Errorf("restored system prompt leaked root agent/AGENTS.md: %q", gotPrompt)
+	}
+
+	var bashOut api.BashOutput
+	if err := json.Unmarshal(bashMsg.StructuredContent, &bashOut); err != nil {
+		t.Fatalf("decode bash output: %v (msg=%+v)", err, bashMsg)
+	}
+	if !strings.Contains(bashOut.Output, subDir) || !strings.Contains(bashOut.Output, "sub-env-ok") {
+		t.Errorf("restored bash output = %q, want %q and sub-env-ok", bashOut.Output, subDir)
+	}
+}
+
+func TestSubprojectReceivesDiscoveredMCPToolsAndResources(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+
+	mcpSrv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "notes-server", Version: "1.0.0"}, nil)
+	type echoIn struct {
+		Text string `json:"text"`
+	}
+	type echoOut struct {
+		Text string `json:"text"`
+	}
+	falseVal := false
+	sdkmcp.AddTool(mcpSrv, &sdkmcp.Tool{
+		Name:        "echo",
+		Description: "Echo note",
+		Annotations: &sdkmcp.ToolAnnotations{
+			ReadOnlyHint:    true,
+			DestructiveHint: &falseVal,
+			OpenWorldHint:   &falseVal,
+		},
+	}, func(_ context.Context, _ *sdkmcp.CallToolRequest, in echoIn) (*sdkmcp.CallToolResult, echoOut, error) {
+		return nil, echoOut{Text: "sub-echo:" + in.Text}, nil
+	})
+	mcpSrv.AddResource(&sdkmcp.Resource{URI: "file:///notes/readme.md", Name: "readme", MIMEType: "text/markdown"},
+		func(_ context.Context, _ *sdkmcp.ReadResourceRequest) (*sdkmcp.ReadResourceResult, error) {
+			return &sdkmcp.ReadResourceResult{Contents: []*sdkmcp.ResourceContents{{
+				URI:      "file:///notes/readme.md",
+				MIMEType: "text/markdown",
+				Text:     "hello mcp resource",
+			}}}, nil
+		})
+	httpSrv := httptest.NewServer(sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return mcpSrv }, nil))
+	defer httpSrv.Close()
+
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-subproject-mcp-test")
+	t.Cleanup(xdg.ClearCache)
+
+	var (
+		mu   sync.Mutex
+		step int
+	)
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			if len(req.Messages) > 0 && strings.Contains(req.Messages[0].GetContent().Text(), "title-generator") {
+				return func(yield func(message.AssistantChunk, error) bool) {
+					yield(message.AssistantChunk{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content:   message.Content{&message.TextBlock{Text: "Title"}},
+						Done:      true,
+					}, nil)
+				}, nil
+			}
+			mu.Lock()
+			step++
+			cur := step
+			mu.Unlock()
+
+			var content message.Content
+			switch cur {
+			case 1:
+				content = message.Content{&message.ToolCall{
+					ID:   "call-echo",
+					Name: "notes__echo",
+					Args: map[string]any{"text": "ping"},
+				}}
+			case 2:
+				content = message.Content{&message.ToolCall{
+					ID:   "call-res",
+					Name: "read_mcp_resource",
+					Args: map[string]any{"server": "notes", "uri": "file:///notes/readme.md"},
+				}}
+			default:
+				content = message.Content{&message.TextBlock{Text: "MCP ok"}}
+			}
+			return func(yield func(message.AssistantChunk, error) bool) {
+				yield(message.AssistantChunk{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content:   content,
+					Done:      true,
+				}, nil)
+			}, nil
+		},
+	}
+
+	runDir := shortTempDir(t)
+	srv, err := New(Config{
+		SocketPath:  filepath.Join(runDir, "b.sock"),
+		LockPath:    filepath.Join(runDir, "b.lock"),
+		GatewayPool: newFakeGatewayPool(prov),
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("daemon.New: %v", err)
+	}
+	if err := srv.Start(ctx); err != nil {
+		t.Fatalf("srv.Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close(context.Background()) })
+
+	wsDir := shortTempDir(t)
+	subDir := filepath.Join(wsDir, "packages", "sub")
+	if err := os.MkdirAll(filepath.Join(wsDir, ".agents", "mcps"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(subDir, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: mcp-mono\nspec:\n  projects: [\".\", \"packages/sub\"]\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mcpManifest := fmt.Sprintf("---\napiVersion: warp/v1alpha1\nkind: MCP\nmetadata:\n  name: notes\nspec:\n  type: http\n  endpoint: %s\n---\n", httpSrv.URL)
+	if err := os.WriteFile(filepath.Join(wsDir, ".agents", "mcps", "notes.mcp.yaml"), []byte(mcpManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "AGENTS.md"), []byte("subproject mcp"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := client.New(srv.SocketPath(), client.WithCWD(wsDir))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+	rootCLI := cli.WithCWD(wsDir)
+	subCLI := cli.WithCWD(subDir)
+
+	// Open root FIRST and wait until root has discovered both the MCP tool and resource
+	// BEFORE opening the subproject runtime.
+	if _, err := rootCLI.GetWorkspace(ctx); err != nil {
+		t.Fatalf("rootCLI.GetWorkspace: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mcps, err := rootCLI.ListMCPs(ctx)
+		if err != nil {
+			t.Fatalf("rootCLI.ListMCPs: %v", err)
+		}
+		if len(mcps) == 1 && mcps[0].Status == api.MCPStatusConnected && len(mcps[0].Tools) > 0 && len(mcps[0].Resources) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for root MCP discovery: %+v", mcps)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Subproject opened AFTER discovery must immediately list notes__echo and read_mcp_resource.
+	subTools, err := subCLI.ListTools(ctx, "main")
+	if err != nil {
+		t.Fatalf("subCLI.ListTools: %v", err)
+	}
+	hasTool := func(list []api.Tool, name string) bool {
+		for _, tl := range list {
+			if tl.Name == name && tl.Status != api.ToolStatusInactive && tl.Status != api.ToolStatusDenied {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasTool(subTools, "notes__echo") || !hasTool(subTools, "read_mcp_resource") {
+		t.Fatalf("subproject tools missing MCP tool/resource reader: %+v", subTools)
+	}
+
+	subSess, err := subCLI.CreateSession(ctx, api.CreateSessionRequest{
+		Title:  "sub-mcp",
+		Config: api.SessionConfig{Mode: api.ModeAuto},
+	})
+	if err != nil {
+		t.Fatalf("subCLI.CreateSession: %v", err)
+	}
+
+	ready := make(chan struct{})
+	doneTurn := make(chan struct{})
+	var (
+		turnErr     error
+		toolResults = make(map[string]api.Message)
+	)
+	go func() {
+		for event, err := range subCLI.EventsWithReady(ctx, "", "", func(string) { close(ready) }, api.SessionStreamTopic(subSess.ID)) {
+			if err != nil {
+				return
+			}
+			switch event.Type {
+			case api.EventError:
+				if ev, ok := event.Payload.(api.ErrorEvent); ok {
+					turnErr = errors.New(ev.Error)
+				}
+				close(doneTurn)
+				return
+			case api.EventPermissionRequested:
+				if ev, ok := event.Payload.(api.PermissionRequestedEvent); ok {
+					turnErr = fmt.Errorf("unexpected permission request: %+v", ev.Permissions)
+				}
+				close(doneTurn)
+				return
+			case api.EventEntryAdded:
+				if ev, ok := event.Payload.(api.EntryAddedEvent); ok && ev.Entry.Message != nil && ev.Entry.Message.Role == api.RoleTool {
+					toolResults[ev.Entry.Message.ToolCallID] = *ev.Entry.Message
+				}
+			case api.EventCompleted:
+				close(doneTurn)
+				return
+			}
+		}
+	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := subCLI.Send(ctx, subSess.ID, api.SendRequest{Content: "Call MCP tool and resource"}); err != nil {
+		t.Fatalf("subCLI.Send: %v", err)
+	}
+	select {
+	case <-doneTurn:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if turnErr != nil {
+		t.Fatalf("subSess MCP turn error: %v", turnErr)
+	}
+	if msg := toolResults["call-echo"]; msg.IsError || !strings.Contains(fmt.Sprint(msg.Content), "sub-echo:ping") {
+		t.Fatalf("notes__echo result = %+v", msg)
+	}
+	if msg := toolResults["call-res"]; msg.IsError || !strings.Contains(string(msg.StructuredContent), "hello mcp resource") {
+		t.Fatalf("read_mcp_resource result = %+v (structured=%s)", msg, string(msg.StructuredContent))
+	}
+
+	// Reloading root must re-sync MCP tools onto the subproject workspace too.
+	if err := rootCLI.ReloadWorkspace(ctx); err != nil {
+		t.Fatalf("rootCLI.ReloadWorkspace: %v", err)
+	}
+	subToolsAfter, err := subCLI.ListTools(ctx, "main")
+	if err != nil {
+		t.Fatalf("subCLI.ListTools after reload: %v", err)
+	}
+	if !hasTool(subToolsAfter, "notes__echo") || !hasTool(subToolsAfter, "read_mcp_resource") {
+		t.Fatalf("subproject tools after root reload missing MCP tool/resource reader: %+v", subToolsAfter)
+	}
+}
+
+func TestSubprojectReloadPropagatesFromRootToLiveSessions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+
+	var (
+		mu          sync.Mutex
+		seenPrompts []string
+	)
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			if len(req.Messages) > 0 {
+				sys := req.Messages[0].GetContent().Text()
+				if !strings.Contains(sys, "title-generator") {
+					mu.Lock()
+					seenPrompts = append(seenPrompts, sys)
+					mu.Unlock()
+				}
+			}
+			return func(yield func(message.AssistantChunk, error) bool) {
+				yield(message.AssistantChunk{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content:   message.Content{&message.TextBlock{Text: "ok"}},
+					Done:      true,
+				}, nil)
+			}, nil
+		},
+	}
+
+	_, cli, wsDir := setupDaemonTest(t, prov)
+	subDir := filepath.Join(wsDir, "packages", "sub")
+	if err := os.MkdirAll(filepath.Join(wsDir, ".agents", "providers"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(subDir, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: reload-mono\nspec:\n  projects: [\".\", \"packages/sub\"]\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	provYAML := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: fake
+spec:
+  type: ollama
+  defaultModels:
+    completion: m1
+  models:
+    - id: m1
+      capabilities:
+        completion: true
+        thinking:
+          - type: effort
+            default: low
+            allowedEfforts: ["low", "high"]
+`
+	if err := os.WriteFile(filepath.Join(wsDir, ".agents", "providers", "fake.yaml"), []byte(provYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSubFiles := func(agentsText, effort string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(subDir, "AGENTS.md"), []byte(agentsText), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		agentMD := fmt.Sprintf("---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: main\nspec:\n  models: [\"fake/m1\"]\n  thinking:\n    type: effort\n    effort: %s\n---\nSubagent body.\n{{if .Context}}<project_context path=\"{{.Context.Path}}\">{{.Context.Instructions}}</project_context>{{end}}\n", effort)
+		if err := os.WriteFile(filepath.Join(subDir, ".agents", "main.agent.md"), []byte(agentMD), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSubFiles("SUB_AGENTS_V1", "low")
+
+	rootCLI := cli.WithCWD(wsDir)
+	subCLI := cli.WithCWD(subDir)
+
+	if _, err := rootCLI.GetWorkspace(ctx); err != nil {
+		t.Fatal(err)
+	}
+	subSess, err := subCLI.CreateSession(ctx, api.CreateSessionRequest{Title: "sub-reload"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subSess.Model == nil || subSess.Model.ThinkingDefault == nil || subSess.Model.ThinkingDefault.Effort != "low" {
+		t.Fatalf("initial subSess.Model = %+v, want Effort='low'", subSess.Model)
+	}
+
+	// Mutate subproject config, then reload via ROOT runtime.
+	writeSubFiles("SUB_AGENTS_V2", "high")
+	if err := rootCLI.ReloadWorkspace(ctx); err != nil {
+		t.Fatalf("rootCLI.ReloadWorkspace: %v", err)
+	}
+
+	// Live subproject session and subCLI preview/workspace must reflect reloaded subproject files.
+	reloadedSess, err := subCLI.GetSession(ctx, subSess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloadedSess.Model == nil || reloadedSess.Model.ThinkingDefault == nil || reloadedSess.Model.ThinkingDefault.Effort != "high" {
+		t.Errorf("reloaded subSess.Model = %+v, want Effort='high'", reloadedSess.Model)
+	}
+	subPreview, err := subCLI.PreviewSession(ctx, api.PreviewSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subPreview.Model == nil || subPreview.Model.ThinkingDefault == nil || subPreview.Model.ThinkingDefault.Effort != "high" {
+		t.Errorf("subPreview.Model after root reload = %+v, want Effort='high'", subPreview.Model)
+	}
+
+	ready := make(chan struct{})
+	doneTurn := make(chan struct{})
+	go func() {
+		for event, err := range subCLI.EventsWithReady(ctx, "", "", func(string) { close(ready) }, api.SessionStreamTopic(subSess.ID)) {
+			if err != nil {
+				return
+			}
+			if event.Type == api.EventCompleted || event.Type == api.EventError {
+				close(doneTurn)
+				return
+			}
+		}
+	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := subCLI.Send(ctx, subSess.ID, api.SendRequest{Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-doneTurn:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seenPrompts) == 0 || !strings.Contains(seenPrompts[0], "SUB_AGENTS_V2") {
+		t.Errorf("live subproject session did not pick up SUB_AGENTS_V2 after root reload: %v", seenPrompts)
+	}
+}
+
+func TestSubprojectSandboxTrustIsolation(t *testing.T) {
+	ctx := context.Background()
+	srv, cli, wsDir := setupDaemonTest(t, nil)
+
+	untrustedSubDir := filepath.Join(wsDir, "packages", "untrusted")
+	if err := os.MkdirAll(untrustedSubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: trust-iso\nspec:\n  projects: [\".\", \"packages/untrusted\"]\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open the UNTRUSTED subproject FIRST to ensure it does not taint the trusted root,
+	// and trusted root does not taint the untrusted subproject.
+	subCLI := cli.WithCWD(untrustedSubDir)
+	rootCLI := cli.WithCWD(wsDir)
+
+	subWS, err := subCLI.GetWorkspace(ctx)
+	if err != nil {
+		t.Fatalf("subCLI.GetWorkspace: %v", err)
+	}
+	if !subWS.IsRestricted {
+		t.Fatalf("expected untrusted subproject IsRestricted=true, got false")
+	}
+	subSbx, err := subCLI.GetSandbox(ctx)
+	if err != nil {
+		t.Fatalf("subCLI.GetSandbox: %v", err)
+	}
+	if !subSbx.Restricted {
+		t.Fatalf("expected untrusted subproject Sandbox.Restricted=true, got false")
+	}
+
+	rootWS, err := rootCLI.GetWorkspace(ctx)
+	if err != nil {
+		t.Fatalf("rootCLI.GetWorkspace: %v", err)
+	}
+	if rootWS.IsRestricted {
+		t.Fatalf("expected trusted root IsRestricted=false even after untrusted subproject opened first")
+	}
+	rootSbx, err := rootCLI.GetSandbox(ctx)
+	if err != nil {
+		t.Fatalf("rootCLI.GetSandbox: %v", err)
+	}
+	if rootSbx.Restricted {
+		t.Fatalf("expected trusted root Sandbox.Restricted=false even after untrusted subproject opened first")
+	}
+
+	// Update sandbox settings with allowUnsandboxed=true on trusted root:
+	// trusted root keeps allowUnsandboxed=true, untrusted subproject keeps it forced false.
+	trueVal := true
+	if _, err := rootCLI.UpdateSandbox(ctx, api.UpdateSandboxRequest{
+		Scope:    api.ScopeProject,
+		Settings: api.SandboxSettings{AllowUnsandboxed: &trueVal},
+	}); err != nil {
+		t.Fatalf("rootCLI.UpdateSandbox: %v", err)
+	}
+	subSess, err := subCLI.CreateSession(ctx, api.CreateSessionRequest{Title: "untrusted-sub"})
+	if err != nil {
+		t.Fatalf("subCLI.CreateSession: %v", err)
+	}
+	rootSess, err := rootCLI.CreateSession(ctx, api.CreateSessionRequest{Title: "trusted-root"})
+	if err != nil {
+		t.Fatalf("rootCLI.CreateSession: %v", err)
+	}
+	subRT, err := srv.workspace(ctx, untrustedSubDir)
+	if err != nil {
+		t.Fatalf("srv.workspace(untrustedSubDir): %v", err)
+	}
+	rootRT, err := srv.workspace(ctx, wsDir)
+	if err != nil {
+		t.Fatalf("srv.workspace(wsDir): %v", err)
+	}
+	subEff, err := subRT.SandboxConfig().Effective()
+	if err != nil {
+		t.Fatalf("subRT.SandboxConfig().Effective: %v", err)
+	}
+	rootEff, err := rootRT.SandboxConfig().Effective()
+	if err != nil {
+		t.Fatalf("rootRT.SandboxConfig().Effective: %v", err)
+	}
+	if subEff.AllowUnsandboxed {
+		t.Errorf("untrusted subproject AllowUnsandboxed = true, want false")
+	}
+	if !rootEff.AllowUnsandboxed {
+		t.Errorf("trusted root AllowUnsandboxed = false, want true")
+	}
+	liveSub, err := subRT.GetSession(ctx, subSess.ID)
+	if err != nil || !liveSub.Sandbox.ReadOnly() {
+		t.Errorf("liveSub.Sandbox.ReadOnly = (%v, %v), want true", liveSub != nil && liveSub.Sandbox.ReadOnly(), err)
+	}
+	liveRoot, err := rootRT.GetSession(ctx, rootSess.ID)
+	if err != nil || liveRoot.Sandbox.ReadOnly() {
+		t.Errorf("liveRoot.Sandbox.ReadOnly = (%v, %v), want false", liveRoot != nil && liveRoot.Sandbox.ReadOnly(), err)
+	}
+
+	// Reloading root must leave root unrestricted and untrusted subproject restricted.
+	if err := rootCLI.ReloadWorkspace(ctx); err != nil {
+		t.Fatalf("rootCLI.ReloadWorkspace: %v", err)
+	}
+	if sbxNow, err := rootCLI.GetSandbox(ctx); err != nil || sbxNow.Restricted {
+		t.Fatalf("rootCLI.GetSandbox = (%+v, %v), want Restricted=false", sbxNow, err)
+	}
+	if subSbxNow, err := subCLI.GetSandbox(ctx); err != nil || !subSbxNow.Restricted {
+		t.Fatalf("subCLI.GetSandbox = (%+v, %v), want Restricted=true", subSbxNow, err)
+	}
+}
+
+func TestCreateSessionExplicitIDColdSQLiteNoDeadlock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-explicit-id-cold-test")
+	t.Cleanup(xdg.ClearCache)
+
+	wsDir := shortTempDir(t)
+	subDir := filepath.Join(wsDir, "packages", "sub")
+	if err := os.MkdirAll(filepath.Join(subDir, ".agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: cold-id\nspec:\n  projects: [\".\", \"packages/sub\"]\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "AGENTS.md"), []byte("cold id subproject"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	newDaemon := func() (*Daemon, *client.Client) {
+		runDir := shortTempDir(t)
+		srv, err := New(Config{
+			SocketPath:            filepath.Join(runDir, "b.sock"),
+			LockPath:              filepath.Join(runDir, "b.lock"),
+			GatewayPool:           newFakeGatewayPool(nil),
+			Logger:                log.Default(),
+			DisableMCPAutoConnect: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := srv.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		c, err := client.New(srv.SocketPath(), client.WithCWD(subDir))
+		if err != nil {
+			_ = srv.Close(ctx)
+			t.Fatal(err)
+		}
+		return srv, c
+	}
+
+	srv1, cli1 := newDaemon()
+	explicitID := uuid.Must(uuid.NewV7()).String()
+	created, err := cli1.CreateSession(ctx, api.CreateSessionRequest{
+		ID:    explicitID,
+		Title: "persisted-id",
+	})
+	if err != nil {
+		t.Fatalf("cli1.CreateSession: %v", err)
+	}
+	if created.WorkDir != subDir {
+		t.Fatalf("created.WorkDir = %q, want %q", created.WorkDir, subDir)
+	}
+	if err := srv1.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	srv2, cli2 := newDaemon()
+	t.Cleanup(func() { _ = srv2.Close(context.Background()) })
+
+	// Calling CreateSession with the same explicit ID against a cold SQLite store must
+	// return the persisted session without deadlocking on owner.createMu.
+	reused, err := cli2.CreateSession(ctx, api.CreateSessionRequest{
+		ID:    explicitID,
+		Title: "persisted-id",
+	})
+	if err != nil {
+		t.Fatalf("cli2.CreateSession(explicitID): %v", err)
+	}
+	if reused.ID != explicitID || reused.WorkDir != subDir {
+		t.Errorf("reused = (%q, %q), want (%q, %q)", reused.ID, reused.WorkDir, explicitID, subDir)
 	}
 }
 

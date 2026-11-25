@@ -30,6 +30,9 @@ CREATE INDEX IF NOT EXISTS idx_sessions_parent_id ON sessions(parent_id);`,
 	// must stay outside the parent/child tree used for delegation and cascade
 	// deletion.
 	`ALTER TABLE sessions ADD COLUMN forked_from TEXT NOT NULL DEFAULT '';`,
+	// 4: Index (parent_id, work_dir, updated_at) so per-subproject `--continue`
+	// lookups stay fast across multi-repo workspaces.
+	`CREATE INDEX IF NOT EXISTS idx_sessions_parent_work_dir ON sessions(parent_id, work_dir, updated_at);`,
 }
 
 // Migrate executes SQLite migrations for the session schema.

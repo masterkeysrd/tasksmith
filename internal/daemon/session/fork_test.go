@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -281,7 +282,7 @@ func TestSessionForkSurvivesRestore(t *testing.T) {
 		t.Errorf("persisted ForkedFrom = %q, want %q", dbSess.ForkedFrom, source.ID)
 	}
 
-	latest, err := mgr.store.Latest(ctx)
+	latest, err := mgr.store.Latest(ctx, LatestFilter{})
 	if err != nil {
 		t.Fatalf("store.Latest: %v", err)
 	}
@@ -297,7 +298,7 @@ func TestStoreLatestSkipsSubagentsAndOrdersByUpdate(t *testing.T) {
 
 	store := mgr.store
 
-	if _, err := store.Latest(ctx); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := store.Latest(ctx, LatestFilter{}); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("Latest on empty store = %v, want ErrSessionNotFound", err)
 	}
 
@@ -330,7 +331,7 @@ func TestStoreLatestSkipsSubagentsAndOrdersByUpdate(t *testing.T) {
 		t.Fatalf("Save child: %v", err)
 	}
 
-	got, err := store.Latest(ctx)
+	got, err := store.Latest(ctx, LatestFilter{})
 	if err != nil {
 		t.Fatalf("Latest: %v", err)
 	}
@@ -339,5 +340,73 @@ func TestStoreLatestSkipsSubagentsAndOrdersByUpdate(t *testing.T) {
 	}
 	if got.ForkedFrom != "" {
 		t.Errorf("ForkedFrom = %q, want empty", got.ForkedFrom)
+	}
+}
+
+func TestStoreLatestScopesByWorkDir(t *testing.T) {
+	ctx := context.Background()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+	defer func() { _ = mgr.Close() }()
+
+	store := mgr.store
+	rootDir := ws.RootDir()
+	subA := filepath.Join(rootDir, "repo-a")
+	subB := filepath.Join(rootDir, "repo-b")
+	subEmpty := filepath.Join(rootDir, "repo-c")
+
+	now := time.Now().UTC()
+	legacyRoot := &Session{
+		ID:        newV7(t),
+		Title:     "legacy-root",
+		WorkDir:   "",
+		CreatedAt: now.Add(-3 * time.Hour),
+		UpdatedAt: now.Add(-3 * time.Hour),
+	}
+	explicitRoot := &Session{
+		ID:        newV7(t),
+		Title:     "explicit-root",
+		WorkDir:   rootDir,
+		CreatedAt: now.Add(-2 * time.Hour),
+		UpdatedAt: now.Add(-2 * time.Hour),
+	}
+	sessA := &Session{
+		ID:        newV7(t),
+		Title:     "repo-a",
+		WorkDir:   subA,
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now.Add(-time.Hour),
+	}
+	sessB := &Session{
+		ID:        newV7(t),
+		Title:     "repo-b",
+		WorkDir:   subB,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	for _, s := range []*Session{legacyRoot, explicitRoot, sessA, sessB} {
+		if err := store.Save(ctx, s); err != nil {
+			t.Fatalf("Save(%s): %v", s.Title, err)
+		}
+	}
+
+	if got, err := store.Latest(ctx, LatestFilter{WorkDir: subA}); err != nil || got.ID != sessA.ID {
+		t.Errorf("Latest(subA) = (%v, %v), want %q", got, err, sessA.ID)
+	}
+	if got, err := store.Latest(ctx, LatestFilter{WorkDir: subB}); err != nil || got.ID != sessB.ID {
+		t.Errorf("Latest(subB) = (%v, %v), want %q", got, err, sessB.ID)
+	}
+	if _, err := store.Latest(ctx, LatestFilter{WorkDir: subEmpty}); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Latest(subEmpty) = %v, want ErrSessionNotFound", err)
+	}
+	if got, err := store.Latest(ctx, LatestFilter{WorkDir: rootDir, IncludeEmptyWorkDir: true}); err != nil || got.ID != explicitRoot.ID {
+		t.Errorf("Latest(rootDir) = (%v, %v), want %q", got, err, explicitRoot.ID)
+	}
+
+	// Legacy empty work_dir rows still match root queries when no explicit root session is newer.
+	if err := store.Delete(ctx, explicitRoot.ID); err != nil {
+		t.Fatalf("Delete explicitRoot: %v", err)
+	}
+	if got, err := store.Latest(ctx, LatestFilter{WorkDir: rootDir, IncludeEmptyWorkDir: true}); err != nil || got.ID != legacyRoot.ID {
+		t.Errorf("Latest(rootDir legacy fallback) = (%v, %v), want %q", got, err, legacyRoot.ID)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -93,10 +94,13 @@ type workspaceRuntime struct {
 	// mcpManager owns the workspace's live MCP connections. It is created once per
 	// workspace root and shared with sibling worktrees, which resolve MCP servers
 	// through the root workspace that the manager is attached to.
-	mcpManager  *mcp.Manager
-	fileIndexMu sync.Mutex
-	fileIndex   *std.FileIndex
-	indexSbx    sandbox.Sandbox
+	mcpManager       *mcp.Manager
+	siblingsMu       sync.RWMutex
+	siblings         []*workspaceRuntime
+	resolveWorkspace func(ctx context.Context, dir string) (*workspaceRuntime, error)
+	fileIndexMu      sync.Mutex
+	fileIndex        *std.FileIndex
+	indexSbx         sandbox.Sandbox
 }
 
 func (r *workspaceRuntime) Dir() string                       { return r.dir }
@@ -150,6 +154,42 @@ func (r *workspaceRuntime) RootWorkspace() *workspace.Workspace {
 	return owner.ws
 }
 
+func (r *workspaceRuntime) addSibling(rt *workspaceRuntime) {
+	owner := r.sessionOwnerOrSelf()
+	owner.siblingsMu.Lock()
+	defer owner.siblingsMu.Unlock()
+	if !slices.Contains(owner.siblings, rt) {
+		owner.siblings = append(owner.siblings, rt)
+	}
+}
+
+func (r *workspaceRuntime) snapshotSiblings() []*workspaceRuntime {
+	owner := r.sessionOwnerOrSelf()
+	owner.siblingsMu.RLock()
+	defer owner.siblingsMu.RUnlock()
+	if len(owner.siblings) == 0 {
+		return []*workspaceRuntime{owner}
+	}
+	return slices.Clone(owner.siblings)
+}
+
+type multiWorkspaceSyncer struct {
+	owner *workspaceRuntime
+}
+
+func (s *multiWorkspaceSyncer) SyncMCPTools(def *warp.MCP, rawTools []*warp.Tool) error {
+	var errs []error
+	for _, sib := range s.owner.snapshotSiblings() {
+		if sib.ws == nil {
+			continue
+		}
+		if err := sib.ws.SyncMCPTools(def, rawTools); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (r *workspaceRuntime) Reload(ctx context.Context) error {
 	r.reloadMu.Lock()
 	defer r.reloadMu.Unlock()
@@ -157,60 +197,56 @@ func (r *workspaceRuntime) Reload(ctx context.Context) error {
 }
 
 func (r *workspaceRuntime) reloadLocked(ctx context.Context) error {
-	nextWorkspace, commitWorkspace, err := r.ws.PrepareReload(ctx)
-	if err != nil {
-		return err
+	owner := r.sessionOwnerOrSelf()
+	siblings := owner.snapshotSiblings()
+
+	type preparedReload struct {
+		rt      *workspaceRuntime
+		ws      *workspace.Workspace
+		commit  func()
+		gw      gateway.Gateway
+		catalog *models.Catalog
 	}
-	sessionWorkspace := nextWorkspace
-	var commitSession func()
-	if r.sessionOwner != r {
-		sessionWorkspace, commitSession, err = r.sessionOwner.ws.PrepareReload(ctx)
+	prepared := make([]preparedReload, 0, len(siblings))
+	for _, sib := range siblings {
+		nextWS, commitWS, err := sib.ws.PrepareReload(ctx)
 		if err != nil {
 			return err
 		}
-	}
-	next, err := r.pool.Acquire(ctx, buildGatewayConfig(sessionWorkspace, recorderOf(r.metrics), r.authObserver))
-	if err != nil {
-		return err
-	}
-	catalog, err := models.BuildContext(ctx, nextWorkspace.Catalog(), next)
-	if err != nil {
-		return fmt.Errorf("daemon: build model catalog: %w", err)
-	}
-	sessionCatalog := catalog
-	if r.sessionOwner != r {
-		sessionCatalog, err = models.BuildContext(ctx, sessionWorkspace.Catalog(), next)
+		nextGW, err := sib.pool.Acquire(ctx, buildGatewayConfig(nextWS, recorderOf(sib.metrics), sib.authObserver))
 		if err != nil {
-			return fmt.Errorf("daemon: build session model catalog: %w", err)
+			return err
 		}
+		nextCat, err := models.BuildContext(ctx, nextWS.Catalog(), nextGW)
+		if err != nil {
+			return fmt.Errorf("daemon: build model catalog: %w", err)
+		}
+		prepared = append(prepared, preparedReload{
+			rt:      sib,
+			ws:      nextWS,
+			commit:  commitWS,
+			gw:      nextGW,
+			catalog: nextCat,
+		})
 	}
-	commitWorkspace()
-	if commitSession != nil {
-		commitSession()
+
+	for _, p := range prepared {
+		p.commit()
+		p.rt.gw.set(p.gw)
+		p.rt.catalog.set(p.catalog)
+		if p.rt.sandboxCfg != nil {
+			p.rt.sandboxCfg.SetRestricted(p.ws.IsRestricted())
+		}
+		p.rt.fileIndexMu.Lock()
+		if p.rt.fileIndex != nil {
+			p.rt.fileIndex.SetAllowExec(p.rt.ws != nil && !p.rt.ws.IsRestricted())
+			p.rt.fileIndex.Invalidate()
+		}
+		p.rt.fileIndexMu.Unlock()
 	}
-	r.gw.set(next)
-	if r.sessionOwner != r {
-		r.sessionOwner.gw.set(next)
-	}
-	r.catalog.set(catalog)
-	if r.sessionOwner != r {
-		r.sessionOwner.catalog.set(sessionCatalog)
-	}
-	r.reloadMCP(ctx, sessionWorkspace)
-	owner := r.sessionOwner
-	if owner == nil {
-		owner = r
-	}
-	if owner.sandboxCfg != nil {
-		owner.sandboxCfg.SetRestricted(sessionWorkspace.IsRestricted())
-	}
-	r.RefreshSessions()
-	r.fileIndexMu.Lock()
-	if r.fileIndex != nil {
-		r.fileIndex.SetAllowExec(r.ws != nil && !r.ws.IsRestricted())
-		r.fileIndex.Invalidate()
-	}
-	r.fileIndexMu.Unlock()
+
+	owner.reloadMCP(ctx, owner.ws)
+	owner.RefreshSessions()
 	return nil
 }
 
@@ -230,8 +266,22 @@ func (r *workspaceRuntime) reloadMCP(ctx context.Context, rootWorkspace *workspa
 	owner.mcpManager.Sync(ctx)
 }
 
+func (r *workspaceRuntime) closeFileIndex() {
+	r.fileIndexMu.Lock()
+	if r.fileIndex != nil {
+		_ = r.fileIndex.Close()
+		r.fileIndex = nil
+	}
+	if r.indexSbx != nil {
+		_ = r.indexSbx.Close()
+		r.indexSbx = nil
+	}
+	r.fileIndexMu.Unlock()
+}
+
 func (r *workspaceRuntime) Close() error {
 	if r.sessionOwner != nil && r.sessionOwner != r {
+		r.closeFileIndex()
 		return r.sessionOwner.Close()
 	}
 	if r.bgCancel != nil {
@@ -243,24 +293,17 @@ func (r *workspaceRuntime) Close() error {
 		}
 	}
 	r.wg.Wait()
-	if r.ws != nil {
-		r.ws.SetMCPService(nil)
+	for _, sib := range r.snapshotSiblings() {
+		if sib.ws != nil {
+			sib.ws.SetMCPService(nil)
+		}
 	}
 	if r.mcpManager != nil {
 		if err := r.mcpManager.Close(); err != nil {
 			slog.Warn("daemon: close MCP manager", "workspace", r.dir, "error", err)
 		}
 	}
-	r.fileIndexMu.Lock()
-	if r.fileIndex != nil {
-		_ = r.fileIndex.Close()
-		r.fileIndex = nil
-	}
-	if r.indexSbx != nil {
-		_ = r.indexSbx.Close()
-		r.indexSbx = nil
-	}
-	r.fileIndexMu.Unlock()
+	r.closeFileIndex()
 	var dbErr error
 	if r.db != nil {
 		dbErr = r.db.Close()
@@ -320,7 +363,7 @@ func (r *workspaceRuntime) getFileIndex() (*std.FileIndex, error) {
 	idx, err := std.NewFileIndex(std.FileIndexOptions{
 		Std:       stdInst,
 		AllowExec: r.ws != nil && !r.ws.IsRestricted(),
-		Lifecycle: r.bgCtx,
+		Lifecycle: r.sessionOwnerOrSelf().bgCtx,
 	})
 	if err != nil {
 		_ = sbx.Close()
@@ -384,29 +427,31 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		if existing.ws.RootDir() == rootDir {
 			db = existing.db
 			permMgr = existing.perms
-			sandboxMgr = existing.sessionOwner.sandboxCfg
 			owner = existing.sessionOwner
 			reloadMu = existing.reloadMu
 			break
 		}
 	}
 
-	if owner.sessionStore == nil {
-		gwCfg := buildGatewayConfig(ws, recorderOf(d.usage), d.auth)
-		gw, err := d.cfg.GatewayPool.Acquire(ctx, gwCfg)
-		if err != nil {
-			d.wsMu.Unlock()
-			return nil, fmt.Errorf("daemon: acquire gateway for %q: %w", rootDir, err)
-		}
-		owner.gw.set(gw)
-	}
-
-	catalog, err := models.BuildContext(ctx, ws.Catalog(), owner.gw.get())
+	gwCfg := buildGatewayConfig(ws, recorderOf(d.usage), d.auth)
+	gw, err := d.cfg.GatewayPool.Acquire(ctx, gwCfg)
 	if err != nil {
 		d.wsMu.Unlock()
-		return nil, fmt.Errorf("daemon: build model catalog for %q: %w", rootDir, err)
+		return nil, fmt.Errorf("daemon: acquire gateway for %q: %w", cleanDir, err)
+	}
+	gwSlot := owner.gw
+	if owner.sessionStore != nil {
+		gwSlot = &gatewaySlot{}
+	}
+	gwSlot.set(gw)
+
+	catalog, err := models.BuildContext(ctx, ws.Catalog(), gwSlot.get())
+	if err != nil {
+		d.wsMu.Unlock()
+		return nil, fmt.Errorf("daemon: build model catalog for %q: %w", cleanDir, err)
 	}
 
+	justStartedMCP := false
 	if owner.sessionStore == nil {
 		wsDataDir, err := xdg.WorkspaceDir(rootDir)
 		if err != nil {
@@ -481,7 +526,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		// never blocked by a slow or unreachable MCP server.
 		mgr, err := mcp.New(mcp.Options{
 			Definer:         ws,
-			Syncer:          ws,
+			Syncer:          &multiWorkspaceSyncer{owner: owner},
 			ReloadWorkspace: func(ctx context.Context) error { return owner.Reload(ctx) },
 			Env:             ws.Env(),
 			RenderOptions:   ws.RenderOptions(),
@@ -505,33 +550,39 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		}
 		owner.mcpManager = mgr
 		ws.SetMCPService(mgr)
-		mgr.Sync(context.WithoutCancel(ctx))
+		justStartedMCP = true
+	} else {
+		sandboxMgr = owner.sandboxCfg.WithRestricted(ws.IsRestricted())
+		if owner.mcpManager != nil {
+			ws.SetMCPService(owner.mcpManager)
+		}
 	}
 
 	rt := owner
 	if owner.catalog.get() != nil {
 		rt = &workspaceRuntime{
-			catalog:      &catalogSlot{},
-			dir:          cleanDir,
-			ws:           ws,
-			sessionOwner: owner,
-			reloadMu:     reloadMu,
-			gw:           owner.gw,
-			pool:         d.cfg.GatewayPool,
-			authObserver: d.auth,
-			metrics:      d.usage,
-			perms:        permMgr,
-			sandboxCfg:   sandboxMgr,
-			publisher:    d.broker,
-			logger:       d.logger,
-			db:           db,
+			catalog:          &catalogSlot{},
+			dir:              cleanDir,
+			ws:               ws,
+			sessionOwner:     owner,
+			reloadMu:         reloadMu,
+			gw:               gwSlot,
+			pool:             d.cfg.GatewayPool,
+			authObserver:     d.auth,
+			metrics:          d.usage,
+			perms:            permMgr,
+			sandboxCfg:       sandboxMgr,
+			publisher:        d.broker,
+			logger:           d.logger,
+			db:               db,
+			resolveWorkspace: d.workspace,
 		}
 	} else {
 		rt.dir = cleanDir
 		rt.ws = ws
 		rt.sessionOwner = owner
 		rt.reloadMu = reloadMu
-		rt.gw = owner.gw
+		rt.gw = gwSlot
 		rt.pool = d.cfg.GatewayPool
 		rt.authObserver = d.auth
 		rt.metrics = d.usage
@@ -544,10 +595,24 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		rt.publisher = d.broker
 		rt.logger = d.logger
 		rt.db = db
+		rt.resolveWorkspace = d.workspace
 	}
 	rt.catalog.set(catalog)
+	owner.addSibling(rt)
+	if !justStartedMCP && owner.mcpManager != nil {
+		if err := owner.mcpManager.SyncTo(ws); err != nil {
+			d.logger.Warn("daemon: sync discovered MCP tools to sibling workspace",
+				log.String("workspace", cleanDir),
+				log.String("error", err.Error()),
+			)
+		}
+	}
 	d.workspaces[cleanDir] = rt
 	d.wsMu.Unlock()
+
+	if justStartedMCP && owner.mcpManager != nil {
+		owner.mcpManager.Sync(context.WithoutCancel(ctx))
+	}
 
 	return rt, nil
 }
@@ -573,19 +638,20 @@ func (d *Daemon) Workspaces() []string {
 func (d *Daemon) reloadAllWorkspaces(ctx context.Context) {
 	d.wsMu.Lock()
 	seen := make(map[*workspaceRuntime]struct{}, len(d.workspaces))
-	runtimes := make([]*workspaceRuntime, 0, len(d.workspaces))
+	owners := make([]*workspaceRuntime, 0, len(d.workspaces))
 	for _, rt := range d.workspaces {
-		if _, ok := seen[rt]; !ok {
-			seen[rt] = struct{}{}
-			runtimes = append(runtimes, rt)
+		owner := rt.sessionOwnerOrSelf()
+		if _, ok := seen[owner]; !ok {
+			seen[owner] = struct{}{}
+			owners = append(owners, owner)
 		}
 	}
 	d.wsMu.Unlock()
 
-	for _, rt := range runtimes {
-		if err := rt.Reload(ctx); err != nil {
+	for _, owner := range owners {
+		if err := owner.Reload(ctx); err != nil {
 			d.logger.Warn("failed to reload workspace after provider update",
-				log.String("workspace", rt.dir),
+				log.String("workspace", owner.dir),
 				log.String("error", err.Error()),
 			)
 		}
@@ -605,6 +671,7 @@ func (d *Daemon) closeWorkspaces() error {
 	seen := make(map[*workspaceRuntime]struct{})
 	var errs []error
 	for _, rt := range runtimes {
+		rt.closeFileIndex()
 		owner := rt.SessionRuntime()
 		if owner == nil {
 			owner = rt

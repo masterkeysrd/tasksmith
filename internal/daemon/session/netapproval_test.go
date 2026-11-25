@@ -20,6 +20,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -42,6 +43,7 @@ func (m *askingPermManager) SetPlansDir(string)              {}
 func (m *askingPermManager) SetRuntimePolicy(*permissions.RuntimePolicy) {
 }
 func (m *askingPermManager) RuntimePolicy() *permissions.RuntimePolicy { return nil }
+func (m *askingPermManager) SetWorkspace(*workspace.Workspace)         {}
 func (m *askingPermManager) ForSubagent() permissions.SessionManager   { return m }
 func (m *askingPermManager) AddAllow(string) error                     { return nil }
 func (m *askingPermManager) AddDeny(string) error                      { return nil }

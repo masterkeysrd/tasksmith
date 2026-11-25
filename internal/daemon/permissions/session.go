@@ -35,6 +35,8 @@ type SessionManager interface {
 	SetRuntimePolicy(p *RuntimePolicy)
 	// RuntimePolicy returns the live sandbox posture, or nil when unset.
 	RuntimePolicy() *RuntimePolicy
+	// SetWorkspace binds permission and restriction checks to ws.
+	SetWorkspace(ws *workspace.Workspace)
 	ForSubagent() SessionManager
 	AddAllow(rule string) error
 	AddDeny(rule string) error
@@ -209,6 +211,19 @@ func (s *sessionState) runtimePolicy() *RuntimePolicy {
 // evaluating bash plans, or nil when unset.
 func (s *sessionManager) RuntimePolicy() *RuntimePolicy {
 	return s.runtimePolicy()
+}
+
+// SetWorkspace binds permission and restriction checks to ws.
+func (s *sessionManager) SetWorkspace(ws *workspace.Workspace) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ws = ws
+}
+
+func (s *sessionState) workspace() *workspace.Workspace {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ws
 }
 
 // ForSubagent returns a child [SessionManager] that shares the receiver's
@@ -396,7 +411,8 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	}
 
 	// 1. Evaluate the workspace and active-agent tool policy ceiling.
-	policyAction := evaluatePolicy(plan, s.Policies(), s.AgentPolicies(), s.ws)
+	ws := s.workspace()
+	policyAction := evaluatePolicy(plan, s.Policies(), s.AgentPolicies(), ws)
 	if policyAction == warp.ToolPolicyDeny {
 		return tools.AccessDeny, nil, nil
 	}
@@ -459,7 +475,7 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	// Restricted (untrusted) workspaces deny all mutating or side-effecting
 	// actions regardless of mode, while keeping the session-scoped plans
 	// directory writable.
-	if s.ws != nil && s.ws.IsRestricted() && !plan.ReadOnly && !s.isPlanDirMutation(plan) {
+	if ws != nil && ws.IsRestricted() && !plan.ReadOnly && !s.isPlanDirMutation(plan) {
 		return tools.AccessDeny, nil, nil
 	}
 

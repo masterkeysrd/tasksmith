@@ -292,6 +292,40 @@ func republishEligible(state *serverState) bool {
 	return state.client != nil && state.discovered && !state.closed && len(state.tools) > 0
 }
 
+// SyncTo registers every already-discovered MCP server's tools onto syncer so
+// a sibling workspace runtime opened after discovery still receives all tools.
+func (m *Manager) SyncTo(syncer Syncer) error {
+	if syncer == nil {
+		return nil
+	}
+	m.mu.Lock()
+	if m.closed != nil {
+		m.mu.Unlock()
+		return nil
+	}
+	states := make([]*serverState, 0, len(m.servers))
+	for _, state := range m.servers {
+		states = append(states, state)
+	}
+	m.mu.Unlock()
+
+	var errs []error
+	for _, state := range states {
+		state.mu.Lock()
+		def := state.def
+		tools := slices.Clone(state.tools)
+		connected := state.client != nil && state.discovered && !state.closed
+		state.mu.Unlock()
+		if !connected || def == nil {
+			continue
+		}
+		if err := syncer.SyncMCPTools(def, rawTools(tools)); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // rememberRuntimeLocked records the current runtime context and reports whether
 // it changed since the last reconciliation. It must be called with m.mu held.
 func (m *Manager) rememberRuntimeLocked() bool {

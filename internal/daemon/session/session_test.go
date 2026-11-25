@@ -7592,3 +7592,46 @@ func TestSessionReadOnlyPolicySubagentInheritance(t *testing.T) {
 		}
 	})
 }
+
+func TestInitSessionDefaultsWorkDirToCWD(t *testing.T) {
+	ctx := context.Background()
+	db, _, gw, pub, _ := setupTestEnv(t, nil)
+
+	rootDir := t.TempDir()
+	subDir := filepath.Join(rootDir, "packages", "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootDir, "WORKSPACE.md"), []byte("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: mono\nspec:\n  projects: [\".\", \"packages/sub\"]\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "AGENTS.md"), []byte("sub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(ctx, subDir)
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := New(ctx, Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	if sess.WorkDir != ws.CWD() {
+		t.Errorf("sess.WorkDir = %q, want ws.CWD() = %q (ws.RootDir() = %q)", sess.WorkDir, ws.CWD(), ws.RootDir())
+	}
+}
