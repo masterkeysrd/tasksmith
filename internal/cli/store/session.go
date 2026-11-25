@@ -341,6 +341,9 @@ func startSessionsWatcher(ctx context.Context) {
 						break
 					}
 					if !isDaemonHealthy(ctx, c) {
+						if ctx.Err() != nil {
+							return
+						}
 						if GetApp().DaemonStatus == DaemonConnected {
 							SetDaemonStatus(DaemonDisconnected)
 							st := GetStream()
@@ -360,8 +363,14 @@ func startSessionsWatcher(ctx context.Context) {
 						}
 						ticker.Stop()
 
+						if ctx.Err() != nil {
+							return
+						}
 						since = ""
 						resyncDaemonState(ctx, c)
+						if ctx.Err() != nil {
+							return
+						}
 						SetDaemonStatus(DaemonConnected)
 					}
 					break

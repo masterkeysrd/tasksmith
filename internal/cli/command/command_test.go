@@ -135,7 +135,9 @@ func TestCommandExecute(t *testing.T) {
 	})
 
 	t.Run("permissions", func(t *testing.T) {
+		store.ResetApp()
 		store.ClearSlot()
+		defer store.ResetApp()
 		defer store.ClearSlot()
 		defer store.ResetSession()
 
@@ -147,7 +149,7 @@ func TestCommandExecute(t *testing.T) {
 		}
 
 		cli, _ := client.New("/tmp/dummy.sock")
-		store.InitSession(context.Background(), cli, store.InitSessionOptions{})
+		store.SetClient(cli)
 
 		if err := r.Execute("/permissions"); err != nil {
 			t.Fatalf("Execute /permissions: %v", err)
@@ -383,8 +385,10 @@ func TestCompactAndContextCommands(t *testing.T) {
 	r := NewRegistry()
 
 	t.Run("compact in draft mode", func(t *testing.T) {
+		store.ResetApp()
 		store.ResetSession()
 		store.ClearTranscript()
+		defer store.ResetApp()
 		defer store.ResetSession()
 		defer store.ClearTranscript()
 
@@ -406,8 +410,10 @@ func TestCompactAndContextCommands(t *testing.T) {
 	})
 
 	t.Run("context command", func(t *testing.T) {
+		store.ResetApp()
 		store.ResetSession()
 		store.ClearTranscript()
+		defer store.ResetApp()
 		defer store.ResetSession()
 		defer store.ClearTranscript()
 

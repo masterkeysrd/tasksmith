@@ -102,9 +102,17 @@ func TestDaemonSubcommands(t *testing.T) {
 	if err := r.Execute("/daemon restart"); err != nil {
 		t.Fatalf("Execute /daemon restart: %v", err)
 	}
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		items := store.GetTranscript().Items
+		if items != nil && len(*items) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	items := store.GetTranscript().Items
-	if items == nil || len(*items) == 0 {
-		t.Fatal("expected transcript item after /daemon restart")
+	if items == nil || len(*items) < 2 {
+		t.Fatal("expected transcript items after /daemon restart")
 	}
 
 	// 5. /daemon start
@@ -112,16 +120,16 @@ func TestDaemonSubcommands(t *testing.T) {
 	if err := r.Execute("/daemon start"); err != nil {
 		t.Fatalf("Execute /daemon start: %v", err)
 	}
-	deadline := time.Now().Add(1 * time.Second)
+	deadline = time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
 		items = store.GetTranscript().Items
-		if items != nil && len(*items) > 0 {
+		if items != nil && len(*items) >= 2 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if items == nil || len(*items) == 0 {
-		t.Fatal("expected transcript item after /daemon start")
+	if items == nil || len(*items) < 2 {
+		t.Fatal("expected transcript items after /daemon start")
 	}
 
 	// 6. /daemon stop
