@@ -1,6 +1,7 @@
 package components
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -908,5 +909,63 @@ func TestComposerAutocompleteAttachmentTrackingAndHistory(t *testing.T) {
 	}
 	if len(submittedAtts) != 1 || submittedAtts[0].Target != "internal/cli/components/composer.go" {
 		t.Fatalf("expected restored attachments from history, got %+v", submittedAtts)
+	}
+}
+
+func TestComposerEnterSubmitsWhileAutocompleteLoading(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	engine := autocomplete.New()
+	if err := engine.Register(autocomplete.Source{
+		Name:    "commands",
+		Trigger: "/",
+		Complete: func(ctx context.Context, _ autocomplete.Request) ([]autocomplete.Candidate, error) {
+			select {
+			case <-release:
+				return []autocomplete.Candidate{{Value: "exit"}}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	b := mock.New(80, 24)
+	var submittedText string
+	qc := wind.NewClient()
+	app := trail.SimpleFC("ComposerLoadingSubmitTest", func() trail.Node {
+		return wind.Provider(wind.ProviderProps{Client: qc}, Composer(ComposerProps{
+			Autocomplete: engine,
+			OnSubmit: func(text string, _ []api.Attachment) {
+				submittedText = text
+			},
+		}))
+	})
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	defer inst.Unmount()
+	inst.Frame()
+
+	typeText(inst, "/exit")
+	waitForAutocomplete(t, inst, func() bool {
+		return strings.Contains(testutils.SurfaceText(b), "Completing...")
+	}, "loading indicator while completion is in flight")
+
+	pressKey(inst, key.KeyEnter, 0)
+	inst.Frame()
+
+	if submittedText != "/exit" {
+		t.Fatalf("expected Enter to submit '/exit' while autocomplete is loading, got %q", submittedText)
 	}
 }

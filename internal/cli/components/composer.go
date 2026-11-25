@@ -557,10 +557,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				return
 			}
 			activeAtts := attachments()
-			if isCurrent && auto.IsOpen {
-				if auto.IsLoading || auto.Error != nil || len(auto.Result.Candidates) == 0 {
-					return
-				}
+			if isCurrent && auto.IsOpen && !auto.IsLoading && auto.Error == nil && len(auto.Result.Candidates) > 0 {
 				if !selectionMatchesQuery(auto) {
 					candIdx := auto.Selected
 					if edit, err := auto.Accept(); err == nil {
