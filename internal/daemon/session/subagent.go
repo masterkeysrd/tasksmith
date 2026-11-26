@@ -125,14 +125,17 @@ func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (
 		workDir = treeDir
 	}
 
-	parentCfg := s.configSnapshot()
+	parentCfg, err := s.childConfig()
+	if err != nil {
+		return api.InvokeAgentOutput{}, err
+	}
 	cfg := Config{
 		ID:              childID,
 		Title:           title,
 		ParentID:        s.ID,
 		WorkDir:         workDir,
 		Parent:          s,
-		Session:         api.SessionConfig{Agent: agent, Model: model, Mode: parentCfg.Mode, Sandbox: s.Sandbox.Mode()},
+		Session:         api.SessionConfig{Agent: agent, Model: model, Mode: parentCfg.Mode, Sandbox: parentCfg.Sandbox},
 		DB:              s.db,
 		Workspace:       s.workspace,
 		Gateway:         s.gateway,
@@ -197,6 +200,17 @@ func (s *Session) configSnapshot() api.SessionConfig {
 		defer s.Unlock()
 	}
 	return s.Config
+}
+
+func (s *Session) childConfig() (api.SessionConfig, error) {
+	s.Lock()
+	defer s.Unlock()
+	if s.closing {
+		return api.SessionConfig{}, context.Canceled
+	}
+	cfg := s.Config
+	cfg.Sandbox = s.Sandbox.Mode()
+	return cfg, nil
 }
 
 // resolveSubagentModel resolves the effective model reference a parent session
@@ -399,7 +413,10 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 	}
 
 	childID := uuid.NewString()
-	parentCfg := s.configSnapshot()
+	parentCfg, err := s.childConfig()
+	if err != nil {
+		return err
+	}
 	targetAgent := exec.TargetAgent
 	if targetAgent == "" {
 		targetAgent = parentCfg.Agent
@@ -425,7 +442,7 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 		WorkDir:          s.WorkDir,
 		Parent:           s,
 		CommandDelegated: true,
-		Session:          api.SessionConfig{Agent: targetAgent, Model: targetModel, Mode: parentCfg.Mode, Sandbox: s.Sandbox.Mode()},
+		Session:          api.SessionConfig{Agent: targetAgent, Model: targetModel, Mode: parentCfg.Mode, Sandbox: parentCfg.Sandbox},
 		DB:               s.db,
 		Workspace:        s.workspace,
 		Gateway:          s.gateway,

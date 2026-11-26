@@ -48,6 +48,10 @@ func (s *Session) Fork(ctx context.Context, title string) (*Session, error) {
 	}
 
 	s.Lock()
+	if s.closing {
+		s.Unlock()
+		return nil, context.Canceled
+	}
 	if isRunningStatus(s.Status) {
 		s.Unlock()
 		return nil, fmt.Errorf("%w: cannot fork while a turn is running", ErrSessionRunning)

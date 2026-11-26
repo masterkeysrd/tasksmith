@@ -333,7 +333,8 @@ type Session struct {
 	PermManager permissions.SessionManager `json:"-"`
 	permRoot    permissions.Manager        `json:"-"`
 
-	sandboxCfg sandboxcfg.Manager `json:"-"`
+	reconfigureMu sync.Mutex
+	sandboxCfg    sandboxcfg.Manager `json:"-"`
 
 	// sandboxNative records whether the active backend enforces the kernel
 	// sandbox; allowUnsandboxed, autoAllowBash, and excludedCommands snapshot
@@ -528,13 +529,19 @@ func isReadOnlyPolicy(p *warp.Policies) bool {
 	return p != nil && p.Tools != nil && p.Tools.ReadOnly
 }
 
+func (s *Session) sandboxSnapshot() sandbox.Sandbox {
+	s.Lock()
+	defer s.Unlock()
+	return s.Sandbox
+}
+
 // effectiveReadOnlyPolicy reports whether the workspace, the session's
 // effective agent policies, or the parent session demand a read-only tool
 // sandbox (policies.tools.readOnly). It is deliberately decoupled from the
 // session's permission mode: an untrusted (restricted) workspace or a
 // readOnly policy blocks all side effects while the session still runs in
 // `default` mode.
-func (s *Session) effectiveReadOnlyPolicy() bool {
+func (s *Session) effectiveReadOnlyPolicy(parentReadOnly bool) bool {
 	if s.workspace == nil {
 		return false
 	}
@@ -544,7 +551,7 @@ func (s *Session) effectiveReadOnlyPolicy() bool {
 	// A subagent inherits its parent's kernel read-only ceiling: a child
 	// spawned under a readOnly agent must not regain write access just
 	// because its own manifest omits the policy.
-	if s.parent != nil && s.parent.Sandbox != nil && s.parent.Sandbox.ReadOnly() {
+	if parentReadOnly {
 		return true
 	}
 	cat := s.workspace.Catalog()
@@ -573,13 +580,19 @@ func (s *Session) effectiveReadOnlyPolicy() bool {
 // applyReadOnlyPolicy syncs the sandbox's read-only enforcement with the
 // effective workspace/agent policy. Callers must not hold the session lock.
 func (s *Session) applyReadOnlyPolicy() {
-	if s.Sandbox == nil {
-		return
+	var parentReadOnly bool
+	if parent := s.Parent(); parent != nil {
+		if ps := parent.sandboxSnapshot(); ps != nil && ps.ReadOnly() {
+			parentReadOnly = true
+		}
 	}
 	s.Lock()
-	readOnly := s.effectiveReadOnlyPolicy()
-	s.Unlock()
-	s.Sandbox.SetReadOnly(readOnly)
+	defer s.Unlock()
+	sbx := s.Sandbox
+	if s.closing || sbx == nil {
+		return
+	}
+	sbx.SetReadOnly(s.effectiveReadOnlyPolicy(parentReadOnly))
 }
 
 // publishSandboxPosture snapshots the resolved isolation backend and the
@@ -680,9 +693,13 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	}
 
 	mode := sandbox.ResolveMode(s.Config.Sandbox)
-	if s.parent != nil && s.parent.Sandbox != nil {
+	var parentSandbox sandbox.Sandbox
+	if s.parent != nil {
+		parentSandbox = s.parent.sandboxSnapshot()
+	}
+	if parentSandbox != nil {
 		// A subagent inherits its parent's enforced isolation backend.
-		mode = s.parent.Sandbox.Mode()
+		mode = parentSandbox.Mode()
 	} else if sandboxEff != nil {
 		// A top-level session resolves its backend through the workspace's
 		// sandbox.json settings: the request still wins, then the configured
@@ -843,7 +860,13 @@ func (s *Session) Matches(req api.CreateSessionRequest) error {
 // Refresh recalculates session diagnostics and reconfigures the harness
 // (e.g. after a workspace reload), publishing a SessionUpdatedEvent.
 func (s *Session) Refresh(ctx context.Context) {
+	s.reconfigureMu.Lock()
+	defer s.reconfigureMu.Unlock()
 	s.Lock()
+	if s.closing {
+		s.Unlock()
+		return
+	}
 	s.Diagnostics = s.modelDiagnostics(s.Config)
 	if s.FileIndex != nil {
 		s.FileIndex.SetAllowExec(s.workspace != nil && !s.workspace.IsRestricted())
@@ -851,7 +874,7 @@ func (s *Session) Refresh(ctx context.Context) {
 	}
 	s.Unlock()
 	s.refreshSandboxPolicy(ctx)
-	_ = s.configureHarness(ctx)
+	_ = s.configureHarnessLocked(ctx)
 	s.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
 		Workspace: s.workspace.RootDir(),
 		Session:   ToAPISession(s),
@@ -1126,6 +1149,8 @@ func (s *Session) Close() error {
 	for _, ch := range s.Children() {
 		_ = ch.Close()
 	}
+	s.reconfigureMu.Lock()
+	defer s.reconfigureMu.Unlock()
 	s.Lock()
 	s.closing = true
 	cancel := s.cancel
@@ -1213,21 +1238,31 @@ func (s *Session) setConfigModel(model string) {
 }
 
 func (s *Session) configureHarness(ctx context.Context) error {
-	if s.Sandbox != nil && s.workspace != nil {
-		s.Sandbox.SetEnv(s.workspace.SubprocessEnv())
-		s.Sandbox.SetFilesystemPolicy(s.sbxPolicy)
-		if err := s.Sandbox.SetNetworkPolicy(s.sbxNetwork); err != nil {
+	s.reconfigureMu.Lock()
+	defer s.reconfigureMu.Unlock()
+	if s.IsClosing() {
+		return context.Canceled
+	}
+	return s.configureHarnessLocked(ctx)
+}
+
+func (s *Session) configureHarnessLocked(ctx context.Context) error {
+	s.Lock()
+	sbx, policy, network := s.Sandbox, s.sbxPolicy, s.sbxNetwork
+	config := s.Config
+	s.Unlock()
+	if sbx != nil && s.workspace != nil {
+		sbx.SetEnv(s.workspace.SubprocessEnv())
+		sbx.SetFilesystemPolicy(policy)
+		if err := sbx.SetNetworkPolicy(network); err != nil {
 			s.logger.Warn("session: re-apply network policy failed",
 				log.String("session", s.ID), log.String("error", err.Error()))
 		}
 		s.applyReadOnlyPolicy()
 	}
 
-	s.Lock()
-	config := s.Config
 	agentName := config.Agent
 	modelName := config.Model
-	s.Unlock()
 
 	limits, staticCtx := s.updateContextLimits(agentName, modelName)
 

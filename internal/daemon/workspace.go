@@ -287,8 +287,19 @@ func (r *workspaceRuntime) Close() error {
 	if r.bgCancel != nil {
 		r.bgCancel()
 	}
+	if r.mcpManager != nil {
+		if err := r.mcpManager.Close(); err != nil {
+			slog.Warn("daemon: close MCP manager", "workspace", r.dir, "error", err)
+		}
+	}
 	if r.sessions != nil {
-		for _, sess := range r.sessions.Snapshot().All() {
+		r.reloadMu.Lock()
+		r.createMu.Lock()
+		sessions := r.sessions.Snapshot().All()
+		r.sessions.Replace()
+		r.createMu.Unlock()
+		r.reloadMu.Unlock()
+		for _, sess := range sessions {
 			_ = sess.Close()
 		}
 	}
@@ -296,11 +307,6 @@ func (r *workspaceRuntime) Close() error {
 	for _, sib := range r.snapshotSiblings() {
 		if sib.ws != nil {
 			sib.ws.SetMCPService(nil)
-		}
-	}
-	if r.mcpManager != nil {
-		if err := r.mcpManager.Close(); err != nil {
-			slog.Warn("daemon: close MCP manager", "workspace", r.dir, "error", err)
 		}
 	}
 	r.closeFileIndex()

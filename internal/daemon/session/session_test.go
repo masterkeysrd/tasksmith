@@ -494,6 +494,31 @@ type pubRecord struct {
 	event broker.Event
 }
 
+func TestRefreshConcurrentClose(t *testing.T) {
+	_, _, _, pub, mgr := setupTestEnv(t, &fakeProvider{})
+	sess, _, err := mgr.Create(t.Context(), api.CreateSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		close(started)
+		sess.Refresh(t.Context())
+	}()
+	<-started
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	pub.reset()
+	sess.Refresh(t.Context())
+	if len(pub.recorded()) != 0 {
+		t.Fatal("Refresh published an event after Close")
+	}
+}
+
 type testPublisher struct {
 	mu      sync.Mutex
 	events  []broker.Event

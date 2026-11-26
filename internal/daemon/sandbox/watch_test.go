@@ -43,6 +43,11 @@ func TestWatcher_CreateWriteRemoveRename(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	for _, name := range []string{"modify.txt", "rename.txt", "remove.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	w, err := sb.FS().Watch(ctx, ".", sandbox.WatchOptions{Recursive: true})
 	if err != nil {
 		t.Fatalf("Watch failed: %v", err)
@@ -60,31 +65,31 @@ func TestWatcher_CreateWriteRemoveRename(t *testing.T) {
 	})
 
 	// 2. Modify file
-	if err := os.WriteFile(filePath, []byte("hello world"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "modify.txt"), []byte("hello world"), 0o644); err != nil {
 		t.Fatalf("WriteFile modify failed: %v", err)
 	}
 
 	waitForEvent(t, w, 3*time.Second, func(ev sandbox.WatchEvent) bool {
-		return ev.Path == "test.txt" && ev.Op&sandbox.WatchWrite != 0
+		return ev.Path == "modify.txt" && ev.Op&sandbox.WatchWrite != 0
 	})
 
 	// 3. Rename file
 	renamedPath := filepath.Join(dir, "renamed.txt")
-	if err := os.Rename(filePath, renamedPath); err != nil {
+	if err := os.Rename(filepath.Join(dir, "rename.txt"), renamedPath); err != nil {
 		t.Fatalf("Rename failed: %v", err)
 	}
 
 	waitForEvent(t, w, 3*time.Second, func(ev sandbox.WatchEvent) bool {
-		return (ev.Path == "test.txt" || ev.Path == "renamed.txt") && (ev.Op&(sandbox.WatchRename|sandbox.WatchCreate) != 0)
+		return ev.Path == "rename.txt" && ev.Op&sandbox.WatchRename != 0
 	})
 
 	// 4. Remove file
-	if err := os.Remove(renamedPath); err != nil {
+	if err := os.Remove(filepath.Join(dir, "remove.txt")); err != nil {
 		t.Fatalf("Remove failed: %v", err)
 	}
 
 	waitForEvent(t, w, 3*time.Second, func(ev sandbox.WatchEvent) bool {
-		return ev.Path == "renamed.txt" && ev.Op&sandbox.WatchRemove != 0
+		return ev.Path == "remove.txt" && ev.Op&sandbox.WatchRemove != 0
 	})
 }
 

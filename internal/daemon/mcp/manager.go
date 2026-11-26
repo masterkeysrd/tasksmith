@@ -129,10 +129,11 @@ func (s *serverState) shutdown() {
 type Manager struct {
 	opts Options
 
-	mu      sync.Mutex
-	servers map[string]*serverState
-	creds   *CredentialStore
-	closed  error
+	mu        sync.Mutex
+	servers   map[string]*serverState
+	creds     *CredentialStore
+	closed    error
+	discovery sync.WaitGroup
 	// runtime is the fingerprint of the environment and render options last
 	// reconciled by [Manager.Sync]; a change means connected servers were built
 	// from stale values and must reconnect.
@@ -456,6 +457,7 @@ func (m *Manager) Close() error {
 	if m == nil {
 		return nil
 	}
+	defer m.discovery.Wait()
 	m.mu.Lock()
 	if m.closed != nil {
 		m.mu.Unlock()
@@ -923,7 +925,11 @@ func (m *Manager) notifyDiscovery() {
 	if m.opts.OnDiscover == nil {
 		return
 	}
-	go m.opts.OnDiscover()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed == nil {
+		m.discovery.Go(m.opts.OnDiscover)
+	}
 }
 
 // failureStatus decides how a failed attempt should be reported: interactive

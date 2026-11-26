@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
@@ -27,6 +28,34 @@ type testServer struct {
 	endpoint    string
 	sseEndpoint string
 	sdk         *sdkmcp.Server
+}
+
+func TestCloseDrainsDiscovery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		calls := 0
+		m := &Manager{opts: Options{OnDiscover: func() {
+			calls++
+			<-release
+		}}}
+		m.notifyDiscovery()
+		synctest.Wait()
+		done := make(chan struct{})
+		go func() { _ = m.Close(); close(done) }()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("Close returned with discovery in flight")
+		default:
+		}
+		m.notifyDiscovery()
+		close(release)
+		<-done
+		synctest.Wait()
+		if calls != 1 {
+			t.Fatalf("got %d callbacks, want 1", calls)
+		}
+	})
 }
 
 func newTestServer(t *testing.T) *testServer {

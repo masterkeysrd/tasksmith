@@ -229,7 +229,7 @@ func (r *workspaceRuntime) persistSession(ctx context.Context, s *session.Sessio
 	owner := r.sessionOwnerOrSelf()
 	owner.createMu.Lock()
 	defer owner.createMu.Unlock()
-	if s.IsClosing() {
+	if owner.bgCtx.Err() != nil || s.IsClosing() {
 		return nil
 	}
 	if err := s.CheckpointTo(ctx, owner.sessionStore); err != nil {
