@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
@@ -202,72 +203,66 @@ func TestHostApprovalPromptAllowOnce(t *testing.T) {
 }
 
 func TestHostApprovalSingleFlight(t *testing.T) {
-	pub := &observingPublisher{}
-	pub.setSubscribers(true)
-	sess := newHostApprovalSession(t, &askingPermManager{}, pub)
+	synctest.Test(t, func(t *testing.T) {
+		pub := &observingPublisher{}
+		pub.setSubscribers(true)
+		sess := newHostApprovalSession(t, &askingPermManager{}, pub)
 
-	const racers = 4
-	results := make(chan bool, racers)
-	for range racers {
-		go func() {
-			allow, err := sess.requestHostApproval(context.Background(), "shared.example.com", 443)
-			if err != nil {
-				results <- false
-				return
-			}
-			results <- allow
-		}()
-	}
+		const racers = 4
+		results := make(chan bool, racers)
+		for range racers {
+			go func() {
+				allow, err := sess.requestHostApproval(context.Background(), "shared.example.com", 443)
+				if err != nil {
+					results <- false
+					return
+				}
+				results <- allow
+			}()
+		}
 
-	// Exactly one prompt should surface; answer it once.
-	var reqID string
-	deadline := time.Now().Add(2 * time.Second)
-	prompts := 0
-	for time.Now().Before(deadline) {
-		prompts = 0
-		reqID = ""
+		// Wait until every racer is durably blocked: one owner waiting for the
+		// user decision and the remaining racers coalesced on flight.done.
+		synctest.Wait()
+
+		var reqID string
+		prompts := 0
 		for _, ev := range pub.recorded() {
 			if e, ok := permissionRequested(ev); ok {
 				prompts++
 				reqID = e.Permissions[0].ID
 			}
 		}
-		if prompts >= 1 && reqID != "" {
-			break
+		if prompts != 1 || reqID == "" {
+			t.Fatalf("expected exactly 1 prompt before resolution, got prompts=%d reqID=%q", prompts, reqID)
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if reqID == "" {
-		t.Fatal("no prompt published")
-	}
-	if _, err := sess.resolveHostApproval(api.PermissionDecision{RequestID: reqID, Kind: api.DecisionAllowSession}); err != nil {
-		t.Fatalf("resolveHostApproval: %v", err)
-	}
 
-	for range racers {
-		select {
-		case ok := <-results:
-			if !ok {
-				t.Fatal("racer refused despite approval")
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("racer did not resolve")
+		if _, err := sess.resolveHostApproval(api.PermissionDecision{RequestID: reqID, Kind: api.DecisionAllowSession}); err != nil {
+			t.Fatalf("resolveHostApproval: %v", err)
 		}
-	}
-	// Give the owner goroutine a moment to finish before counting.
-	deadline = time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
+
+		synctest.Wait()
+		for range racers {
+			select {
+			case ok := <-results:
+				if !ok {
+					t.Fatal("racer refused despite approval")
+				}
+			default:
+				t.Fatal("racer did not resolve")
+			}
+		}
+
 		prompts = 0
 		for _, ev := range pub.recorded() {
 			if _, ok := permissionRequested(ev); ok {
 				prompts++
 			}
 		}
-		if prompts > 1 {
+		if prompts != 1 {
 			t.Fatalf("single-flight violated: %d prompts for one host", prompts)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	})
 }
 
 func TestHostApprovalNonInteractiveRefuses(t *testing.T) {
@@ -725,51 +720,54 @@ func TestHostApprovalAutoReviewerDefersPromptsHuman(t *testing.T) {
 }
 
 func TestHostApprovalAutoBurstSingleFlight(t *testing.T) {
-	pub := &observingPublisher{}
-	pub.setSubscribers(true)
-	perm := &autoAskingPermManager{}
-	sess := newHostApprovalSession(t, perm, pub)
-	rev := &scriptedReviewer{approve: true, gate: make(chan struct{})}
-	sess.permReviewer = rev
+	synctest.Test(t, func(t *testing.T) {
+		pub := &observingPublisher{}
+		pub.setSubscribers(true)
+		perm := &autoAskingPermManager{}
+		sess := newHostApprovalSession(t, perm, pub)
+		rev := &scriptedReviewer{approve: true, gate: make(chan struct{})}
+		sess.permReviewer = rev
 
-	const burst = 5
-	type hostVerdict struct {
-		allow bool
-		err   error
-	}
-	results := make(chan hostVerdict, burst)
-	for range burst {
-		go func() {
-			allow, err := sess.requestHostApproval(context.Background(), "burst.example.com", 443)
-			results <- hostVerdict{allow, err}
-		}()
-	}
-	// Hold the owner inside its review until all burst connections have
-	// coalesced onto the shared waiter, and verify State.Clone hides silent reviews.
-	time.Sleep(100 * time.Millisecond)
-	if cloned := sess.Clone().PendingPermissions; len(cloned) != 0 {
-		t.Fatalf("State.Clone leaked silent Phase-1 host review into PendingPermissions: %+v", cloned)
-	}
-	close(rev.gate)
-	for range burst {
-		select {
-		case v := <-results:
-			if v.err != nil || !v.allow {
-				t.Fatalf("burst requestHostApproval = (%v, %v), want (true, nil)", v.allow, v.err)
-			}
-		case <-time.After(3 * time.Second):
-			t.Fatal("burst request did not finish")
+		const burst = 5
+		type hostVerdict struct {
+			allow bool
+			err   error
 		}
-	}
-	if got := rev.count(); got != 1 {
-		t.Fatalf("reviewer calls = %d, want single-flight 1", got)
-	}
-	sess.Lock()
-	leftover := len(sess.hostApprovals) + sess.hostApprovalActive
-	sess.Unlock()
-	if leftover != 0 {
-		t.Fatalf("pending host approvals after burst = %d, want 0", leftover)
-	}
+		results := make(chan hostVerdict, burst)
+		for range burst {
+			go func() {
+				allow, err := sess.requestHostApproval(context.Background(), "burst.example.com", 443)
+				results <- hostVerdict{allow, err}
+			}()
+		}
+		// Wait until the owner is blocked on rev.gate and all burst connections
+		// have coalesced onto the shared waiter, and verify State.Clone hides silent reviews.
+		synctest.Wait()
+		if cloned := sess.Clone().PendingPermissions; len(cloned) != 0 {
+			t.Fatalf("State.Clone leaked silent Phase-1 host review into PendingPermissions: %+v", cloned)
+		}
+		close(rev.gate)
+		synctest.Wait()
+		for range burst {
+			select {
+			case v := <-results:
+				if v.err != nil || !v.allow {
+					t.Fatalf("burst requestHostApproval = (%v, %v), want (true, nil)", v.allow, v.err)
+				}
+			default:
+				t.Fatal("burst request did not finish")
+			}
+		}
+		if got := rev.count(); got != 1 {
+			t.Fatalf("reviewer calls = %d, want single-flight 1", got)
+		}
+		sess.Lock()
+		leftover := len(sess.hostApprovals) + sess.hostApprovalActive
+		sess.Unlock()
+		if leftover != 0 {
+			t.Fatalf("pending host approvals after burst = %d, want 0", leftover)
+		}
+	})
 }
 
 func TestHostApprovalAutoDeferHeadlessRefuses(t *testing.T) {
