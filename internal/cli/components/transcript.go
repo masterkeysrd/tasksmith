@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -46,6 +47,23 @@ func renderTranscriptItem(item store.TranscriptItem, _ int) trail.Node {
 	return nil
 }
 
+var transcriptResizeDebounce = 150 * time.Millisecond
+
+var afterTranscriptResize = func(d time.Duration, fn func()) func() {
+	t := time.AfterFunc(d, fn)
+	return func() { t.Stop() }
+}
+
+type transcriptGeneration struct {
+	epoch, redraw int
+}
+
+type transcriptResizeSnapshot struct {
+	width         int
+	epoch         int
+	hasScrollback bool
+}
+
 // Transcript is the host component that prints the header and finalized items.
 // In draft mode (!Frozen), Header and draft command outputs remain live children.
 // When Frozen, the snapshot Header and items are frozen into trail.Static and flushed into scrollback.
@@ -62,32 +80,74 @@ var Transcript = trail.SimpleFC("Transcript", func() trail.Node {
 		return s.Items
 	})
 
-	clearedEpoch, setClearedEpoch := kitex.UseState(epoch)
+	var items []store.TranscriptItem
+	if itemsPtr != nil {
+		items = *itemsPtr
+	}
+	width := trail.UseWindowSize().Width
+	hasScrollback := frozen && len(items) > 0
+	lastWidth := kitex.UseRef(0)
+	latest := kitex.UseRef(transcriptResizeSnapshot{})
+	latest.Current = transcriptResizeSnapshot{
+		width:         width,
+		epoch:         epoch,
+		hasScrollback: hasScrollback,
+	}
+	mounted := kitex.UseRef(true)
+	kitex.UseEffectCleanup(func() func() {
+		mounted.Current = true
+		return func() { mounted.Current = false }
+	}, []any{})
+
+	redrawGen, setRedrawGen := kitex.UseState(0)
+	generation := transcriptGeneration{epoch, redrawGen()}
+	cleared, setCleared := kitex.UseState(generation)
 
 	kitex.UseLayoutEffect(func() {
-		if epoch != clearedEpoch() {
-			if app != nil {
-				app.Clear()
-				if eng := app.Engine(); eng != nil {
-					eng.Post(func() {
-						setClearedEpoch(epoch)
-					})
-				} else {
-					setClearedEpoch(epoch)
-				}
-			} else {
-				setClearedEpoch(epoch)
-			}
+		if generation == cleared() {
+			return
 		}
-	}, []any{epoch, clearedEpoch()})
+		lastWidth.Current = width
+		if app != nil {
+			app.Clear()
+			app.Engine().Post(func() { setCleared(generation) })
+		} else {
+			setCleared(generation)
+		}
+	}, []any{generation})
+
+	kitex.UseEffectCleanup(func() func() {
+		if !hasScrollback || lastWidth.Current == 0 {
+			lastWidth.Current = width
+			return nil
+		}
+		if width <= 0 || width == lastWidth.Current || app == nil {
+			return nil
+		}
+		eng := app.Engine()
+		targetWidth := width
+		targetEpoch := epoch
+		cancelled := false
+		stopTimer := afterTranscriptResize(transcriptResizeDebounce, func() {
+			eng.Post(func() {
+				if cancelled || !mounted.Current {
+					return
+				}
+				cur := latest.Current
+				if !cur.hasScrollback || cur.width != targetWidth || cur.epoch != targetEpoch || lastWidth.Current == targetWidth {
+					return
+				}
+				setRedrawGen(redrawGen() + 1)
+			})
+		})
+		return func() {
+			cancelled = true
+			stopTimer()
+		}
+	}, []any{width, hasScrollback, epoch})
 
 	var children []trail.Node
-	if epoch == clearedEpoch() {
-		var items []store.TranscriptItem
-		if itemsPtr != nil {
-			items = *itemsPtr
-		}
-
+	if generation == cleared() {
 		if !frozen {
 			children = make([]trail.Node, 0, len(items)+1)
 			children = append(children, Header(HeaderProps{HeaderData: liveHeader, AnimateMascot: true}))
@@ -104,7 +164,7 @@ var Transcript = trail.SimpleFC("Transcript", func() trail.Node {
 	}
 
 	return trail.Box(trail.BoxProps{
-		Key: fmt.Sprintf("transcript-%d", clearedEpoch()),
+		Key: fmt.Sprintf("transcript-%d-%d", cleared().epoch, cleared().redraw),
 		Style: style.S().
 			FlexDirection(style.FlexColumn).
 			Width(style.Percent(100)),

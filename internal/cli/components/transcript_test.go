@@ -3,29 +3,40 @@ package components
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
+	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/geom"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
-func startTranscript(t *testing.T, b backend.Backend) {
+func startTranscript(t *testing.T, b backend.Backend) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
+	inst, err := trail.New(Transcript(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatal(err)
+	}
 	go func() {
 		defer close(done)
-		_ = trail.Run(ctx, Transcript(), trail.WithBackend(b))
+		defer inst.Unmount()
+		_ = inst.Run(ctx)
 	}()
-	t.Cleanup(func() {
+	stop := func() {
 		cancel()
 		<-done
-	})
+	}
+	t.Cleanup(stop)
+	return stop
 }
 
 func TestTranscriptRendersHeaderAndRemountsOnReset(t *testing.T) {
@@ -273,6 +284,230 @@ func TestTranscriptLiveDraftAndFreezeOnSubmit(t *testing.T) {
 	if !strings.Contains(aboveText, "Model set to model-alpha") {
 		t.Fatalf("expected command output in InsertedAbove after FreezeTranscript, got:\n%s", aboveText)
 	}
+}
+
+type fakeResizeTimer struct {
+	fn      func()
+	stopped atomic.Bool
+}
+
+type fakeResizeClock struct {
+	mu     sync.Mutex
+	timers []*fakeResizeTimer
+}
+
+func (c *fakeResizeClock) schedule(_ time.Duration, fn func()) func() {
+	timer := &fakeResizeTimer{fn: fn}
+	c.mu.Lock()
+	c.timers = append(c.timers, timer)
+	c.mu.Unlock()
+	return func() { timer.stopped.Store(true) }
+}
+
+func (c *fakeResizeClock) snapshot() []*fakeResizeTimer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]*fakeResizeTimer, len(c.timers))
+	copy(out, c.timers)
+	return out
+}
+
+func TestTranscriptResize(t *testing.T) {
+	wait := func(t *testing.T, b *testutils.ClearingBackend, ready func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(testutils.DefaultWaitTimeout)
+		for !ready() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for condition:\n%s", b.AllText())
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	syncEngine := func(t *testing.T, inst *trail.Instance) {
+		t.Helper()
+		done := make(chan struct{})
+		inst.Engine().Post(func() { close(done) })
+		select {
+		case <-done:
+		case <-time.After(testutils.DefaultWaitTimeout):
+			t.Fatal("timed out synchronizing with engine")
+		}
+	}
+
+	for _, tc := range []struct {
+		name                string
+		widths              []int
+		draft, empty, reset bool
+		wantTimers          int
+		clears              int
+	}{
+		{name: "mount"},
+		{name: "height only", widths: []int{80}},
+		{name: "draft", widths: []int{50}, draft: true},
+		{name: "empty frozen", widths: []int{50}, empty: true},
+		{name: "width", widths: []int{50}, wantTimers: 1, clears: 1},
+		{name: "drag", widths: []int{70, 60, 50}, wantTimers: 3, clears: 1},
+		{name: "return", widths: []int{60, 80}, wantTimers: 1},
+		{name: "session reset", widths: []int{60}, reset: true, wantTimers: 1, clears: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := &fakeResizeClock{}
+			old := afterTranscriptResize
+			afterTranscriptResize = clock.schedule
+			t.Cleanup(func() { afterTranscriptResize = old })
+
+			store.ClearTranscript()
+			t.Cleanup(store.ClearTranscript)
+			store.SetHeaderMeta("resize", "workspace")
+			wide := strings.Repeat("123456789 ", 6) + "end"
+			store.AppendNotice(wide)
+			if !tc.draft {
+				store.FreezeTranscript()
+			}
+			if tc.empty {
+				store.ResetTranscript()
+			}
+			b := testutils.NewClearingBackend(mock.New(80, 24))
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan struct{})
+			inst, err := trail.New(Transcript(), trail.WithBackend(b))
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() {
+				defer close(done)
+				defer inst.Unmount()
+				_ = inst.Run(ctx)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				<-done
+			})
+
+			wait(t, b, func() bool { return b.FrameCount() > 0 && (tc.empty || strings.Contains(b.AllText(), wide)) })
+			for i, w := range tc.widths {
+				size := geom.Size{Width: w, Height: 25 + i}
+				frames := b.FrameCount()
+				b.Resize(size)
+				b.PostEvent(&backend.RawResizeEvent{Width: w, Height: size.Height})
+				wait(t, b, func() bool { return b.FrameCount() > frames && b.LastFrame().Surface.Width == w })
+				syncEngine(t, inst)
+			}
+			if got := b.ClearCount(); got != 0 {
+				t.Fatalf("cleared before debounce settled: %d", got)
+			}
+			if tc.reset {
+				store.ResetForSessionSwitch()
+				wait(t, b, func() bool { return b.ClearCount() == 1 })
+				syncEngine(t, inst)
+			}
+
+			timers := clock.snapshot()
+			if len(timers) != tc.wantTimers {
+				t.Fatalf("scheduled timers = %d, want %d", len(timers), tc.wantTimers)
+			}
+
+			// Every superseded timer (or all timers when returning to original width / resetting)
+			// must have been stopped by cleanup, and firing stale callbacks must be a no-op.
+			for i, timer := range timers {
+				isLastActive := !tc.reset && tc.clears == 1 && i == len(timers)-1
+				if !isLastActive {
+					if !timer.stopped.Load() {
+						t.Fatalf("timer %d was not stopped", i)
+					}
+					timer.fn()
+					syncEngine(t, inst)
+				}
+			}
+			if !tc.reset && tc.clears == 1 {
+				last := timers[len(timers)-1]
+				if last.stopped.Load() {
+					t.Fatal("active resize timer was unexpectedly stopped")
+				}
+				wrapped := strings.TrimSpace(strings.Repeat("123456789 ", 5)) + "\n123456789 end"
+				last.fn()
+				wait(t, b, func() bool {
+					return b.ClearCount() == 1 &&
+						strings.Contains(b.ScrollbackText(), "TaskSmith vresize") &&
+						strings.Contains(b.ScrollbackText(), wrapped)
+				})
+			}
+
+			syncEngine(t, inst)
+			if got := b.ClearCount(); got != tc.clears {
+				t.Fatalf("got %d clears, want %d:\n%s", got, tc.clears, b.AllText())
+			}
+		})
+	}
+
+	t.Run("unmount keeps engine alive and ignores stale callback", func(t *testing.T) {
+		clock := &fakeResizeClock{}
+		old := afterTranscriptResize
+		afterTranscriptResize = clock.schedule
+		t.Cleanup(func() { afterTranscriptResize = old })
+
+		store.ClearTranscript()
+		t.Cleanup(store.ClearTranscript)
+		store.SetHeaderMeta("resize", "workspace")
+		store.AppendNotice("hello")
+		store.FreezeTranscript()
+
+		var setShow func(bool)
+		host := trail.SimpleFC("ResizeHost", func() trail.Node {
+			show, update := kitex.UseState(true)
+			setShow = update
+			if !show() {
+				return trail.Text("unmounted")
+			}
+			return Transcript()
+		})
+
+		b := testutils.NewClearingBackend(mock.New(80, 24))
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		inst, err := trail.New(host(), trail.WithBackend(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			defer close(done)
+			defer inst.Unmount()
+			_ = inst.Run(ctx)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			<-done
+		})
+
+		wait(t, b, func() bool { return b.FrameCount() > 0 && strings.Contains(b.AllText(), "hello") })
+
+		frames := b.FrameCount()
+		b.Resize(geom.Size{Width: 60, Height: 24})
+		b.PostEvent(&backend.RawResizeEvent{Width: 60, Height: 24})
+		wait(t, b, func() bool { return b.FrameCount() > frames && b.LastFrame().Surface.Width == 60 })
+		syncEngine(t, inst)
+
+		timers := clock.snapshot()
+		if len(timers) != 1 {
+			t.Fatalf("scheduled timers = %d, want 1", len(timers))
+		}
+
+		// Unmount Transcript while keeping the engine running.
+		inst.Engine().Post(func() { setShow(false) })
+		wait(t, b, func() bool { return strings.Contains(testutils.SurfaceText(b.Backend), "unmounted") })
+		syncEngine(t, inst)
+
+		if !timers[0].stopped.Load() {
+			t.Fatal("pending resize timer was not stopped on unmount")
+		}
+		// Fire the stale callback while the engine is still running; it must be a no-op.
+		timers[0].fn()
+		syncEngine(t, inst)
+		if got := b.ClearCount(); got != 0 {
+			t.Fatalf("stale callback after unmount triggered %d clears", got)
+		}
+	})
 }
 
 func TestTranscriptSessionSwitch(t *testing.T) {
