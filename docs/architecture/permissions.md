@@ -70,7 +70,7 @@ Tightening the mode does not reject existing prompts.
 ### 5. Trust Gate & Restricted Mode Boundary
 Before any session initializes or executes agent instructions, the directory passes through the **Trust Gate**:
 - **Trust Verification (`trust.json`)**: Machine-wide trust records are evaluated from `~/.local/share/tasksmith/trust.json`. Trust can be granted with `folder` scope (exact directory) or `parent` scope (all subdirectories).
-- **Executable Configuration Fingerprinting**: TaskSmith computes an SHA-256 digest over executable configuration files (`.agents/tools/*.tool.md`, `.agents/mcps/*.mcp.yaml`, `.agents/decisions/**`, and `.env`). If an upstream checkout modifies these definitions, the fingerprint mismatch invalidates trust and triggers an interactive trust re-prompt.
+- **Executable configuration fingerprinting**: TaskSmith hashes executable manifests across workspace and project roots and the repository `.env` layers, even when that set is empty. A changed digest or failed scan prevents a new unrestricted snapshot. Trust grants and revocations reload affected resident runtimes; an ordinary reload also rechecks the digest.
 - **Restricted Mode**: When trust has not been granted or is declined:
   - Custom project tools, project MCP servers, and project `Decision` overrides are omitted or ignored.
   - Workspace `.env` files are ignored, preventing untrusted repositories from harvesting or exfiltrating local environment variables.

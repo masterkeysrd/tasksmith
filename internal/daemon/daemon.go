@@ -1089,11 +1089,34 @@ func (d *Daemon) TrustWorkspace(ctx context.Context, req api.TrustFolderRequest)
 	if err != nil {
 		return err
 	}
-	scope := workspace.TrustScope(req.Scope)
+	scope := req.Scope
 	if scope == "" {
-		scope = workspace.TrustScopeFolder
+		scope = api.TrustScopeFolder
 	}
-	return workspace.TrustFolder(cleanDir, scope)
+	if !scope.Valid() {
+		return &api.APIError{
+			StatusCode: http.StatusBadRequest,
+			Code:       "bad_request",
+			Message:    fmt.Sprintf("invalid trust scope %q", scope),
+		}
+	}
+	prev, hadPrev, err := workspace.LookupTrustEntry(cleanDir)
+	if err != nil {
+		return err
+	}
+	if err := workspace.TrustFolder(cleanDir, scope); err != nil {
+		return err
+	}
+	if err := d.reloadWorkspacesUnder(context.WithoutCancel(ctx), cleanDir); err != nil {
+		if restoreErr := workspace.RestoreTrustEntry(cleanDir, prev, hadPrev); restoreErr != nil {
+			return fmt.Errorf("%w (rollback trust: %v)", err, restoreErr)
+		}
+		if rollbackErr := d.reloadWorkspacesUnder(context.WithoutCancel(ctx), cleanDir); rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("reload after trust rollback: %w", rollbackErr))
+		}
+		return err
+	}
+	return nil
 }
 
 func (d *Daemon) RevokeTrust(ctx context.Context, rawWS string) error {
@@ -1101,7 +1124,10 @@ func (d *Daemon) RevokeTrust(ctx context.Context, rawWS string) error {
 	if err != nil {
 		return err
 	}
-	return workspace.RevokeTrust(cleanDir)
+	if err := workspace.RevokeTrust(cleanDir); err != nil {
+		return err
+	}
+	return d.reloadWorkspacesUnder(context.WithoutCancel(ctx), cleanDir)
 }
 
 func (d *Daemon) GetWorkspaceStatus(ctx context.Context, rawWS string) (*api.WorkspaceStatus, error) {

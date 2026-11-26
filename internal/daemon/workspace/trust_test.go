@@ -7,13 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 )
 
 func TestTrustStore_SaveAndLoad(t *testing.T) {
-	tmpDir := t.TempDir()
-	xdg.SetTestEnv(tmpDir, "tasksmith-test")
-	defer xdg.ClearCache()
+	tmpDir := testutils.SetupXDG(t, "tasksmith-test")
 
 	store, err := LoadTrustStore()
 	if err != nil {
@@ -31,7 +30,7 @@ func TestTrustStore_SaveAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := TrustFolder(testFolder, TrustScopeFolder); err != nil {
+	if err := TrustFolder(testFolder, api.TrustScopeFolder); err != nil {
 		t.Fatalf("TrustFolder error = %v", err)
 	}
 
@@ -60,10 +59,117 @@ func TestTrustStore_SaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestTrustRejectsNonRegularWorkspaceManifest(t *testing.T) {
+	testutils.SetupXDG(t, "trust-manifest")
+	dir := t.TempDir()
+	if err := TrustFolder(dir, api.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(os.DevNull, filepath.Join(dir, "WORKSPACE.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	if trusted, _, err := IsTrusted(dir); err == nil || trusted {
+		t.Errorf("IsTrusted: trusted=%v err=%v, want false and an error", trusted, err)
+	}
+	if _, err := ScanExecutableConfig(dir); err == nil {
+		t.Error("ScanExecutableConfig accepted a non-regular workspace manifest")
+	}
+}
+
+func TestTrustTracksEffectiveExecutableSet(t *testing.T) {
+	testutils.SetupXDG(t, "trust-test")
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: mono\nspec:\n  projects: [\".\", child]\n---\n"
+	if err := os.WriteFile(filepath.Join(root, "WORKSPACE.md"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := TrustFolder(child, api.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	tools := filepath.Join(root, ".agents", "tools")
+	if err := os.MkdirAll(tools, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tools, "sample.tool.md")
+	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkChanged := func() {
+		t.Helper()
+		if trusted, changed, err := IsTrusted(child); err != nil || !trusted || !changed {
+			t.Fatalf("trust: %v changed: %v err: %v", trusted, changed, err)
+		}
+	}
+	checkChanged()
+	if err := TrustFolder(child, api.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkChanged()
+	if err := os.Symlink("missing", filepath.Join(tools, "broken.tool.md")); err != nil {
+		t.Fatal(err)
+	}
+	if trusted, _, err := IsTrusted(child); err == nil || trusted {
+		t.Fatal("incomplete scan accepted")
+	}
+	if err := TrustFolder(child, api.TrustScopeFolder); err == nil {
+		t.Fatal("incomplete baseline recorded")
+	}
+}
+
+func TestTrustScopeParentAllowsChildExecutablesAndExactFolderPrecedence(t *testing.T) {
+	testutils.SetupXDG(t, "trust-parent-precedence")
+
+	parent := t.TempDir()
+	child := filepath.Join(parent, "my-app")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(child, ".env"), []byte("CHILD_KEY=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := TrustFolder(parent, api.TrustScopeParent); err != nil {
+		t.Fatalf("TrustFolder(parent): %v", err)
+	}
+
+	trusted, changed, err := IsTrusted(child)
+	if err != nil || !trusted || changed {
+		t.Fatalf("child under trusted parent: got trusted=%v changed=%v err=%v, want true/false/nil", trusted, changed, err)
+	}
+
+	// Modifying the trusted parent's own executable set triggers re-approval.
+	if err := os.WriteFile(filepath.Join(parent, ".env"), []byte("PARENT_KEY=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trusted, changed, err = IsTrusted(child)
+	if err != nil || !trusted || !changed {
+		t.Fatalf("after parent .env added: got trusted=%v changed=%v err=%v, want true/true/nil", trusted, changed, err)
+	}
+
+	// Explicitly trusting the child folder takes precedence over the earlier parent entry.
+	if err := TrustFolder(child, api.TrustScopeFolder); err != nil {
+		t.Fatalf("TrustFolder(child): %v", err)
+	}
+	trusted, changed, err = IsTrusted(child)
+	if err != nil || !trusted || changed {
+		t.Fatalf("after explicit child trust: got trusted=%v changed=%v err=%v, want true/false/nil", trusted, changed, err)
+	}
+
+	if err := TrustFolder(child, api.TrustScope("bogus")); err == nil {
+		t.Fatal("expected TrustFolder to reject unknown trust scope")
+	}
+}
+
 func TestTrustStore_ParentScope(t *testing.T) {
-	tmpDir := t.TempDir()
-	xdg.SetTestEnv(tmpDir, "tasksmith-test")
-	defer xdg.ClearCache()
+	tmpDir := testutils.SetupXDG(t, "tasksmith-test")
 
 	parentDir := filepath.Join(tmpDir, "repos")
 	childDir := filepath.Join(parentDir, "my-repo")
@@ -72,7 +178,7 @@ func TestTrustStore_ParentScope(t *testing.T) {
 	}
 
 	// Trust parent
-	if err := TrustFolder(parentDir, TrustScopeParent); err != nil {
+	if err := TrustFolder(parentDir, api.TrustScopeParent); err != nil {
 		t.Fatalf("TrustFolder(parent) error = %v", err)
 	}
 

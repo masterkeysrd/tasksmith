@@ -6,6 +6,7 @@ import (
 
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
@@ -30,6 +31,21 @@ func TestOnboardingHeaderAnimatesMascotAndShowsWorkspace(t *testing.T) {
 		return
 	}
 	t.Fatalf("setup title missing:\n%s", out)
+}
+
+func TestOnboardingTrustFailureStaysOnTrustStep(t *testing.T) {
+	store.StartOnboarding(t.TempDir(), api.WorkspaceStatus{}, false)
+	t.Cleanup(store.CloseOnboarding)
+	cli, err := client.New("missing.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := testutils.NewApp(t, OnboardingWizard(OnboardingWizardProps{Client: cli}), 100, 40)
+	app.Press(key.Key{Code: key.KeyEnter})
+	app.WaitFor(func(text string) bool { return strings.Contains(text, "Could not trust workspace:") })
+	if store.GetOnboarding().Step != store.StepTrust {
+		t.Fatal("advanced after failed trust request")
+	}
 }
 
 func TestOnboardingShowsChatGPTBrowserSignIn(t *testing.T) {

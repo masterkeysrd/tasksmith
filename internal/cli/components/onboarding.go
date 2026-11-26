@@ -30,6 +30,7 @@ var OnboardingWizard = trail.FC("OnboardingWizard", func(props OnboardingWizardP
 	step := store.UseOnboarding(func(s store.OnboardingState) store.OnboardingStep { return s.Step })
 	active := store.UseOnboarding(func(s store.OnboardingState) bool { return s.Active })
 	state := store.GetOnboarding()
+	trustError, setTrustError := kitex.UseState("")
 	scheme := theme.UseTheme()
 
 	if !active {
@@ -41,7 +42,12 @@ var OnboardingWizard = trail.FC("OnboardingWizard", func(props OnboardingWizardP
 	var content trail.Node
 	switch step {
 	case store.StepTrust:
-		content = renderTrustStep(props, state)
+		content = renderTrustStep(props, state, setTrustError)
+		if trustError() != "" {
+			content = kitex.Fragment(trail.Span(trail.SpanProps{
+				Style: style.S().Foreground(scheme.Color.Text.Error),
+			}, trail.Text(trustError())), content)
+		}
 	case store.StepProviderSrc:
 		content = renderProviderSrcStep(props)
 	case store.StepProviderPick:
@@ -148,17 +154,22 @@ func renderWizardHeader(wsPath string, step store.OnboardingStep, scheme *theme.
 	)
 }
 
-func renderTrustStep(props OnboardingWizardProps, state store.OnboardingState) trail.Node {
+func renderTrustStep(props OnboardingWizardProps, state store.OnboardingState, setError func(string)) trail.Node {
 	return TrustPrompt(TrustPromptProps{
 		Status: toTrustStatus(state.Status),
 		OnSelect: func(decision TrustDecision) {
 			ctx := context.Background()
 			switch decision {
-			case TrustDecisionFolder:
-				_ = props.Client.TrustWorkspace(ctx, "folder")
-				nextStepAfterTrust(state)
-			case TrustDecisionParent:
-				_ = props.Client.TrustWorkspace(ctx, "parent")
+			case TrustDecisionFolder, TrustDecisionParent:
+				scope := api.TrustScopeFolder
+				if decision == TrustDecisionParent {
+					scope = api.TrustScopeParent
+				}
+				if err := props.Client.TrustWorkspace(ctx, scope); err != nil {
+					setError("Could not trust workspace: " + err.Error())
+					return
+				}
+				setError("")
 				nextStepAfterTrust(state)
 			case TrustDecisionRestricted:
 				// Proceed into restricted mode session

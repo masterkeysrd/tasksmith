@@ -84,10 +84,25 @@ type ExecutableConfigSummary struct {
 	HasEnv      bool     `json:"has_env,omitempty"`
 }
 
+// TrustScope determines the boundary of a workspace trust decision.
+type TrustScope string
+
+const (
+	// TrustScopeFolder trusts only the specific folder path.
+	TrustScopeFolder TrustScope = "folder"
+	// TrustScopeParent trusts every subfolder under the parent path.
+	TrustScopeParent TrustScope = "parent"
+)
+
+// Valid reports whether s is a supported trust scope.
+func (s TrustScope) Valid() bool {
+	return s == TrustScopeFolder || s == TrustScopeParent
+}
+
 // TrustFolderRequest configures a directory trust action.
 type TrustFolderRequest struct {
-	Path  string `json:"path"`
-	Scope string `json:"scope,omitempty"` // "folder" or "parent"
+	Path  string     `json:"path"`
+	Scope TrustScope `json:"scope,omitempty"`
 }
 
 // WorkspaceStatus summarizes the onboarding and configuration state of a workspace directory.

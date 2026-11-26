@@ -4,7 +4,7 @@ A Decision describes a probabilistic evaluation using a shared rubric and struct
 
 ## Discovery and support
 
-Decision manifests are commonly stored in `.agents/decisions/<name>.decision.md` in a workspace or project, or under `$XDG_CONFIG_HOME/tasksmith/agents/decisions/` for a user. They follow the normal resource hierarchy (`local > workspace > user > system`) and can also be supplied by system resources or workspace plugins. Project `.agents/decisions/**` files participate in workspace trust fingerprinting (restricted workspaces ignore repo overrides, and edits re-prompt trust).
+Decision manifests are commonly stored in `.agents/decisions/<name>.decision.md` in a workspace or project, or under `$XDG_CONFIG_HOME/tasksmith/agents/decisions/` for a user. They follow the normal resource hierarchy (`local > workspace > user > system`) and can also be supplied by system resources or workspace plugins. Project and enclosing workspace `.agents/decisions/**` files participate in trust fingerprinting, including the first manifest added after approval. Reload checks the baseline before admitting repository overrides.
 
 TaskSmith evaluates the built-in `permission-reviewer` Decision at runtime when a session is in `auto` mode (`internal/daemon/permreview`):
 - It must expose three `choice` questions—`action` (`read`, `write`, `delete`, `exec`, `net`), `safety` (`safe`, `outside`, `unsafe`), and `requested` (`yes`, `no`)—emulating the static permission evaluator.

@@ -135,33 +135,12 @@ func WriteMetadata(dir string, meta Metadata) error {
 		return fmt.Errorf("workspace: resolve workspace data dir: %w", err)
 	}
 
-	if err := os.MkdirAll(wsDataDir, 0o755); err != nil {
-		return fmt.Errorf("workspace: create workspace data dir: %w", err)
-	}
-
 	if meta.Schema == 0 {
 		meta.Schema = WorkspaceMetadataSchema
 	}
 	meta.Version = version.Normalize(meta.Version)
 
-	bytes, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("workspace: marshal %s: %w", WorkspaceMetadataFile, err)
-	}
-	bytes = append(bytes, '\n')
-
-	metaPath := filepath.Join(wsDataDir, WorkspaceMetadataFile)
-	tmpPath := metaPath + ".tmp"
-	if err := os.WriteFile(tmpPath, bytes, 0o644); err != nil {
-		return fmt.Errorf("workspace: write tmp %s: %w", tmpPath, err)
-	}
-
-	if err := os.Rename(tmpPath, metaPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("workspace: commit %s: %w", metaPath, err)
-	}
-
-	return nil
+	return fsutils.WriteJSONAtomic(filepath.Join(wsDataDir, WorkspaceMetadataFile), meta, 0o644)
 }
 
 // EnsureMetadata ensures that workspace.json exists for a configured workspace dir.

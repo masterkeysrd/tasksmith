@@ -61,6 +61,12 @@ type Option func(*openOptions)
 type openOptions struct {
 	builtinFS  []fs.FS
 	restricted bool
+	trackTrust bool
+	modeForced bool
+}
+
+func WithWorkspaceTrust() Option {
+	return func(o *openOptions) { o.trackTrust = true }
 }
 
 // WithRestrictedMode opens the workspace in restricted mode:
@@ -70,6 +76,7 @@ type openOptions struct {
 func WithRestrictedMode(restricted bool) Option {
 	return func(o *openOptions) {
 		o.restricted = restricted
+		o.modeForced = true
 	}
 }
 
@@ -193,6 +200,7 @@ func (w *Workspace) PrepareReload(ctx context.Context) (*Workspace, func(), erro
 	w.mu.RLock()
 	next := &Workspace{cwd: w.cwd, rootDir: w.rootDir, opts: w.opts, mcp: w.mcp}
 	w.mu.RUnlock()
+	next.opts.trackTrust = true
 	if err := next.Reload(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -200,6 +208,7 @@ func (w *Workspace) PrepareReload(ctx context.Context) (*Workspace, func(), erro
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		w.registry = next.registry
+		w.opts.restricted = next.opts.restricted
 		w.rootDir = next.rootDir
 		w.env = next.env
 		w.subprocessEnv = next.subprocessEnv
@@ -217,6 +226,11 @@ func (w *Workspace) Reload(ctx context.Context) error {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if w.opts.trackTrust && !w.opts.modeForced {
+		trusted, changed, err := IsTrusted(w.cwd)
+		w.opts.restricted = err != nil || !trusted || changed
+	}
 
 	var sysProviders []warp.ResourceProvider
 	if builtinDir, err := EnsureBuiltinDir(); err == nil {

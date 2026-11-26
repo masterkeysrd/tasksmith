@@ -399,30 +399,14 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		d.wsMu.Unlock()
 		return rt, nil
 	}
-	d.wsMu.Unlock()
 
-	trusted, fpChanged, _ := workspace.IsTrusted(cleanDir)
-	openOpts := []workspace.Option{workspace.WithBuiltinFS(builtin.FS())}
-	if !trusted || fpChanged {
-		openOpts = append(openOpts, workspace.WithRestrictedMode(true))
-	}
-
-	ws, err := workspace.Open(ctx, cleanDir, openOpts...)
+	ws, err := workspace.Open(ctx, cleanDir, workspace.WithBuiltinFS(builtin.FS()), workspace.WithWorkspaceTrust())
 	if err != nil {
+		d.wsMu.Unlock()
 		return nil, fmt.Errorf("daemon: open workspace %q: %w", cleanDir, err)
 	}
 	rootDir := ws.RootDir()
-
-	d.wsMu.Lock()
-	if d.closed {
-		d.wsMu.Unlock()
-		return nil, errors.New("daemon: server is closed")
-	}
 	d.dirToRoot[cleanDir] = rootDir
-	if rt, ok := d.workspaces[cleanDir]; ok {
-		d.wsMu.Unlock()
-		return rt, nil
-	}
 
 	var db *sql.DB
 	var permMgr permissions.Manager
@@ -642,10 +626,19 @@ func (d *Daemon) Workspaces() []string {
 }
 
 func (d *Daemon) reloadAllWorkspaces(ctx context.Context) {
+	if err := d.reloadWorkspacesUnder(ctx, ""); err != nil {
+		d.logger.Warn("failed to reload workspaces", log.String("error", err.Error()))
+	}
+}
+
+func (d *Daemon) reloadWorkspacesUnder(ctx context.Context, dir string) error {
 	d.wsMu.Lock()
 	seen := make(map[*workspaceRuntime]struct{}, len(d.workspaces))
 	owners := make([]*workspaceRuntime, 0, len(d.workspaces))
 	for _, rt := range d.workspaces {
+		if dir != "" && !fsutils.IsInsideDir(rt.dir, dir) && !fsutils.IsInsideDir(rt.ws.RootDir(), dir) {
+			continue
+		}
 		owner := rt.sessionOwnerOrSelf()
 		if _, ok := seen[owner]; !ok {
 			seen[owner] = struct{}{}
@@ -654,14 +647,13 @@ func (d *Daemon) reloadAllWorkspaces(ctx context.Context) {
 	}
 	d.wsMu.Unlock()
 
+	var errs []error
 	for _, owner := range owners {
 		if err := owner.Reload(ctx); err != nil {
-			d.logger.Warn("failed to reload workspace after provider update",
-				log.String("workspace", owner.dir),
-				log.String("error", err.Error()),
-			)
+			errs = append(errs, fmt.Errorf("reload %q: %w", owner.dir, err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func (d *Daemon) closeWorkspaces() error {

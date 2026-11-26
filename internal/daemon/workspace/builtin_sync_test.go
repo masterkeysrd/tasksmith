@@ -254,7 +254,6 @@ func TestBuiltinReviewBundle(t *testing.T) {
 	}
 	t.Setenv("XDG_DATA_HOME", filepath.Join(dir, "commands/review.command.md"))
 	xdg.ClearCache()
-	t.Cleanup(xdg.ClearCache)
 	wsDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(wsDir, "AGENTS.md"), []byte("Project review invariants."), 0644); err != nil {
 		t.Fatal(err)
@@ -341,9 +340,9 @@ func TestBuiltinGrillMeCommandResolves(t *testing.T) {
 				if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
 					t.Fatal(err)
 				}
+				t.Cleanup(xdg.ClearCache)
 				t.Setenv("XDG_DATA_HOME", blocked)
 				xdg.ClearCache()
-				t.Cleanup(xdg.ClearCache)
 			}
 			ws, err := Open(ctx, root)
 			if err != nil {

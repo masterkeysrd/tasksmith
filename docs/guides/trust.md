@@ -71,8 +71,8 @@ backend before assuming you have kernel isolation.
 ## Check what executable fingerprinting protects
 
 On a trust check, TaskSmith compares the recorded fingerprint with the current
-one. It hashes the relative paths **and contents** of readable files recursively
-under these directories in the folder being checked:
+one. It hashes relative paths and contents across the enclosing workspace and
+its project roots, including executable WARP manifests and files under these directories:
 
 | Watched directory | Example change worth investigating |
 | --- | --- |
@@ -80,8 +80,13 @@ under these directories in the folder being checked:
 | `.agents/mcps/` | A server changes its executable, arguments, or remote endpoint |
 | `.agents/decisions/` | A permission reviewer changes its approval threshold or rubric |
 
-After a pull or branch switch, two different nonempty fingerprints cause a new
-trust prompt. Compare the checkout against the revision you actually reviewed.
+The digest also includes repository `.env` layers. Adding the first executable file,
+removing the last one, or changing an inherited manifest invalidates the baseline.
+An unreadable file cannot establish trust. A legacy entry with no fingerprint needs
+fresh approval. Trust changes made through the daemon reload affected resident
+workspaces; a workspace reload also checks the current fingerprint.
+
+Compare the checkout against the revision you actually reviewed.
 For example, after a pull for which `ORIG_HEAD` is that revision:
 
 ```sh
@@ -89,12 +94,9 @@ git diff ORIG_HEAD HEAD -- .agents/tools .agents/mcps .agents/decisions
 git status --short --untracked-files=all -- .agents
 ```
 
-Read a referenced script too, even if its manifest did not change. An external
-script, `WORKSPACE.md`, ordinary source files, and the root `.env` are **not**
-part of this digest. The startup inventory reports `.env` presence separately.
-An empty watched tree has no digest: adding the first file to a previously empty
-tree, or removing the last file, does not produce a nonempty-to-nonempty mismatch.
-A missing prompt is not evidence that everything in the checkout stayed the same.
+Read referenced scripts too. Scripts outside the watched directories, ordinary
+source files, and `WORKSPACE.md` itself are not part of this digest. A missing
+prompt is not evidence that everything in the checkout stayed the same.
 
 ## Manage trust with trust.json and the CLI
 
@@ -124,7 +126,7 @@ parent grants before relying on folder-by-folder prompts.
 
 **Revoke a grant.** Close sessions using the directory first. From your own
 editor, remove the matching object from `folders`, preserving other entries and
-valid JSON. Do not just clear `fingerprint`: that leaves the path trusted. If a
+valid JSON. Clearing `fingerprint` requires fresh approval but does not remove the entry. If a
 parent entry still covers the directory, remove that grant too and trust the
 other folders individually. There is no per-child negative trust entry.
 

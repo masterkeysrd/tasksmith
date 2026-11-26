@@ -2,17 +2,20 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -36,10 +39,127 @@ func newTestDaemon(t *testing.T, pool gateway.Pool) *Daemon {
 	return d
 }
 
+func TestResidentWorkspaceTrustTransitions(t *testing.T) {
+	testutils.SetupXDG(t, "resident-trust")
+	root := t.TempDir()
+	child := filepath.Join(root, "subproject")
+	if err := os.WriteFile(filepath.Join(root, "WORKSPACE.md"), []byte("# Workspace\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := newTestDaemon(t, gateway.NewPool())
+	var residents []*workspaceRuntime
+	for _, dir := range []string{filepath.Join(root, "sibling"), child} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		rt, err := d.workspace(t.Context(), dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		residents = append(residents, rt)
+	}
+	check := func(want bool) {
+		t.Helper()
+		for _, rt := range residents {
+			if rt.ws.IsRestricted() != want {
+				t.Fatalf("%s restricted: want %v", rt.dir, want)
+			}
+		}
+	}
+	trust := func() {
+		t.Helper()
+		if err := d.TrustWorkspace(t.Context(), api.TrustFolderRequest{Path: root, Scope: api.TrustScopeParent}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(true)
+	trust()
+	check(false)
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TEST=changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ReloadWorkspace(t.Context(), child); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	trust()
+	check(false)
+	if err := d.RevokeTrust(t.Context(), root); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+}
+
+func TestTrustWorkspaceRollsBackTrustOnReloadFailure(t *testing.T) {
+	testutils.SetupXDG(t, "trust-rollback")
+
+	dir := t.TempDir()
+	d := newTestDaemon(t, gateway.NewPool())
+	if _, err := d.workspace(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+
+	// A syntactically invalid .env hashes fine in TrustFolder but fails PrepareReload.
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("BROKEN=\"unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.TrustWorkspace(t.Context(), api.TrustFolderRequest{Path: dir, Scope: api.TrustScopeFolder}); err == nil {
+		t.Fatal("expected TrustWorkspace to fail when reload fails on invalid .env")
+	}
+
+	trusted, _, err := workspace.IsTrusted(dir)
+	if err != nil {
+		t.Fatalf("IsTrusted: %v", err)
+	}
+	if trusted {
+		t.Fatal("workspace remained persisted as trusted after failed TrustWorkspace reload")
+	}
+
+	var apiErr *api.APIError
+	err = d.TrustWorkspace(t.Context(), api.TrustFolderRequest{Path: dir, Scope: api.TrustScope("invalid")})
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid trust scope: got %v, want 400 APIError", err)
+	}
+}
+
+func TestTrustWorkspaceParentRollbackRestrictsResidentSibling(t *testing.T) {
+	testutils.SetupXDG(t, "parent-trust-rollback")
+	parent := t.TempDir()
+	d := newTestDaemon(t, gateway.NewPool())
+	openChild := func(name string) *workspaceRuntime {
+		t.Helper()
+		dir := filepath.Join(parent, name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		rt, err := d.workspace(t.Context(), dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rt
+	}
+	good := openChild("good")
+	broken := openChild("broken")
+	if err := os.WriteFile(filepath.Join(broken.dir, ".env"), []byte("BROKEN=\"unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	req := api.TrustFolderRequest{Path: parent, Scope: api.TrustScopeParent}
+	if err := d.TrustWorkspace(t.Context(), req); err == nil {
+		t.Fatal("expected parent trust to fail on broken workspace reload")
+	}
+	if _, found, err := workspace.LookupTrustEntry(parent); err != nil || found {
+		t.Errorf("persisted parent trust: found=%v err=%v, want false and nil", found, err)
+	}
+	if !good.Workspace().IsRestricted() {
+		t.Error("healthy resident sibling remained unrestricted after rollback")
+	}
+}
+
 func TestRuntimeSharesGatewayAcrossModelOverrides(t *testing.T) {
 	ctx := context.Background()
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-catalog-pool-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-catalog-pool-test")
 	pool := gateway.NewPool()
 	defer checkClose(t, pool)
 	d := newTestDaemon(t, pool)
@@ -72,8 +192,7 @@ func TestRuntimeSharesGatewayAcrossModelOverrides(t *testing.T) {
 
 func TestRuntimeBuildsAndSwapsCatalog(t *testing.T) {
 	ctx := context.Background()
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-catalog-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-catalog-test")
 	root := t.TempDir()
 	workspaceManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: catalog-test\nspec:\n  projects: [\".\"]\n---\n"
 	if err := os.WriteFile(filepath.Join(root, "WORKSPACE.md"), []byte(workspaceManifest), 0o644); err != nil {
@@ -147,8 +266,7 @@ func (p *failingReloadPool) Acquire(ctx context.Context, cfg gateway.Config) (ga
 
 func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	ctx := context.Background()
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-runtime-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-runtime-test")
 	root := t.TempDir()
 	workspaceManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: reload-test\nspec:\n  projects: [\".\", \"sub\"]\n---\n"
 	if err := os.WriteFile(filepath.Join(root, "WORKSPACE.md"), []byte(workspaceManifest), 0o644); err != nil {

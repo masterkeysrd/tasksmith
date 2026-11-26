@@ -28,6 +28,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sys"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
@@ -196,11 +197,7 @@ func shortTempDir(t *testing.T) string {
 func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Daemon, *client.Client, string) {
 	t.Helper()
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-daemon-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-daemon-test")
 
 	runDir := shortTempDir(t)
 	sockPath := filepath.Join(runDir, "b.sock")
@@ -227,7 +224,7 @@ func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Daemon, *client.Client,
 	})
 
 	wsDir := shortTempDir(t)
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"
@@ -308,11 +305,7 @@ func extractAPIMessageText(msg api.Message) string {
 }
 
 func TestConfigValidateAndDefaultPaths(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-daemon-cfg-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-daemon-cfg-test")
 
 	sockPath, err := DefaultSocketPath()
 	if err != nil || sockPath == "" {
@@ -2093,7 +2086,7 @@ Root agent instructions.
 	if err := os.MkdirAll(subAgentsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll subAgentsDir: %v", err)
 	}
-	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(subDir, api.TrustScopeFolder); err != nil {
 		t.Fatalf("TrustFolder subDir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(subDir, "AGENTS.md"), []byte("Subproject AGENTS instructions."), 0o644); err != nil {
@@ -2356,9 +2349,7 @@ func TestSubprojectSessionRestoreFromSQLite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-subproject-restore-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-subproject-restore-test")
 
 	wsDir := shortTempDir(t)
 	subDir := filepath.Join(wsDir, "packages", "sub")
@@ -2366,12 +2357,6 @@ func TestSubprojectSessionRestoreFromSQLite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(subDir, ".agents"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
-		t.Fatal(err)
-	}
-	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2422,6 +2407,13 @@ spec:
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(subDir, ".env"), []byte("SUBPROJECT_RESTORE_ENV=sub-env-ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(subDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2641,8 +2633,7 @@ func TestSubprojectReceivesDiscoveredMCPToolsAndResources(t *testing.T) {
 	httpSrv := httptest.NewServer(sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return mcpSrv }, nil))
 	defer httpSrv.Close()
 
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-subproject-mcp-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-subproject-mcp-test")
 
 	var (
 		mu   sync.Mutex
@@ -2716,12 +2707,6 @@ func TestSubprojectReceivesDiscoveredMCPToolsAndResources(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(subDir, ".agents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
-		t.Fatal(err)
-	}
-	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: mcp-mono\nspec:\n  projects: [\".\", \"packages/sub\"]\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2730,6 +2715,13 @@ func TestSubprojectReceivesDiscoveredMCPToolsAndResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(subDir, "AGENTS.md"), []byte("subproject mcp"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(subDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2892,7 +2884,7 @@ func TestSubprojectReloadPropagatesFromRootToLiveSessions(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(subDir, ".agents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(subDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: reload-mono\nspec:\n  projects: [\".\", \"packages/sub\"]\n---\n"), 0o644); err != nil {
@@ -3111,19 +3103,17 @@ func TestCreateSessionExplicitIDColdSQLiteNoDeadlock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-explicit-id-cold-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-explicit-id-cold-test")
 
 	wsDir := shortTempDir(t)
 	subDir := filepath.Join(wsDir, "packages", "sub")
 	if err := os.MkdirAll(filepath.Join(subDir, ".agents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
-	if err := workspace.TrustFolder(subDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(subDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte("---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: cold-id\nspec:\n  projects: [\".\", \"packages/sub\"]\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"), 0o644); err != nil {
@@ -3481,11 +3471,7 @@ func TestDaemonTasksEndpoints(t *testing.T) {
 
 func TestGetWorkspaceSurfacesWarnings(t *testing.T) {
 	ctx := context.Background()
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-daemon-warnings-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-daemon-warnings-test")
 
 	runDir := shortTempDir(t)
 	sockPath := filepath.Join(runDir, "b.sock")
@@ -3804,7 +3790,7 @@ Run the project linter over the requested path.
 	if err := os.WriteFile(filepath.Join(toolsDir, "linter.tool.md"), []byte(toolContent), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 	if err := srv.ReloadWorkspace(ctx, wsDir); err != nil {
@@ -4284,7 +4270,7 @@ func TestInvalidProviderManifestIsolatedInDaemon(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close(context.Background()) })
 
 	wsDir := shortTempDir(t)
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 	wsManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: fault-isolation\nspec:\n  defaultProvider: healthy\n  defaultModels:\n    completion: gpt-4o\n---\n"
@@ -4390,11 +4376,11 @@ spec:
 func TestScanGlobalMCPsIncludesHomeAgents(t *testing.T) {
 	home := t.TempDir()
 	xdgCfg := filepath.Join(home, "xdg-config")
+	t.Cleanup(xdg.ClearCache)
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", xdgCfg)
 	t.Setenv("TASKSMITH_APPNAME", "tasksmith")
 	xdg.ClearCache()
-	t.Cleanup(xdg.ClearCache)
 
 	xdgMCPDir := filepath.Join(xdgCfg, "tasksmith", "agents", "mcps")
 	homeMCPDir := filepath.Join(home, ".agents", "mcps")

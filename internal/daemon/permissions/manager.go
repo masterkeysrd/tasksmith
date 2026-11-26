@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -125,17 +126,7 @@ func (m *manager) writeToFile(path string, perms api.Permissions) error {
 	perms.Allow = deduplicateRules(perms.Allow)
 	perms.Deny = deduplicateRules(perms.Deny)
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("permissions: create directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(perms, "", "  ")
-	if err != nil {
-		return fmt.Errorf("permissions: marshal permissions: %w", err)
-	}
-	data = append(data, '\n')
-
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := fsutils.WriteJSONAtomic(path, perms, 0o600); err != nil {
 		return fmt.Errorf("permissions: write %q: %w", path, err)
 	}
 	return nil
@@ -288,12 +279,5 @@ func UpdateGlobal(defaultMode api.PermissionMode) error {
 	if defaultMode != "" {
 		perms.DefaultMode = defaultMode
 	}
-	if err := os.MkdirAll(filepath.Dir(globalPath), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(perms, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(globalPath, append(data, '\n'), 0o644)
+	return fsutils.WriteJSONAtomic(globalPath, perms, 0o600)
 }

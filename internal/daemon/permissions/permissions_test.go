@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -20,8 +21,7 @@ import (
 
 func setupTestWorkspace(t *testing.T) (string, *workspace.Workspace) {
 	t.Helper()
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-permissions-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-permissions-test")
 
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
@@ -1145,8 +1145,7 @@ func TestSessionManagerOpenWorldPolicy(t *testing.T) {
 // and ask patterns match namespace-qualified names (namespace/name and
 // namespace/Kind/name), not just the bare short name.
 func TestSessionManagerNamespaceQualifiedPatterns(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-permissions-ns-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-permissions-ns-test")
 
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
@@ -1405,9 +1404,7 @@ func TestFileAccessChecker(t *testing.T) {
 }
 
 func TestPlansDirAutoAllowAndRestrictedWorkspace(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-perm-plans-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-perm-plans-test")
 
 	wsDir := t.TempDir()
 	plansDir := filepath.Join(t.TempDir(), "sessions", "s1", "plans")
@@ -1509,8 +1506,7 @@ func TestPlansDirAutoAllowAndRestrictedWorkspace(t *testing.T) {
 }
 
 func TestSessionManagerSetWorkspaceEnforcesSubprojectTrust(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-perm-subws-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-perm-subws-test")
 
 	rootDir := t.TempDir()
 	subDir := filepath.Join(rootDir, "sub")

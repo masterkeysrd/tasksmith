@@ -206,7 +206,7 @@ func (c *Client) GetTrustStatus(ctx context.Context) (*api.TrustStatus, error) {
 }
 
 // TrustWorkspace records a trust decision for the workspace.
-func (c *Client) TrustWorkspace(ctx context.Context, scope string) error {
+func (c *Client) TrustWorkspace(ctx context.Context, scope api.TrustScope) error {
 	if err := c.requireCWD(); err != nil {
 		return err
 	}

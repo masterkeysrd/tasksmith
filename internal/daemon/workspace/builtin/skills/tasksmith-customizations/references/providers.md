@@ -53,6 +53,8 @@ A model identifier commonly has the form `provider/model`. Workspace resolution 
 
 When `${env:<VAR>}` is used, the gateway reads the workspace environment and falls back to the host environment; a missing or empty value produces a credential error. File credentials (`${file:<PATH>}`) must be readable and nonempty. Rotating a credential value or file changes the gateway fingerprint and rebuilds provider connections. Shipped token presets use `type: bearer` (e.g. `openai`, `typesafe`) or `type: api-key` with a vendor header (`X-Api-Key` for `anthropic`, `x-goog-api-key` for `google-genai`) and `token: "${env:<VAR>}"`, while `antigravity` uses `type: oauth2`.
 
+When creating a provider from a preset at a different HTTP origin, supply a credential for that origin or explicitly select `none`. Provider HTTP clients reject redirects that change scheme, hostname, or effective port.
+
 ### Managed OAuth sign-in
 
 `oauth2` providers authenticate through the existing daemon HTTP API; clients do not handle tokens themselves. Antigravity supports a daemon-managed PKCE flow with pasted redirects. Claude Code and GitHub Copilot use vendor-owned sign-in, completed in the browser on the daemon host. TaskSmith uses a protected data directory for each vendor CLI's credentials and runtime state, not host environment credentials or shared user profiles. The vendor CLIs run without native tools and configuration; TaskSmith tools remain subject to its permissions and sandbox.

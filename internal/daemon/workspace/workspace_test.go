@@ -11,6 +11,7 @@ import (
 	"testing/fstest"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/warp"
@@ -18,11 +19,7 @@ import (
 
 func setupTestXDG(t *testing.T) string {
 	t.Helper()
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	xdgRoot := testutils.SetupXDG(t, "tasksmith-test")
 	return xdgRoot
 }
 
