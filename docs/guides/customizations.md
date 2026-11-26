@@ -49,7 +49,7 @@ synthetic workspace. Pick the scope by audience, not by file format:
 
 | Audience | Resource directory | Example |
 | --- | --- | --- |
-| Only you, across repositories | `$XDG_CONFIG_HOME/tasksmith/agents/` (usually `~/.config/tasksmith/agents/`) | A personal review command |
+| Only you, across repositories | `$XDG_CONFIG_HOME/tasksmith/agents/` (usually `~/.config/tasksmith/agents/`) or `~/.agents/`; XDG wins for the same kind and name | A personal review command |
 | Every project in a workspace | `<workspace-root>/.agents/` | A shared provider or release playbook |
 | One project | `<project>/.agents/` | A migration rule specific to one service |
 

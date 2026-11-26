@@ -4,6 +4,8 @@
 
 Workspace loading finds the workspace root, maps project directories, and then loads each project's context and resources. See [workspace and project context](workspace-and-context.md) for the workspace search, project mapping, and flat-root ownership rules. A project's namespace is derived from its lowercase relative path with separators replaced by hyphens, for example `services/api` becomes `services-api`; a final `.md`, `.yaml`, or `.yml` suffix is removed. The root project's namespace uses the lowercase root directory name. An absent `AGENTS.md` produces no project context.
 
+The user tier merges `$XDG_CONFIG_HOME/tasksmith/agents/` and `~/.agents/`. For the same kind and name, the XDG definition wins; either directory may be absent.
+
 Resource directories are walked recursively for `.md`, `.yaml`, and `.yml` files. Markdown resources normally require YAML frontmatter followed by a Markdown body; YAML files contain a YAML manifest. The parser can infer a Workspace or Context from a plain Markdown file named `WORKSPACE.md` or `AGENTS.md`, respectively. The parser recognizes those special names case-insensitively, but workspace discovery opens the exact `WORKSPACE.md` spelling, subject to filesystem behavior; project context discovery checks `AGENTS.md` case-insensitively.
 
 Ordinary Markdown files without frontmatter are skipped during resource scanning. Other parse failures produce loader warnings rather than necessarily stopping discovery. Workspace, Context, and Plugin are structural resources, not ordinary resources loaded from a project's `.agents/` scan.

@@ -31,6 +31,27 @@ func saveAndRestoreEnv(t *testing.T) {
 	})
 }
 
+func TestUserResourceDirs(t *testing.T) {
+	saveAndRestoreEnv(t)
+	SetTestEnv(t.TempDir(), "tasksmith-test")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir, err := SubConfigDir("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dir, filepath.Join(home, ".agents")); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := UserResourceDirs(); len(got) != 1 || got[0] != dir {
+		t.Fatalf("expected only the XDG path %q, got %v", dir, got)
+	}
+}
+
 func TestAppName(t *testing.T) {
 	saveAndRestoreEnv(t)
 

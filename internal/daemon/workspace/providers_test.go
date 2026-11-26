@@ -100,6 +100,39 @@ func TestFilterPresetAliasesNormalizesWhitespace(t *testing.T) {
 	}
 }
 
+func TestHomeProviderEditConfinement(t *testing.T) {
+	setupTestXDG(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".agents", "providers")
+	manifest := writeProviderFile(t, dir, "personal", "  enabled: false\n"+testProviderSpec)
+	ws, err := Open(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.SetProviderEnabled("personal", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := ws.ProviderRecord("personal")
+	if !ok || !rec.Enabled || !rec.Writable || rec.Namespace != NamespaceUser {
+		t.Fatalf("expected enabled, writable user provider, got %+v", rec)
+	}
+
+	outside := filepath.Join(t.TempDir(), "personal.provider.yaml")
+	if err := os.Rename(manifest, outside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if rec, ok := ws.ProviderRecord("personal"); !ok || rec.Writable {
+		t.Fatalf("provider pointing outside user roots must be read-only, got %+v", rec)
+	}
+}
+
 func TestProviderRecordsListsUserTier(t *testing.T) {
 	w, _, userPath := openProviderTestWorkspace(t)
 

@@ -41,7 +41,7 @@ A higher tier can replace a same-kind, same-name resource from a lower one. Put 
 | Tier | Example |
 | --- | --- |
 | Built-in | The `main` and `title-generator` agents and built-in skills. Workspace built-ins are mirrored under `$XDG_DATA_HOME/tasksmith/builtin/`. |
-| User | A provider or skill you reuse across checkouts, under `$XDG_CONFIG_HOME/tasksmith/agents/`. |
+| User | A provider or skill you reuse across checkouts, under `$XDG_CONFIG_HOME/tasksmith/agents/` or `~/.agents/`. If both define the same kind and name, the XDG definition wins. |
 | Workspace | A shared review command in `<workspace-root>/.agents/commands/`. |
 | Project | An API-specific agent in `packages/api/.agents/agents/`. |
 

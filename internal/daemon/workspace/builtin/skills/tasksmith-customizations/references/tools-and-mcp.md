@@ -88,7 +88,7 @@ The filters and annotation overrides below are **enforced**. A tool excluded by 
 
 Each policy filter has `include` and `exclude` arrays of glob patterns. The WARP definition applies exclusions after inclusions. Use environment- or file-based authentication rather than embedding credentials in manifests.
 
-Manifests live under `mcps/<name>.mcp.yaml` in a resource directory: a project's `.agents/mcps/`, a workspace's `.agents/mcps/`, or the user resource directory `~/.config/tasksmith/agents/mcps/`. A project manifest overrides a workspace or user manifest with the same name. `metadata.name` both prefixes every exposed tool as `<server>__<tool>` and names the server in user-facing MCP commands.
+Manifests live under `mcps/<name>.mcp.yaml` in a resource directory: a project's `.agents/mcps/`, a workspace's `.agents/mcps/`, or either user directory (`$XDG_CONFIG_HOME/tasksmith/agents/mcps/` takes precedence over `~/.agents/mcps/`). A project manifest overrides a workspace or user manifest with the same name. `metadata.name` both prefixes every exposed tool as `<server>__<tool>` and names the server in user-facing MCP commands.
 
 ```yaml
 apiVersion: warp/v1alpha1

@@ -1155,18 +1155,26 @@ func (d *Daemon) GetWorkspaceStatus(ctx context.Context, rawWS string) (*api.Wor
 
 func (d *Daemon) scanGlobalMCPs() []string {
 	var mcps []string
-	if userMcpsDir, err := xdg.SubConfigDir("agents/mcps"); err == nil {
-		if entries, err := os.ReadDir(userMcpsDir); err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				name := entry.Name()
-				if strings.HasSuffix(name, ".mcp.yaml") || strings.HasSuffix(name, ".yaml") {
-					cleanName := strings.TrimSuffix(strings.TrimSuffix(name, ".mcp.yaml"), ".yaml")
-					mcps = append(mcps, cleanName)
-				}
+	seen := make(map[string]struct{})
+	for _, userDir := range xdg.UserResourceDirs() {
+		entries, err := os.ReadDir(filepath.Join(userDir, "mcps"))
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
 			}
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".mcp.yaml") && !strings.HasSuffix(name, ".yaml") {
+				continue
+			}
+			cleanName := strings.TrimSuffix(strings.TrimSuffix(name, ".mcp.yaml"), ".yaml")
+			if _, ok := seen[cleanName]; ok {
+				continue
+			}
+			seen[cleanName] = struct{}{}
+			mcps = append(mcps, cleanName)
 		}
 	}
 	sort.Strings(mcps)

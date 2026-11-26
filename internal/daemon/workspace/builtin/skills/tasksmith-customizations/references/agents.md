@@ -69,7 +69,7 @@ Agents declare their eager tools with the top-level `spec.tools` field (`*`, `!p
 
 ## User override example
 
-A user-scoped `main` in `$XDG_CONFIG_HOME/tasksmith/agents/agents/` (normally `~/.config/tasksmith/agents/agents/`) can extend the built-in main agent without replacing its instructions. The user definition wins over the system definition for the short name `main`, while the qualified `extends` selects the system parent directly. The example skill names must exist in the visible resource scopes to resolve.
+A user-scoped `main` in `$XDG_CONFIG_HOME/tasksmith/agents/agents/` (normally `~/.config/tasksmith/agents/agents/`) or `~/.agents/agents/` can extend the built-in main agent without replacing its instructions. The user definition wins over the system definition for the short name `main`, while the qualified `extends` selects the system parent directly. The example skill names must exist in the visible resource scopes to resolve.
 
 ```markdown
 ---

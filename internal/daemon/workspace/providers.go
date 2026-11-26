@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -113,6 +114,7 @@ func (w *Workspace) providerRecords() []ProviderRecord {
 	}
 	slices.Sort(names)
 
+	userDirs := xdg.UserResourceDirs()
 	records := make([]ProviderRecord, 0, len(names))
 	for _, name := range names {
 		tiers := byName[name]
@@ -135,7 +137,15 @@ func (w *Workspace) providerRecords() []ProviderRecord {
 		}
 
 		writable := writableProviderNamespace(ns) && path != ""
-		if writable && ns != warp.NamespaceUser {
+		if ns == warp.NamespaceUser {
+			writable = false
+			for _, dir := range userDirs {
+				if fsutils.IsConfinedInsideDir(path, dir) {
+					writable = true
+					break
+				}
+			}
+		} else if writable {
 			writable = fsutils.IsConfinedInsideDir(path, w.RootDir())
 		}
 		if writable {

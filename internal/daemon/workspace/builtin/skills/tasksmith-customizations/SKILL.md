@@ -22,7 +22,7 @@ For a short name shared by the same kind, the higher visible tier wins:
 | --- | --- | --- |
 | 1 (highest) | Current project | `<project>/.agents/` |
 | 2 | Workspace | `<workspace-root>/.agents/` |
-| 3 | User | `$XDG_CONFIG_HOME/tasksmith/agents/` (normally `~/.config/tasksmith/agents/`) |
+| 3 | User | `$XDG_CONFIG_HOME/tasksmith/agents/` (normally `~/.config/tasksmith/agents/`), then `~/.agents/`; the XDG definition wins for the same kind and name |
 | 4 | System | Embedded built-ins |
 | 5 (lowest) | Plugin namespaces | Resources exported by declared plugins |
 

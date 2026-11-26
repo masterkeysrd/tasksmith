@@ -4387,6 +4387,40 @@ spec:
 	}
 }
 
+func TestScanGlobalMCPsIncludesHomeAgents(t *testing.T) {
+	home := t.TempDir()
+	xdgCfg := filepath.Join(home, "xdg-config")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", xdgCfg)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith")
+	xdg.ClearCache()
+	t.Cleanup(xdg.ClearCache)
+
+	xdgMCPDir := filepath.Join(xdgCfg, "tasksmith", "agents", "mcps")
+	homeMCPDir := filepath.Join(home, ".agents", "mcps")
+	for _, dir := range []string{xdgMCPDir, homeMCPDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(xdgMCPDir, "alpha.mcp.yaml"),
+		filepath.Join(xdgMCPDir, "shared.mcp.yaml"),
+		filepath.Join(homeMCPDir, "shared.mcp.yaml"),
+		filepath.Join(homeMCPDir, "beta.yaml"),
+	} {
+		if err := os.WriteFile(path, []byte("name: test\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := (&Daemon{}).scanGlobalMCPs()
+	want := []string{"alpha", "beta", "shared"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("scanGlobalMCPs() = %v, want %v", got, want)
+	}
+}
+
 func checkClose(t *testing.T, closer io.Closer) {
 	t.Helper()
 	if err := closer.Close(); err != nil {

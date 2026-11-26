@@ -59,7 +59,7 @@ TaskSmith looks upward from the starting directory for `WORKSPACE.md`. If none i
 | --- | --- | --- |
 | 1 | Current project | `<project>/AGENTS.md` and `<project>/.agents/`. The project slug is its namespace; `local` selects the active project. |
 | 2 | Workspace | `<workspace-root>/WORKSPACE.md` and `<workspace-root>/.agents/`. |
-| 3 | User | `$XDG_CONFIG_HOME/tasksmith/agents/`, normally `~/.config/tasksmith/agents/`. |
+| 3 | User | `$XDG_CONFIG_HOME/tasksmith/agents/` (normally `~/.config/tasksmith/agents/`) and `~/.agents/`. The XDG directory wins for the same kind and name. |
 | 4 | System | Embedded in the binary. Built-ins are mirrored under `$XDG_DATA_HOME/tasksmith/builtin/`. |
 | 5 | Plugins | Exported resources selected by `WORKSPACE.md` imports, under each plugin's namespace. |
 

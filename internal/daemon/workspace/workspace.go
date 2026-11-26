@@ -234,10 +234,8 @@ func (w *Workspace) Reload(ctx context.Context) error {
 	}
 
 	var userProviders []warp.ResourceProvider
-	if userAgentsDir, err := xdg.SubConfigDir("agents"); err == nil {
-		if info, statErr := os.Stat(userAgentsDir); statErr == nil && info.IsDir() {
-			userProviders = append(userProviders, warp.NewFSResourceProvider(os.DirFS(userAgentsDir), userAgentsDir))
-		}
+	for _, dir := range xdg.UserResourceDirs() {
+		userProviders = append(userProviders, warp.NewFSResourceProvider(os.DirFS(dir), dir))
 	}
 
 	reg, err := warp.LoadWithOptions(ctx, w.cwd, warp.LoadOptions{

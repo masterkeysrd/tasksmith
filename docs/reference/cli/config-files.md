@@ -10,6 +10,7 @@ TaskSmith adheres to the XDG Base Directory Specification for state persistence,
 | :--- | :--- | :--- | :--- |
 | **Global Config** | `~/.config/tasksmith/` | Root directory for machine-wide user configuration (`$XDG_CONFIG_HOME`). | Permanent |
 | **Global Secrets** | `~/.config/tasksmith/.env` | Global fallback environment variables and upstream API credentials. | Permanent |
+| **Global Resources** | `$XDG_CONFIG_HOME/tasksmith/agents/`, `~/.agents/` | User-tier manifests. When both directories define the same kind and name, the XDG definition wins. | Permanent |
 | **Global Providers** | `~/.config/tasksmith/agents/providers/*.yaml` | User-tier model provider manifests available across all workspaces. | Permanent |
 | **Global Agents** | `~/.config/tasksmith/agents/agents/*.agent.md` | User-tier custom agent personas and instructions. | Permanent |
 | **Global Rules** | `~/.config/tasksmith/permissions.json` | Persistent machine-wide permission allow and deny rules. | Permanent |

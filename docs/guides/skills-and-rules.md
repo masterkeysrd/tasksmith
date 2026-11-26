@@ -2,7 +2,8 @@
 
 Put repository facts where every agent sees them, apply rules when a task
 needs a guardrail, and package longer procedures as skills that load on demand.
-Put shared conventions in `.agents/`, or personal ones in `~/.config/tasksmith/agents/`.
+Put shared conventions in the repository’s `.agents/` directory. For personal skills and rules, use
+`~/.agents/` or `$XDG_CONFIG_HOME/tasksmith/agents/`. If both define the same kind and name, the XDG definition wins.
 
 ## Choose between `AGENTS.md`, rules and skills
 

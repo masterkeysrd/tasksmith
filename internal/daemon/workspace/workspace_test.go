@@ -304,6 +304,38 @@ Workspace root instructions.
 		t.Errorf("unexpected tier 1 bash tool: %+v", bashTool)
 	}
 
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, warning := range ws.Catalog().Warnings() {
+		if strings.Contains(warning, home) {
+			t.Fatalf("missing home resource directory produced warning: %v", warning)
+		}
+	}
+
+	homeAgents := filepath.Join(home, ".agents")
+	if err := os.Mkdir(homeAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(homeAgents, "main.agent.md"), `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: main
+  description: Home agent
+---
+Home instructions.
+`)
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mainAgent, ok = ws.Catalog().GetAgent("main")
+	if !ok || mainAgent.Def.Namespace != NamespaceUser || mainAgent.Description != "Home agent" {
+		t.Fatalf("expected home agent in user namespace, got %+v", mainAgent)
+	}
+
 	// Tier 2 (user): Write user-global override in $XDG_CONFIG_HOME/tasksmith-test/agents/
 	userAgentsDir, err := xdg.SubConfigDir("agents")
 	if err != nil {

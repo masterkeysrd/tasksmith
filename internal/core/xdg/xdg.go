@@ -67,9 +67,10 @@ func defaultDirFor(varType VarType) string {
 }
 
 var (
-	mu       sync.RWMutex
-	appname  string
-	varCache = make(map[VarType]string)
+	mu            sync.RWMutex
+	appname       string
+	varCache      = make(map[VarType]string)
+	inheritedHome = os.Getenv("HOME")
 )
 
 func init() {
@@ -218,6 +219,28 @@ func Subdir(key VarType, subdirs ...string) (string, error) {
 // SubConfigDir returns a subdirectory within the application's configuration directory.
 func SubConfigDir(subdirs ...string) (string, error) {
 	return Subdir(VarTypeConfig, subdirs...)
+}
+
+func UserResourceDirs() []string {
+	var dirs []string
+	var configInfo os.FileInfo
+	if dir, err := SubConfigDir("agents"); err == nil {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			dirs = append(dirs, dir)
+			configInfo = info
+		}
+	}
+
+	home := os.Getenv("HOME")
+	if !filepath.IsAbs(home) || (testing.Testing() && filepath.Clean(home) == filepath.Clean(inheritedHome)) {
+		return dirs
+	}
+
+	dir := filepath.Join(home, ".agents")
+	if info, err := os.Stat(dir); err == nil && info.IsDir() && !os.SameFile(info, configInfo) {
+		dirs = append(dirs, dir)
+	}
+	return dirs
 }
 
 // SubDataDir returns a subdirectory within the application's data directory.
