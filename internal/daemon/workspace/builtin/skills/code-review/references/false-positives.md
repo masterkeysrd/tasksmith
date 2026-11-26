@@ -44,4 +44,5 @@ Discard any candidate that falls into these categories unless an explicit reposi
 
 - **Report** a finding only when you can point to the concrete trigger, trace the exact code path, and explain the observable failure with high confidence (~80%+ certainty).
 - **Do not downgrade a guess into a Medium finding**: Severity measures *impact*, not *confidence*. A low-confidence guess about a Critical topic is still noise—either verify it with code evidence or drop it.
+- **Keep judgement calls out of hard defects**: Never report structural smells (`references/review-rubric.md` §7) as **Critical**, **High**, or **Medium** defects; place only material, concrete structural concerns under **Design Notes (Judgement Calls)**, and suppress them completely whenever a repository convention endorses the pattern.
 - **Surface real blind spots honestly**: If a suspicious interaction depends on code, schemas, or PR metadata you cannot access (e.g., closed external service, missing base ref, unreadable PR), omit it from Findings and note the exact gap under **Scope / Coverage Limits**.
