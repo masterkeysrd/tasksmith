@@ -4,45 +4,7 @@ High-level overview of TaskSmith's direction and release milestones. Plans and p
 
 ---
 
-## 0.0.3 — "The Daemon Rewrite"
-
-Ground-up architectural rewrite around a headless local daemon, OS-level sandboxing, and a scrollback-native reactive CLI.
-
-- [x] **Client-daemon architecture**: on-demand background daemon over Unix domain sockets with multiplexed SSE streaming, cursor-based event replay, and automatic version-skew handling
-- [x] **Inline reactive CLI**: scrollback-native REPL built on `kite` (replacing the legacy full-screen TUI), with configurable status line segments, live turn progress, `/stats` inference metrics, and session exit summaries
-- [x] **OS kernel sandboxing & `/sandbox` settings**: per-session native isolation (macOS Seatbelt, Linux Bubblewrap), host credential masking, workspace path self-protection, unsandboxed command exclusions, and interactive `/sandbox` configuration (`sandbox.json`)
-- [x] **Shell AST inspection & layered permissions**: `shellguard` command analysis, interactive permission rules (`permissions.json`), untrusted repository gating (`/setup`), and provenance-isolated subprocess environments
-- [x] **Transactional file journal & timeline**: SQLite-backed turn durability and pre-mutation file snapshots with unified diff inspection (`/changes`) and instant rollback (`/revert`)
-- [x] **Multi-provider model gateway**: OpenAI (Responses & Chat), Anthropic, Google GenAI, Ollama, TypeSafe, and Antigravity with automatic prompt caching, `@alias` catalog resolution, and browser OAuth sign-in
-- [x] **Subagent delegation & deferred tool discovery**: isolated subagent execution (`invoke_agent`, git worktrees), on-demand `tool_search`, skill-activated deferred tools, and explicit custom tool contracts
-- [x] **Declarative 4-tier WARP workspaces & MCP**: hierarchical resource resolution (`WORKSPACE.md`, `AGENTS.md`, `.agents/`), ambient and on-demand rules, skills (`/skills`), and Model Context Protocol (MCP) server integration
-- [x] **Release packaging & versioning**: cross-platform GoReleaser builds (`darwin`/`linux`, `amd64`/`arm64`), version stamping (`--version`, `tasksmith version`), and Apache 2.0 licensing
-- [x] **Subprocess network allowlisting**: per-domain outbound proxy enforcement and interactive network approvals for sandboxed child processes
-- [x] **Subscription quota tracking & enriched `/model` picker**: live SSE quota updates, adaptive status line countdowns, `/usage` quotas tab, and grouped `/model` pricing and context metadata
-- [x] **Subagent model tiers & discovery**: governed `@fast`, `@balanced`, `@smart`, `@flagship`, and `@inherit` routing enforced against `spec.models` globs, plus `manage_agents` model search
-- [x] **Resolved subagent models**: see the actual model in the activity bar, `invoke_agent` results, `/subagents` rows, and the live inspector.
-- [x] **CI/CD & `main` cutover**: GitHub Actions verification, CodeQL, docs deployment, and GoReleaser workflows alongside promotion of the `v2` architecture to `main`
-- [x] **Unified session modes & planning**: decoupled permission gates and behavioral postures (`default`, `accept_edits`, `plan`, `ask`, `auto`), safe `<session-dir>/plans/` storage, `enter_plan_mode` / `exit_plan_mode`, and `/plan`
-- [x] **Design interviews (`/grill-me`)**: verify repository facts, settle design choices in dependency order, and confirm the decision summary before planning or implementation.
-- [x] **Mode-aware pending approvals**: widening a mode resolves eligible pending permissions without granting rules or approving unsafe requests; eligible write prompts can switch directly to `accept_edits`.
-- [x] **Headless, bidirectional stdio, & SDK execution**: one-shot and bidirectional streaming `tasksmith exec` / `-p` modes (`text`, `json`, and 1:1 `api/` `jsonl` over `stdin`/`stdout`) plus Go `client` SDK lifecycle helpers for CI, pipelines, and programmatic integrations
-- [x] **Agent Client Protocol (`tasksmith acp`)**: JSON-RPC 2.0 stdio adapter over the shared local daemon for Zed, JetBrains, and Neovim with live TUI session sharing, tool diffs, and interactive permission prompts
-- [x] **Quick session resume & forking**: `-c` / `--continue` flag for resuming the latest workspace session and `/fork` conversation branching
-- [x] **Multimodal input**: content-addressed `<session-dir>/media/` storage with late gateway hydration, image/PDF/audio ingestion in `view` (with PDF `pages`), `@` media mentions, clipboard paste, and model-switch capability confirmation
-- [x] **Built-in `web_search` & CLI `auth`**: host-mediated web search tool and `tasksmith auth login|status|logout` subcommands
-- [x] **WARP-managed `/providers` & `spec.enabled`**: interactive `/providers` browser with model manager, catalog, and add flow, inline `F2` alias editor shared with `/model`, and manifest-driven `spec.enabled` for providers with workspace shadow overrides
-- [x] **Deterministic tool & MCP availability**: `spec.enabled` on Tool/MCP manifests plus `WORKSPACE.md` `spec.policies.tools.exclude` / `spec.policies.mcps.exclude` as the only availability switches (legacy `permissions.json` disabled lists removed), with `[Disabled]` listings and in-place toggling in `/tools` and `/mcp`
-- [x] **SmartReplace in `edit`**: exact-first matching with conservative fallbacks for line endings, whitespace, indentation, and minor typos; preserves diff previews and file-change checks.
-- [x] **ChatGPT Codex & live model catalogs** — Sign in with a ChatGPT plan and browse the models available to that account in `/providers`. The gateway uses live catalogs where providers expose them. OpenAI, Google GenAI, and Antigravity presets include updated models and tier aliases. [Codex setup](./docs/reference/providers/codex.md)
-- [x] **Claude Code & GitHub Copilot providers**: subscription-backed `claudecode` and `github-copilot` completion via Loom, with browser sign-in, built-in presets, four model-tier aliases, and provider-reported quota. Copilot requires a CLI that speaks protocol 4, such as `1.0.114`. [Claude Code setup](./docs/reference/providers/claudecode.md) · [Copilot setup](./docs/reference/providers/github-copilot.md)
-- [x] **Calibrated `auto`-mode permission reviewer**: one-shot static-evaluator emulation (`action`, `safety`, `requested`) backed by `permission-reviewer.decision.md` (`@permission-reviewer`), factual evidence without static anchoring, live receipts, and `/usage` review telemetry
-- [x] **Built-in `/review` workflow**: read-only `code-reviewer` subagent (`@code-reviewer` → `@smart` → `@inherit`) paired with an overridable `code-review` skill across TUI, `tasksmith exec`, and ACP
-- [x] **Terminal rendering & ergonomics**: Unicode Markdown math/LaTeX rendering (`$...$`, `$$...$$`), AST-driven shell syntax highlighting across previews, debounced resize transcript redraw, Git branch in the header banner, and `~/.agents/` user resource discovery
-- [x] **Modular user-driven docs & full-repo CI lint gate**: topic-focused guides and reference subdirectories with branded diagrams, zero-issue full-repo `golangci-lint` in CI, and hardened security boundaries across CodeQL checks
-
----
-
-## 0.0.4 — "Workspace Intelligence"
+## 0.0.5 — "Workspace Intelligence"
 
 - **Lifecycle hooks**: deterministic `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, and `SubagentStop` hooks gated by repository trust
 - **LSP diagnostics & code intelligence**: automatic post-edit compiler/typecheck feedback, symbol navigation tools, and live `@sym:` mention resolution
@@ -71,6 +33,42 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 ---
 
 ## Completed
+
+### 0.0.4 — "The Daemon Rewrite"
+
+Ground-up architectural rewrite around a headless local daemon, OS-level sandboxing, and a scrollback-native reactive CLI.
+
+- **Client-daemon architecture**: on-demand background daemon over Unix domain sockets with multiplexed SSE streaming, cursor-based event replay, and automatic version-skew handling
+- **Inline reactive CLI**: scrollback-native REPL built on `kite` (replacing the legacy full-screen TUI), with configurable status line segments, live turn progress, `/stats` inference metrics, and session exit summaries
+- **OS kernel sandboxing & `/sandbox` settings**: per-session native isolation (macOS Seatbelt, Linux Bubblewrap), host credential masking, workspace path self-protection, unsandboxed command exclusions, and interactive `/sandbox` configuration (`sandbox.json`)
+- **Shell AST inspection & layered permissions**: `shellguard` command analysis, interactive permission rules (`permissions.json`), untrusted repository gating (`/setup`), and provenance-isolated subprocess environments
+- **Transactional file journal & timeline**: SQLite-backed turn durability and pre-mutation file snapshots with unified diff inspection (`/changes`) and instant rollback (`/revert`)
+- **Multi-provider model gateway**: OpenAI (Responses & Chat), Anthropic, Google GenAI, Ollama, TypeSafe, and Antigravity with automatic prompt caching, `@alias` catalog resolution, and browser OAuth sign-in
+- **Subagent delegation & deferred tool discovery**: isolated subagent execution (`invoke_agent`, git worktrees), on-demand `tool_search`, skill-activated deferred tools, and explicit custom tool contracts
+- **Declarative 4-tier WARP workspaces & MCP**: hierarchical resource resolution (`WORKSPACE.md`, `AGENTS.md`, `.agents/`), ambient and on-demand rules, skills (`/skills`), and Model Context Protocol (MCP) server integration
+- **Release packaging & versioning**: cross-platform GoReleaser builds (`darwin`/`linux`, `amd64`/`arm64`), version stamping (`--version`, `tasksmith version`), and Apache 2.0 licensing
+- **Subprocess network allowlisting**: per-domain outbound proxy enforcement and interactive network approvals for sandboxed child processes
+- **Subscription quota tracking & enriched `/model` picker**: live SSE quota updates, adaptive status line countdowns, `/usage` quotas tab, and grouped `/model` pricing and context metadata
+- **Subagent model tiers & discovery**: governed `@fast`, `@balanced`, `@smart`, `@flagship`, and `@inherit` routing enforced against `spec.models` globs, plus `manage_agents` model search
+- **Resolved subagent models**: see the actual model in the activity bar, `invoke_agent` results, `/subagents` rows, and the live inspector.
+- **CI/CD & `main` cutover**: GitHub Actions verification, CodeQL, docs deployment, and GoReleaser workflows alongside promotion of the `v2` architecture to `main`
+- **Unified session modes & planning**: decoupled permission gates and behavioral postures (`default`, `accept_edits`, `plan`, `ask`, `auto`), safe `<session-dir>/plans/` storage, `enter_plan_mode` / `exit_plan_mode`, and `/plan`
+- **Design interviews (`/grill-me`)**: verify repository facts, settle design choices in dependency order, and confirm the decision summary before planning or implementation.
+- **Mode-aware pending approvals**: widening a mode resolves eligible pending permissions without granting rules or approving unsafe requests; eligible write prompts can switch directly to `accept_edits`.
+- **Headless, bidirectional stdio, & SDK execution**: one-shot and bidirectional streaming `tasksmith exec` / `-p` modes (`text`, `json`, and 1:1 `api/` `jsonl` over `stdin`/`stdout`) plus Go `client` SDK lifecycle helpers for CI, pipelines, and programmatic integrations
+- **Agent Client Protocol (`tasksmith acp`)**: JSON-RPC 2.0 stdio adapter over the shared local daemon for Zed, JetBrains, and Neovim with live TUI session sharing, tool diffs, and interactive permission prompts
+- **Quick session resume & forking**: `-c` / `--continue` flag for resuming the latest workspace session and `/fork` conversation branching
+- **Multimodal input**: content-addressed `<session-dir>/media/` storage with late gateway hydration, image/PDF/audio ingestion in `view` (with PDF `pages`), `@` media mentions, clipboard paste, and model-switch capability confirmation
+- **Built-in `web_search` & CLI `auth`**: host-mediated web search tool and `tasksmith auth login|status|logout` subcommands
+- **WARP-managed `/providers` & `spec.enabled`**: interactive `/providers` browser with model manager, catalog, and add flow, inline `F2` alias editor shared with `/model`, and manifest-driven `spec.enabled` for providers with workspace shadow overrides
+- **Deterministic tool & MCP availability**: `spec.enabled` on Tool/MCP manifests plus `WORKSPACE.md` `spec.policies.tools.exclude` / `spec.policies.mcps.exclude` as the only availability switches (legacy `permissions.json` disabled lists removed), with `[Disabled]` listings and in-place toggling in `/tools` and `/mcp`
+- **SmartReplace in `edit`**: exact-first matching with conservative fallbacks for line endings, whitespace, indentation, and minor typos; preserves diff previews and file-change checks.
+- **ChatGPT Codex & live model catalogs** — Sign in with a ChatGPT plan and browse the models available to that account in `/providers`. The gateway uses live catalogs where providers expose them. OpenAI, Google GenAI, and Antigravity presets include updated models and tier aliases. [Codex setup](./docs/reference/providers/codex.md)
+- **Claude Code & GitHub Copilot providers**: subscription-backed `claudecode` and `github-copilot` completion via Loom, with browser sign-in, built-in presets, four model-tier aliases, and provider-reported quota. Copilot requires a CLI that speaks protocol 4, such as `1.0.114`. [Claude Code setup](./docs/reference/providers/claudecode.md) · [Copilot setup](./docs/reference/providers/github-copilot.md)
+- **Calibrated `auto`-mode permission reviewer**: one-shot static-evaluator emulation (`action`, `safety`, `requested`) backed by `permission-reviewer.decision.md` (`@permission-reviewer`), factual evidence without static anchoring, live receipts, and `/usage` review telemetry
+- **Built-in `/review` workflow**: read-only `code-reviewer` subagent (`@code-reviewer` → `@smart` → `@inherit`) paired with an overridable `code-review` skill across TUI, `tasksmith exec`, and ACP
+- **Terminal rendering & ergonomics**: Unicode Markdown math/LaTeX rendering (`$...$`, `$$...$$`), AST-driven shell syntax highlighting across previews, debounced resize transcript redraw, Git branch in the header banner, and `~/.agents/` user resource discovery
+- **Modular user-driven docs & full-repo CI lint gate**: topic-focused guides and reference subdirectories with branded diagrams, zero-issue full-repo `golangci-lint` in CI, and hardened security boundaries across CodeQL checks
 
 ### 0.0.2 — "Workflow Polish"
 
