@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1336,6 +1337,7 @@ func TestStreamReconnect(t *testing.T) {
 
 type failUpdates struct {
 	io.Writer
+	once             sync.Once
 	blocked, release chan struct{}
 	fail             atomic.Bool
 }
@@ -1343,7 +1345,9 @@ type failUpdates struct {
 func (w *failUpdates) Write(p []byte) (int, error) {
 	if w.fail.Load() && strings.Contains(string(p), `"method":"session/update"`) {
 		if w.blocked != nil {
-			close(w.blocked)
+			w.once.Do(func() {
+				close(w.blocked)
+			})
 			<-w.release
 		}
 		return 0, errors.New("failed to notify")
