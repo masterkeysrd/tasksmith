@@ -53,10 +53,18 @@ func Duration(d time.Duration, opts ...DurationOption) string {
 }
 
 // compactDuration renders a duration as a single compact token: "50s", "42m",
-// "3h", "3h40m".
+// "3h", "3h40m", "2d", "6d18h".
 func compactDuration(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d >= 24*time.Hour {
+		days := int(d.Hours()) / 24
+		hours := int(d.Hours()) % 24
+		if hours == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd%dh", days, hours)
 	}
 	h := int(d.Hours())
 	m := int(d.Minutes()) % 60

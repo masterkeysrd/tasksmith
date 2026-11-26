@@ -2,11 +2,18 @@ package command
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func text(lines []usageLine) string {
@@ -174,22 +181,22 @@ func TestQuotaLinesSharedPoolAndMultiBucket(t *testing.T) {
 			},
 		},
 	}
-	lines := quotaLines(snap, nil, "pool/a", now)
+	lines := quotaLines(snap, nil, "pool/a", now, quotaOptions{Width: 100})
 	out := text(lines)
 
 	if !strings.Contains(out, "pool · dev@example.com") {
 		t.Errorf("provider heading missing:\n%s", out)
 	}
-	if !strings.Contains(out, "Shared pool (2 models): pool/a · current, pool/b") {
-		t.Errorf("shared pool line with active model marker missing:\n%s", out)
+	if !strings.Contains(out, "● Current pool (2 models) · a, b") {
+		t.Errorf("active shared pool line missing:\n%s", out)
 	}
-	if !strings.Contains(out, "94%  5h · resets in 3h40m at") || !strings.Contains(out, "40%  7d · resets in 48h at") {
+	if !strings.Contains(out, "94%  resets in 3h40m (") || !strings.Contains(out, "40%  resets in 2d (") {
 		t.Errorf("multi-bucket bars/countdowns missing:\n%s", out)
 	}
-	if !strings.Contains(out, "0%  requests · 300/300 requests") {
+	if !strings.Contains(out, "requests") || !strings.Contains(out, "0%  300/300 requests") {
 		t.Errorf("empty discrete-unit bucket row missing:\n%s", out)
 	}
-	if !strings.Contains(out, "∞     unlimited") {
+	if !strings.Contains(out, "unlimited") || !strings.Contains(out, "∞  unlimited") {
 		t.Errorf("unlimited bucket row missing:\n%s", out)
 	}
 	// Gauge bands: 5h (94%) + unlimited are green, 7d (40%) is warn, requests (0%) is danger.
@@ -243,15 +250,15 @@ func TestQuotaLinesLiveReadingOverridesFetch(t *testing.T) {
 		Account:  "dev@example.com",
 		Buckets:  []api.QuotaBucket{{ID: "5h", RemainingFraction: 0.41, ResetAt: &liveReset}},
 	}
-	out := text(quotaLines(snap, live, "pool/a", now))
+	out := text(quotaLines(snap, live, "pool/a", now, quotaOptions{Width: 100}))
 
-	if !strings.Contains(out, "41%  5h · resets in 40m at") {
+	if !strings.Contains(out, "41%  resets in 40m (") {
 		t.Errorf("live percentage and reset time not applied:\n%s", out)
 	}
 	if strings.Contains(out, "94%") {
 		t.Errorf("stale fetched percentage still rendered:\n%s", out)
 	}
-	if !strings.Contains(out, "50%  daily") {
+	if !strings.Contains(out, "daily") || !strings.Contains(out, "50%") {
 		t.Errorf("unrelated pool changed:\n%s", out)
 	}
 }
@@ -276,20 +283,173 @@ func TestQuotaLinesGroupsDistinctBucketSetsUnderOneProvider(t *testing.T) {
 			},
 		},
 	}
-	out := text(quotaLines(snap, nil, "", now))
-	if n := strings.Count(out, "Shared pool (2 models): prov/claude-sonnet, prov/gemini-pro"); n != 1 {
+	out := text(quotaLines(snap, nil, "", now, quotaOptions{Width: 100}))
+	if n := strings.Count(out, "Shared pool (2 models) · claude-sonnet, gemini-pro"); n != 1 {
 		t.Errorf("shared-pool group count = %d, want 1:\n%s", n, out)
 	}
-	if !strings.Contains(out, "  prov/gemini-flash") {
+	if !strings.Contains(out, "  gemini-flash") {
 		t.Errorf("single-model group missing:\n%s", out)
 	}
-	if !strings.Contains(out, "resets in 5h at") || !strings.Contains(out, "resets in 2h at") {
+	if !strings.Contains(out, "resets in 5h (") || !strings.Contains(out, "resets in 2h (") {
 		t.Errorf("bucket resets missing:\n%s", out)
 	}
 }
 
+func TestQuotaLinesLargePoolSummarizesPrioritizesActiveAndExpands(t *testing.T) {
+	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	reset5h := now.Add(4*time.Hour + 51*time.Minute)
+	resetWeekly := now.Add(162*time.Hour + 51*time.Minute)
+
+	models := map[string][]string{
+		"antigravity/claude-opus-5-5-high":   {"3p-5h", "3p-weekly"},
+		"antigravity/claude-opus-5-5-low":    {"3p-5h", "3p-weekly"},
+		"antigravity/claude-sonnet-5-5-high": {"3p-5h", "3p-weekly"},
+		"antigravity/claude-sonnet-5-5-low":  {"3p-5h", "3p-weekly"},
+	}
+	for i := range 20 {
+		models[fmt.Sprintf("antigravity/gemini-model-%02d", i)] = []string{"gemini-5h", "gemini-weekly"}
+	}
+	models["antigravity/gemini-z-active"] = []string{"gemini-5h", "gemini-weekly"}
+
+	snap := &api.QuotaSnapshotResponse{
+		Providers: []api.ProviderQuotaSnapshot{
+			{
+				Provider: "antigravity",
+				Account:  "dev@example.com",
+				Buckets: map[string]api.QuotaBucket{
+					"3p-5h":         {ID: "3p-5h", RemainingFraction: 1.0},
+					"3p-weekly":     {ID: "3p-weekly", RemainingFraction: 1.0},
+					"gemini-5h":     {ID: "gemini-5h", RemainingFraction: 0.97, ResetAt: &reset5h},
+					"gemini-weekly": {ID: "gemini-weekly", RemainingFraction: 0.85, ResetAt: &resetWeekly},
+				},
+				Models: models,
+			},
+		},
+	}
+
+	const width = 92
+	collapsed := quotaLines(snap, nil, "antigravity/gemini-z-active", now, quotaOptions{Width: width})
+	out := text(collapsed)
+
+	for _, l := range collapsed {
+		if n := len([]rune(l.Text)); n > width {
+			t.Errorf("collapsed line exceeds width %d (%d runes): %q", width, n, l.Text)
+		}
+	}
+	activeIdx := strings.Index(out, "● Current pool (21 models)")
+	otherIdx := strings.Index(out, "Shared pool (4 models)")
+	if activeIdx < 0 || otherIdx < 0 || activeIdx > otherIdx {
+		t.Fatalf("expected active pool before other shared pool:\n%s", out)
+	}
+	if !strings.Contains(out, "gemini-z-active") || !strings.Contains(out, "more") {
+		t.Errorf("expected active model in collapsed preview with +N more:\n%s", out)
+	}
+	if strings.Contains(out, "antigravity/gemini-") {
+		t.Errorf("redundant provider prefix should be stripped:\n%s", out)
+	}
+	if !strings.Contains(out, "resets in 6d18h (") {
+		t.Errorf("weekly reset should format in days+hours:\n%s", out)
+	}
+
+	expanded := quotaLines(snap, nil, "antigravity/gemini-z-active", now, quotaOptions{Width: width, ShowModels: true})
+	expOut := text(expanded)
+	for _, l := range expanded {
+		if n := len([]rune(l.Text)); n > width {
+			t.Errorf("expanded line exceeds width %d (%d runes): %q", width, n, l.Text)
+		}
+	}
+	if !strings.Contains(expOut, "gemini-z-active (current)") || !strings.Contains(expOut, "gemini-model-19") {
+		t.Errorf("expected full wrapped model list when expanded:\n%s", expOut)
+	}
+}
+
+func TestQuotaResetText(t *testing.T) {
+	now := time.Date(2026, 1, 2, 10, 0, 0, 0, time.Local)
+	sameDay := now.Add(4*time.Hour + 51*time.Minute)
+	nextDay := now.Add(20 * time.Hour)
+	week := now.Add(162*time.Hour + 51*time.Minute)
+	twoWeeks := now.Add(14 * 24 * time.Hour)
+	past := now.Add(-time.Minute)
+
+	if got := quotaResetText(nil, now); got != "" {
+		t.Errorf("nil reset = %q, want empty", got)
+	}
+	if got := quotaResetText(&past, now); got != "resets now" {
+		t.Errorf("past reset = %q, want resets now", got)
+	}
+	if got := quotaResetText(&sameDay, now); got != "resets in 4h51m (14:51)" {
+		t.Errorf("same-day reset = %q", got)
+	}
+	if got := quotaResetText(&nextDay, now); !strings.HasPrefix(got, "resets in 20h (Sat 06:00)") {
+		t.Errorf("next-day reset = %q", got)
+	}
+	if got := quotaResetText(&week, now); !strings.HasPrefix(got, "resets in 6d18h (Fri 04:51)") {
+		t.Errorf("weekly reset = %q", got)
+	}
+	if got := quotaResetText(&twoWeeks, now); got != "resets in 14d (Jan 16 10:00)" {
+		t.Errorf("two-week reset = %q", got)
+	}
+}
+
+func TestUsageBrowserQuotasRenderAndModelsToggle(t *testing.T) {
+	store.ClearSlot()
+	t.Cleanup(store.ClearSlot)
+
+	env := testutils.NewEnv(t, 100, 30)
+	out := env.Render(usageBrowser(usageBrowserProps{slotID: "slot-usage-quotas", tab: usageTabQuotas}))
+	if !strings.Contains(out, "[4 Quotas]") {
+		t.Fatalf("expected active Quotas tab:\n%s", out)
+	}
+	if !strings.Contains(out, "m Models") {
+		t.Fatalf("expected m Models keyboard hint:\n%s", out)
+	}
+
+	out = env.Press(key.Key{Code: 'm', Text: "m"})
+	if !strings.Contains(out, "m Hide models") {
+		t.Fatalf("expected m Hide models after pressing m:\n%s", out)
+	}
+
+	// Render multi-span styled quota lines through renderUsageLine onto a framebuffer.
+	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(4 * time.Hour)
+	lines := quotaLines(&api.QuotaSnapshotResponse{
+		Providers: []api.ProviderQuotaSnapshot{{
+			Provider: "antigravity",
+			Account:  "dev@example.com",
+			Buckets: map[string]api.QuotaBucket{
+				"gemini-5h": {ID: "gemini-5h", RemainingFraction: 0.97, ResetAt: &reset},
+			},
+			Models: map[string][]string{
+				"antigravity/gemini-4-neon": {"gemini-5h"},
+				"antigravity/gemini-flash":  {"gemini-5h"},
+			},
+		}},
+	}, nil, "antigravity/gemini-4-neon", now, quotaOptions{Width: 96})
+
+	rowsView := trail.SimpleFC("QuotaRowsPreview", func() trail.Node {
+		scheme := theme.UseTheme()
+		children := make([]trail.Node, 0, len(lines))
+		for _, l := range lines {
+			children = append(children, renderUsageLine(scheme, l))
+		}
+		return trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexColumn)}, children...)
+	})
+	rendered := testutils.Render(t, rowsView(), 96, 12)
+	for _, want := range []string{
+		"antigravity · dev@example.com",
+		"● Current pool (2 models) · gemini-4-neon, gemini-flash",
+		"gemini-5h",
+		"97%",
+		"resets in 4h (",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered quota view missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestQuotaLinesEmpty(t *testing.T) {
-	lines := quotaLines(nil, nil, "", time.Now())
+	lines := quotaLines(nil, nil, "", time.Now(), quotaOptions{})
 	if len(lines) != 1 || !strings.Contains(lines[0].Text, "No quota-billed models") {
 		t.Fatalf("lines = %+v, want a single explanatory line", lines)
 	}

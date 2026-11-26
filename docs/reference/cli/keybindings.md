@@ -323,7 +323,7 @@ While browsing history, the composer's bottom border is replaced by a centered r
 | :--- | :--- |
 | `←` / `→` / `Tab` / `Shift+Tab` / `1` `2` `3` `4` | Switch tab. |
 | `↑` / `↓` / `Ctrl+P` / `Ctrl+N` / `PgUp` / `PgDn` / `Ctrl+B` / `Ctrl+F` | Scroll long views. |
-| `m` `p` `a` `u` `i` `d` | Group Workspace and Global tabs by model, provider, agent, purpose, pricing tier, or day (the busiest day is marked with `*`). |
+| `m` `p` `a` `u` `i` `d` | Group Workspace and Global tabs by model, provider, agent, purpose, pricing tier, or day (the busiest day is marked with `*`). On the Quotas tab, `m` expands or collapses the full model list for each shared pool. |
 | `t` | Cycle the range: last 24 hours, 7 days, 30 days, all time (default 30 days). |
 | `r` | Refresh. |
 | `Esc` / `q` | Close. |

@@ -12,14 +12,17 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 )
 
-// lineStyle selects how a usage line is emphasized. The layout never depends
-// on it: every line is plain text that reads the same without styling.
+// lineStyle selects how a usage line or span is emphasized. The layout never
+// depends on it: every line keeps plain text that reads the same without styling.
 type lineStyle int
 
 const (
 	lineNormal lineStyle = iota
 	lineHeading
 	lineDim
+	lineMuted
+	lineTrack
+	lineAccent
 	lineWarn
 	// lineDanger marks a critical reading (quota gauge red band).
 	lineDanger
@@ -27,12 +30,33 @@ const (
 	lineGood
 )
 
+type usageSpan struct {
+	Text  string
+	Style lineStyle
+	Bold  bool
+}
+
 type usageLine struct {
 	Text  string
 	Style lineStyle
 	// LabelLen is the length of a leading "Label:" prefix rendered in the
 	// label colour; zero means the line has no label.
 	LabelLen int
+	// Spans, when non-empty, renders the line as individually styled segments
+	// while Text keeps the concatenated plain text.
+	Spans []usageSpan
+}
+
+func styledLine(style lineStyle, spans ...usageSpan) usageLine {
+	var b strings.Builder
+	for _, sp := range spans {
+		b.WriteString(sp.Text)
+	}
+	return usageLine{
+		Text:  b.String(),
+		Style: style,
+		Spans: spans,
+	}
 }
 
 // wrapWidth is the column at which long usage lines are wrapped.
@@ -91,7 +115,14 @@ func plural(n int64, one, many string) string {
 // wrapLine breaks text at wrapWidth on spaces. Continuation lines are indented
 // by indent spaces.
 func wrapLine(text string, indent int, style lineStyle) []usageLine {
-	if len([]rune(text)) <= wrapWidth {
+	return wrapLineWidth(text, indent, wrapWidth, style)
+}
+
+func wrapLineWidth(text string, indent, width int, style lineStyle) []usageLine {
+	if width <= 0 {
+		width = wrapWidth
+	}
+	if len([]rune(text)) <= width {
 		return []usageLine{{Text: text, Style: style}}
 	}
 	lead := len(text) - len(strings.TrimLeft(text, " "))
@@ -100,7 +131,7 @@ func wrapLine(text string, indent int, style lineStyle) []usageLine {
 	cur := strings.Repeat(" ", lead)
 	empty := true
 	for word := range strings.FieldsSeq(text) {
-		if !empty && len([]rune(cur))+1+len([]rune(word)) > wrapWidth {
+		if !empty && len([]rune(cur))+1+len([]rune(word)) > width {
 			out = append(out, usageLine{Text: cur, Style: style})
 			cur = pad + word
 			continue
@@ -578,14 +609,13 @@ func billingNotes(t api.UsageGroup, blank bool) []usageLine {
 	return out
 }
 
-// quotaBarWidth is the cell width of a quota bar in the Quotas tab.
-const quotaBarWidth = 20
-
-// quotaBar renders remaining capacity as a block bar, e.g. "██████████░░░░░░░░░░".
-func quotaBar(pct int) string {
-	filled := min(max(pct, 0), 100) * quotaBarWidth / 100
-	return strings.Repeat("█", filled) + strings.Repeat("░", quotaBarWidth-filled)
-}
+// Quota layout defaults.
+const (
+	quotaBarWidth        = 20
+	quotaCompactBarWidth = 14
+	quotaMaxLabelWidth   = 24
+	quotaPreviewModels   = 3
+)
 
 // Quota gauge bands: a window under a fifth full is critical, under half is
 // running low, and half or more reads as healthy.
@@ -593,6 +623,12 @@ const (
 	quotaDangerPct = 20
 	quotaWarnPct   = 50
 )
+
+// quotaOptions controls responsive formatting for the Quotas tab.
+type quotaOptions struct {
+	Width      int
+	ShowModels bool
+}
 
 // quotaGaugeStyle colors a quota row by how much of its window remains:
 // red under 20%, yellow under 50%, green from 50% up.
@@ -608,14 +644,30 @@ func quotaGaugeStyle(pct int) lineStyle {
 }
 
 // quotaLines renders the Quotas tab from multi-bucket provider snapshots:
-// models referencing the same bucket IDs are grouped into shared pools with one
-// bar, optional unit usage, and reset countdown per bucket. A live reading from
-// quota_updated events overrides the matching buckets for its provider pool, and
-// the model the active session runs on is marked "current".
-func quotaLines(snap *api.QuotaSnapshotResponse, live *api.ModelQuota, activeModelID string, now time.Time) []usageLine {
+// models referencing the same bucket IDs are grouped into shared pools with
+// aligned two-tone gauges, optional unit usage, and reset countdowns. A live
+// reading from quota_updated events overrides the matching buckets for its
+// provider pool, and the pool containing the active session's model is sorted
+// first and highlighted.
+func quotaLines(
+	snap *api.QuotaSnapshotResponse,
+	live *api.ModelQuota,
+	activeModelID string,
+	now time.Time,
+	opts quotaOptions,
+) []usageLine {
 	merged := overlayQuotaSnapshot(snap, live)
 	if merged == nil || len(merged.Providers) == 0 {
 		return []usageLine{{Text: "No quota-billed models in this workspace.", Style: lineDim}}
+	}
+
+	width := opts.Width
+	if width <= 0 {
+		width = wrapWidth
+	}
+	barWidth := quotaBarWidth
+	if width < 76 {
+		barWidth = quotaCompactBarWidth
 	}
 
 	providers := slices.Clone(merged.Providers)
@@ -626,14 +678,21 @@ func quotaLines(snap *api.QuotaSnapshotResponse, live *api.ModelQuota, activeMod
 		return strings.Compare(a.Account, b.Account)
 	})
 
+	labelWidth := 0
+	for _, p := range providers {
+		for _, b := range p.Buckets {
+			labelWidth = max(labelWidth, len([]rune(b.ID)))
+		}
+	}
+	labelWidth = min(labelWidth, quotaMaxLabelWidth)
+
 	type bucketGroup struct {
 		bucketIDs []string
 		models    []string
+		hasActive bool
 	}
 
 	var out []usageLine
-	out = append(out, usageLine{Text: "Subscription quota windows", Style: lineHeading})
-
 	renderedProviders := 0
 	for _, p := range providers {
 		if len(p.Buckets) == 0 {
@@ -644,11 +703,15 @@ func quotaLines(snap *api.QuotaSnapshotResponse, live *api.ModelQuota, activeMod
 		}
 		renderedProviders++
 
-		heading := cmp.Or(strings.TrimSpace(p.Provider), "provider")
+		providerName := cmp.Or(strings.TrimSpace(p.Provider), "provider")
+		headSpans := []usageSpan{{Text: providerName, Style: lineHeading}}
 		if p.Account != "" {
-			heading += " · " + p.Account
+			headSpans = append(headSpans,
+				usageSpan{Text: " · ", Style: lineMuted},
+				usageSpan{Text: p.Account, Style: lineDim},
+			)
 		}
-		out = append(out, usageLine{Text: heading, Style: lineDim})
+		out = append(out, styledLine(lineHeading, headSpans...))
 
 		if len(p.Models) == 0 {
 			ids := make([]string, 0, len(p.Buckets))
@@ -657,7 +720,7 @@ func quotaLines(snap *api.QuotaSnapshotResponse, live *api.ModelQuota, activeMod
 			}
 			slices.Sort(ids)
 			for _, id := range ids {
-				out = append(out, renderQuotaBucketLine(p.Buckets[id], now))
+				out = append(out, renderQuotaBucketLine(p.Buckets[id], labelWidth, barWidth, now))
 			}
 			continue
 		}
@@ -671,45 +734,98 @@ func quotaLines(snap *api.QuotaSnapshotResponse, live *api.ModelQuota, activeMod
 				groupMap[key] = grp
 			}
 			grp.models = append(grp.models, modelID)
+			if activeModelID != "" && modelID == activeModelID {
+				grp.hasActive = true
+			}
 		}
 
 		groups := make([]*bucketGroup, 0, len(groupMap))
 		for _, grp := range groupMap {
 			slices.Sort(grp.models)
+			if grp.hasActive {
+				moveActiveModelFirst(grp.models, activeModelID)
+			}
 			groups = append(groups, grp)
 		}
 		slices.SortStableFunc(groups, func(a, b *bucketGroup) int {
+			if a.hasActive != b.hasActive {
+				if a.hasActive {
+					return -1
+				}
+				return 1
+			}
 			return strings.Compare(a.models[0], b.models[0])
 		})
 
-		for gi, grp := range groups {
-			if gi > 0 {
-				out = append(out, usageLine{})
-			}
-			labels := make([]string, len(grp.models))
+		for _, grp := range groups {
+			out = append(out, usageLine{})
+
+			displayNames := make([]string, len(grp.models))
 			for i, modelID := range grp.models {
-				labels[i] = modelID
-				if activeModelID != "" && modelID == activeModelID {
-					labels[i] += " · current"
+				displayNames[i] = shortQuotaModelName(p.Provider, modelID)
+			}
+
+			if len(displayNames) == 1 {
+				if grp.hasActive {
+					out = append(out, styledLine(lineAccent,
+						usageSpan{Text: "  ● ", Style: lineAccent},
+						usageSpan{Text: displayNames[0], Style: lineNormal, Bold: true},
+						usageSpan{Text: " · current", Style: lineAccent},
+					))
+				} else {
+					out = append(out, styledLine(lineNormal,
+						usageSpan{Text: "  ", Style: lineNormal},
+						usageSpan{Text: displayNames[0], Style: lineNormal, Bold: true},
+					))
+				}
+			} else {
+				var headerSpans []usageSpan
+				if grp.hasActive {
+					headerSpans = []usageSpan{
+						{Text: "  ● ", Style: lineAccent},
+						{Text: "Current pool", Style: lineAccent, Bold: true},
+						{Text: fmt.Sprintf(" (%d models)", len(displayNames)), Style: lineMuted},
+					}
+				} else {
+					headerSpans = []usageSpan{
+						{Text: "  ", Style: lineNormal},
+						{Text: "Shared pool", Style: lineNormal, Bold: true},
+						{Text: fmt.Sprintf(" (%d models)", len(displayNames)), Style: lineMuted},
+					}
+				}
+
+				if !opts.ShowModels {
+					prefixLen := 0
+					for _, sp := range headerSpans {
+						prefixLen += len([]rune(sp.Text))
+					}
+					if preview := summarizePoolModels(displayNames, width-prefixLen-3); preview != "" {
+						headerSpans = append(headerSpans,
+							usageSpan{Text: " · ", Style: lineMuted},
+							usageSpan{Text: preview, Style: lineDim},
+						)
+					}
+					out = append(out, styledLine(lineNormal, headerSpans...))
+				} else {
+					out = append(out, styledLine(lineNormal, headerSpans...))
+					expanded := make([]string, len(displayNames))
+					for i, name := range displayNames {
+						if grp.hasActive && grp.models[i] == activeModelID {
+							expanded[i] = name + " (current)"
+						} else {
+							expanded[i] = name
+						}
+					}
+					out = append(out, wrapLineWidth("    "+strings.Join(expanded, ", "), 4, width, lineDim)...)
 				}
 			}
-			if len(labels) > 1 {
-				out = append(out, usageLine{
-					Text:  fmt.Sprintf("  Shared pool (%d models): %s", len(labels), strings.Join(labels, ", ")),
-					Style: lineDim,
-				})
-			} else {
-				out = append(out, usageLine{
-					Text:  "  " + labels[0],
-					Style: lineDim,
-				})
-			}
+
 			for _, bid := range grp.bucketIDs {
 				b, ok := p.Buckets[bid]
 				if !ok {
 					continue
 				}
-				out = append(out, renderQuotaBucketLine(b, now))
+				out = append(out, renderQuotaBucketLine(b, labelWidth, barWidth, now))
 			}
 		}
 	}
@@ -720,34 +836,129 @@ func quotaLines(snap *api.QuotaSnapshotResponse, live *api.ModelQuota, activeMod
 	return out
 }
 
-func renderQuotaBucketLine(b api.QuotaBucket, now time.Time) usageLine {
-	var details []string
-	if b.ID != "" {
-		details = append(details, b.ID)
+func moveActiveModelFirst(models []string, activeModelID string) {
+	idx := slices.Index(models, activeModelID)
+	if idx <= 0 {
+		return
 	}
-	if b.Unlimited {
-		details = append(details, "unlimited")
-		return usageLine{
-			Text:  fmt.Sprintf("    %s  ∞     %s", quotaBar(100), strings.Join(details, " · ")),
-			Style: lineGood,
+	active := models[idx]
+	copy(models[1:idx+1], models[:idx])
+	models[0] = active
+}
+
+func shortQuotaModelName(provider, modelID string) string {
+	if provider != "" {
+		if short, ok := strings.CutPrefix(modelID, provider+"/"); ok && short != "" {
+			return short
 		}
+	}
+	return modelID
+}
+
+// summarizePoolModels fits up to quotaPreviewModels model names into avail
+// columns, appending ", +N more" when models are omitted so the line never
+// overflows the viewport.
+func summarizePoolModels(models []string, avail int) string {
+	if len(models) == 0 || avail < 6 {
+		return ""
+	}
+	limit := min(len(models), quotaPreviewModels)
+	var chosen []string
+	used := 0
+
+	for i := range limit {
+		name := models[i]
+		remaining := len(models) - (i + 1)
+		sep := 0
+		if len(chosen) > 0 {
+			sep = 2
+		}
+		tail := ""
+		if remaining > 0 {
+			tail = fmt.Sprintf(", +%d more", remaining)
+		}
+		needed := used + sep + len([]rune(name)) + len([]rune(tail))
+		if needed <= avail {
+			chosen = append(chosen, name)
+			used += sep + len([]rune(name))
+			continue
+		}
+		if len(chosen) == 0 {
+			if remaining > 0 {
+				budget := avail - len([]rune(tail))
+				if budget >= 4 {
+					return format.CompactSingleLine(name, budget) + tail
+				}
+				return fmt.Sprintf("+%d models", len(models))
+			}
+			return format.CompactSingleLine(name, avail)
+		}
+		break
+	}
+
+	out := strings.Join(chosen, ", ")
+	if hidden := len(models) - len(chosen); hidden > 0 {
+		out += fmt.Sprintf(", +%d more", hidden)
+	}
+	return out
+}
+
+func renderQuotaBucketLine(b api.QuotaBucket, labelWidth, barWidth int, now time.Time) usageLine {
+	spans := []usageSpan{{Text: "    ", Style: lineNormal}}
+	if labelWidth > 0 {
+		label := format.CompactSingleLine(b.ID, labelWidth)
+		pad := max(0, labelWidth-len([]rune(label)))
+		spans = append(spans, usageSpan{
+			Text:  label + strings.Repeat(" ", pad) + "  ",
+			Style: lineNormal,
+		})
+	}
+
+	var details []string
+	if b.Unlimited {
+		spans = append(spans,
+			usageSpan{Text: strings.Repeat("█", barWidth), Style: lineGood},
+			usageSpan{Text: "    ∞", Style: lineGood, Bold: true},
+		)
+		details = append(details, "unlimited")
+		if reset := quotaResetText(b.ResetAt, now); reset != "" {
+			details = append(details, reset)
+		}
+		spans = append(spans, usageSpan{
+			Text:  "  " + strings.Join(details, " · "),
+			Style: lineDim,
+		})
+		return styledLine(lineGood, spans...)
 	}
 
 	pct := min(max(int(b.RemainingFraction*100), 0), 100)
+	filled := pct * barWidth / 100
+	gs := quotaGaugeStyle(pct)
+	if filled > 0 {
+		spans = append(spans, usageSpan{Text: strings.Repeat("█", filled), Style: gs})
+	}
+	if filled < barWidth {
+		spans = append(spans, usageSpan{Text: strings.Repeat("░", barWidth-filled), Style: lineTrack})
+	}
+	spans = append(spans, usageSpan{
+		Text:  fmt.Sprintf(" %3d%%", pct),
+		Style: gs,
+		Bold:  true,
+	})
+
 	if b.Limit > 0 && b.Unit != "" && b.Unit != api.QuotaUnitPercent {
 		details = append(details, fmt.Sprintf("%g/%g %s", b.Used, b.Limit, b.Unit))
 	}
 	if reset := quotaResetText(b.ResetAt, now); reset != "" {
 		details = append(details, reset)
 	}
-	suffix := strings.Join(details, " · ")
-	if suffix != "" {
-		suffix = "  " + suffix
+	if len(details) > 0 {
+		spans = append(spans, usageSpan{
+			Text:  "  " + strings.Join(details, " · "),
+			Style: lineDim,
+		})
 	}
-	return usageLine{
-		Text:  fmt.Sprintf("    %s %3d%%%s", quotaBar(pct), pct, suffix),
-		Style: quotaGaugeStyle(pct),
-	}
+	return styledLine(gs, spans...)
 }
 
 // overlayQuotaSnapshot returns a copy of snap with a live quota_updated reading
@@ -815,11 +1026,22 @@ func quotaResetText(resetAt *time.Time, now time.Time) string {
 		return ""
 	}
 	reset := resetAt.Local()
-	until := reset.Sub(now)
+	localNow := now.Local()
+	until := reset.Sub(localNow)
 	if until <= 0 {
 		return "resets now"
 	}
-	return fmt.Sprintf("resets in %s at %s", format.Duration(until, format.Compact()), reset.Format("15:04"))
+
+	var at string
+	switch {
+	case until >= 7*24*time.Hour:
+		at = reset.Format("Jan 2 15:04")
+	case reset.Year() != localNow.Year() || reset.YearDay() != localNow.YearDay():
+		at = reset.Format("Mon 15:04")
+	default:
+		at = reset.Format("15:04")
+	}
+	return fmt.Sprintf("resets in %s (%s)", format.Duration(until, format.Compact()), at)
 }
 
 func derefGroup(g *api.UsageGroup) api.UsageGroup {

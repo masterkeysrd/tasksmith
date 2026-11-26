@@ -36,6 +36,8 @@ func TestDurationCompact(t *testing.T) {
 		{42 * time.Minute, "42m"},
 		{3 * time.Hour, "3h"},
 		{3*time.Hour + 40*time.Minute, "3h40m"},
+		{48 * time.Hour, "2d"},
+		{162*time.Hour + 51*time.Minute, "6d18h"},
 	}
 	for _, tc := range tests {
 		if got := Duration(tc.d, Compact()); got != tc.want {

@@ -42,11 +42,11 @@ For subscription-billed (`QuotaBilled`) models:
 
 - **Status line `cost` segment**: switches from dollar cost to the bottleneck quota bucket (`Quota 94% (↻ 3h12m)`, or `Quota ∞` when unlimited). Input and output totals appear separately in `tokens` — see [Status line & theme appearance](./appearance.md).
 - **Turn & exit summaries**: omit dollar cost automatically.
-- **`/usage` `4 Quotas` tab** (also reachable via `/usage quotas`): lists each provider's multi-bucket quota snapshots with one bar per bucket showing percent remaining, optional `used/limit unit`, reset countdown, or `unlimited`. Gauges color-code remaining capacity:
+- **`/usage` `4 Quotas` tab** (also reachable via `/usage quotas`): lists each provider's multi-bucket quota snapshots with aligned two-tone bars showing percent remaining, optional `used/limit unit`, day/time-aware reset countdown, or `unlimited`. Gauges color-code remaining capacity:
   - `< 20%`: red
   - `< 50%`: yellow
   - `>= 50%`: green
-  Shared quota pools are grouped by bucket ID, and readings update live from daemon SSE events.
+  Shared quota pools are grouped by bucket ID with the active model's pool prioritized first (`● Current pool`); press `m` to expand or collapse the full model list, and `r` to refresh. Readings update live from daemon SSE events.
 - **Accuracy rules**: never claim a dollar cost for a quota-billed call, and never invent a reset countdown that the provider did not report.
 
 ## Provider OAuth sign-in (`tasksmith auth` & `/login`)
@@ -58,7 +58,7 @@ OAuth model providers authenticate through the daemon. Choose the provider in `/
 - **`tasksmith auth login [provider]`**: starts the provider's browser sign-in and waits for it to settle; for example, `tasksmith auth login claudecode` or `tasksmith auth login github-copilot`.
   - `--no-browser` (Antigravity): prints the URL without launching a browser.
   - `--paste` (Antigravity): reads the final redirect URL from `stdin` — use this on SSH or headless hosts where the browser cannot reach the daemon's loopback callback.
-- **`tasksmith auth status [provider]`**: prints `<provider>: <status> (<account>)` for one provider or a `PROVIDER / AUTH / STATUS` table across all configured providers.
+- **`tasksmith auth status [provider] [--json]`**: shows provider, auth type and status, plus account, scope, default model, model count and error when available. Omit the name for the `PROVIDER / AUTH / STATUS / ACCOUNT / SCOPE` table. Use `--json` for an indented status object or the full array of provider summaries.
 - **`tasksmith auth logout [provider]`**: deletes stored credentials for that provider and cancels any in-flight sign-in flow.
 - **REPL `/login [provider]`** (aliases `/auth`, `/signin`): opens the interactive sign-in screen (also reachable via `l` in `/providers`, or from the inline re-authentication prompt shown automatically when an interactive turn fails due to an expired OAuth session):
   - `c` (Antigravity): copy the authorization URL to clipboard.
