@@ -31,7 +31,7 @@ flowchart LR
 ### 1. Layered Evaluation Pipeline
 Every tool call issued by an agent passes through a multi-stage security pipeline before reaching the execution environment:
 - **Session Mode & Trust Enforcement**: Separates permission gates (`default`, `accept_edits`, `auto`) from behavioral postures (`plan`, `ask`). `default`, `plan`, and `ask` share the same permission gate (safe read-only tools auto-run; mutating actions prompt), while writes/edits inside `<session-dir>/plans/` always auto-allow. Restricted (untrusted) workspaces start in `default` mode and deny all mutating actions outside `<session-dir>/plans/` regardless of mode. In **Auto Mode** (`auto`), workspace-safe non-destructive operations (and non-unsafe plans matching an allow rule) execute immediately, while `SafetyUnsafe`, unmatched `SafetyOutside`, unmatched `ActionDelete`, `bypass_sandbox` retries, and unlisted proxy hosts return `AccessAsk` so the daemon's calibrated permission reviewer evaluates them once before prompting the human. Explicit `deny` rules and policy exclusions always block immediately.
-- **Hierarchical Rule Engine**: Custom permission rules are evaluated in strict priority order: **`deny` $\to$ `allow` $\to$ `ask`**. A matching `deny` rule immediately terminates execution with an error, taking precedence over all other settings.
+- **Hierarchical Rule Engine**: Custom permission rules are evaluated in strict priority order: **`deny` → `allow` → `ask`**. A matching `deny` rule immediately terminates execution with an error, taking precedence over all other settings.
 
 ### 2. Shell AST Inspection (`shellguard`)
 Rather than relying on naive regex pattern matching, TaskSmith parses every shell command into an Abstract Syntax Tree (AST):

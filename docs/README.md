@@ -1,27 +1,97 @@
 # TaskSmith Documentation
 
-TaskSmith is an autonomous, agentic software engineering platform powered by a local daemon, decoupled AI provider gateways, and virtualized OS sandboxes.
+Start with a first session, choose a workflow, or look up a command or manifest field.
 
----
+## Get Started
 
-## 1. User Guides (`docs/guides/`)
+Install TaskSmith, run your first session, then set up a project.
 
-Step-by-step guides for setting up workspaces, authoring agents, managing security, and integrating tools:
+- [Quickstart](./guides/quickstart.md)
+- [Workspaces & Projects](./guides/workspaces.md)
 
-| Guide | Description |
-| :--- | :--- |
-| [Workspaces & Projects](./guides/workspaces.md) | Multi-tier resource hierarchy (`WORKSPACE.md`, `AGENTS.md`), project discovery, and isolated `.env` secret layering. |
-| [Connect an editor with ACP](./guides/acp.md) | Run daemon-backed sessions from Zed, JetBrains, or Neovim. |
-| [CLI & Interactive Workflow](./guides/cli.md) | Terminal user interface, slash commands (`/effort`, `/mode`, `/revert`), interactive reviews, and keyboard shortcuts. |
-| [Security & Permissions](./guides/permissions.md) | Operational modes (`default`, `plan`, `auto`), rule matching (`deny`, `allow`, `ask`), and interactive approval scopes. |
-| [Customizations & Extensions](./guides/customizations.md) | Building custom agents (`*.agent.md`), ambient rules (`*.rule.md`), skills (`*.skill.md`), commands (`*.command.md`), and decisions (`*.decision.md`). |
-| [Tools & MCP Servers](./guides/tools-and-mcp.md) | Using built-in tools (`view`, `edit`, `write`, `bash`), custom tools, and integrating Model Context Protocol (MCP) servers. |
+## Core Workflows
 
----
+Choose how to work: in the terminal, from an editor, or in a pipeline.
 
-## 2. System Architecture (`docs/architecture/`)
+- [Interactive Terminal (TUI)](./guides/cli.md)
+- [Sessions, Diffs & Usage](./guides/sessions.md)
+- [Modes & Planning](./guides/modes-and-planning.md)
+- [Connect an Editor (ACP)](./guides/acp.md)
+- [Headless & CI Automation](./guides/headless-exec.md)
 
-Deep dives into the internal subsystems and design invariants of the TaskSmith engine:
+## Security & Governance
+
+Decide which projects to trust, when tools need approval, and where commands can run.
+
+- [Workspace Trust](./guides/trust.md)
+- [Permissions & Rules](./guides/permissions.md)
+- [Auto-Mode Permission Review](./guides/auto-permission-review.md)
+- [Sandboxing](./guides/sandbox.md)
+
+## Customize & Extend
+
+Adapt TaskSmith to your team’s models, instructions, tools, and terminal.
+
+- [Customization Overview](./guides/customizations.md)
+- [Models & Providers](./guides/models-and-providers.md)
+- [Agents & Subagents](./guides/agents-and-subagents.md)
+- [Skills & Rules](./guides/skills-and-rules.md)
+- [Slash Commands & Workflows](./guides/commands.md)
+- [Tools & MCP Servers](./guides/tools-and-mcp.md)
+- [Appearance & Status Line](./guides/appearance.md)
+
+## Reference Specifications
+
+Look up exact flags, shortcuts, tool parameters, and configuration fields.
+
+### CLI & Daemon
+
+- [CLI Overview](./reference/cli.md)
+- [Flags & Subcommands](./reference/cli/flags-and-subcommands.md)
+- [Slash Commands](./reference/cli/slash-commands.md)
+- [Keyboard Shortcuts](./reference/cli/keybindings.md)
+- [Config Files & State](./reference/cli/config-files.md)
+- [Headless Execution (exec)](./reference/exec.md)
+- [Daemon HTTP API](./reference/daemon-api.md)
+
+### Built-in Tools
+
+- [Tools Overview](./reference/tools.md)
+- [Filesystem Tools](./reference/tools/filesystem.md)
+- [Execution & Tasks](./reference/tools/execution-and-tasks.md)
+- [Web & Network](./reference/tools/web.md)
+- [Agents, Planning & Input](./reference/tools/agents-and-planning.md)
+- [Workspace Resources](./reference/tools/workspace-resources.md)
+
+### Resource Manifests (WARP)
+
+- [Manifests Overview](./reference/manifests.md)
+- [Workspace & Context](./reference/manifests/workspace.md)
+- [Agent](./reference/manifests/agent.md)
+- [Skill](./reference/manifests/skill.md)
+- [Rule](./reference/manifests/rule.md)
+- [Command](./reference/manifests/command.md)
+- [Decision](./reference/manifests/decision.md)
+- [Tool](./reference/manifests/tool.md)
+- [MCP Server](./reference/manifests/mcp.md)
+- [Plugin](./reference/manifests/plugin.md)
+
+### Model Providers
+
+- [Providers Overview & Schema](./reference/providers.md)
+- [OpenAI](./reference/providers/openai.md)
+- [Codex](./reference/providers/codex.md)
+- [Anthropic](./reference/providers/anthropic.md)
+- [Claude Code](./reference/providers/claudecode.md)
+- [GitHub Copilot](./reference/providers/github-copilot.md)
+- [Google GenAI](./reference/providers/google-genai.md)
+- [Ollama](./reference/providers/ollama.md)
+- [TypeSafe](./reference/providers/typesafe.md)
+- [Antigravity](./reference/providers/antigravity.md)
+
+## System Architecture
+
+Follow a request through the daemon and its security boundaries.
 
 | Subsystem | Focus Area |
 | :--- | :--- |
@@ -30,27 +100,3 @@ Deep dives into the internal subsystems and design invariants of the TaskSmith e
 | [Provider Gateway](./architecture/gateway.md) | Content-addressable gateway pooling, role-based model routing (`completion`, `decision`, `embedding`), and lazy auth validation. |
 | [Virtualized Sandbox](./architecture/sandbox.md) | OS capability decomposition (`FS`, `Proc`, `Net`), local process groups, and native kernel isolation (Seatbelt/Bubblewrap). |
 | [Permission & Guard Engine](./architecture/permissions.md) | Multi-stage security pipeline, shell Abstract Syntax Tree (AST) inspection, and path confinement. |
-
----
-
-## 3. Reference Specifications (`docs/reference/`)
-
-Declarative manifest schemas, CLI command specifications, and provider configuration references:
-
-| Reference | Description |
-| :--- | :--- |
-| [Providers Overview & Manifest Schema](./reference/providers.md) | General `kind: ModelProvider` Warp manifest schema, authentication schemes, and model capability properties. |
-| [Resource Manifest Reference](./reference/manifests.md) | Formal YAML frontmatter specifications for agents, rules, skills, commands, and MCP manifests. |
-| [Built-in Tool Reference](./reference/tools.md) | Comprehensive parameter reference and output schemas for `view`, `write`, `edit`, `bash`, `glob`, `grep`, `web_fetch`, `web_search`, `load_rule`, and `ask_question`. |
-| [CLI Command Reference](./reference/cli.md) | Command-line flags, startup arguments, daemon management subcommands, and environment variables. |
-
-### Upstream Provider Guides (`docs/reference/providers/`)
-
-Detailed guides for configuring and connecting upstream model providers:
-
-- [OpenAI](./reference/providers/openai.md) — Frontier reasoning (`gpt-6.1-sol`, `gpt-6-astra`), Chat Completions vs Responses API (`apiMode`), Zero Data Retention (`store: false`), and compatible endpoints.
-- [Anthropic](./reference/providers/anthropic.md) — Claude 5.5 models (`claude-sonnet-5-5`, `claude-opus-5-5`), extended thinking, and prompt caching.
-- [Ollama](./reference/providers/ollama.md) — 100% offline local inference (`qwen3.8`, `nimble-v3`, `nomic-embed-text`), zero data egress, and remote clusters.
-- [Google GenAI](./reference/providers/google-genai.md) — Gemini models (`gemini-4-hydrogen`, `gemini-4-carbon`), 1M+ token context windows, multimodal analysis, and embeddings.
-- [TypeSafe](./reference/providers/typesafe.md) — Native System 1 probabilistic decision engine (`jev-latest`) for sub-50ms structured classifications.
-- [Antigravity](./reference/providers/antigravity.md) — Enterprise model gateway with managed thinking effort tiers.

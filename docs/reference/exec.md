@@ -1,6 +1,6 @@
 # Headless Execution Reference (`exec` / `-p`)
 
-`tasksmith exec` runs TaskSmith without a terminal UI: one prompt in, one answer out, with exit codes and machine-readable output a script or CI job can branch on. This page documents every flag, the NDJSON wire protocol for bidirectional sessions, the daemon events you'll receive, and the exit-code contract. For workflow-oriented walkthroughs, see the [Headless Execution & CI guide](../guides/cli.md#headless-execution--ci).
+`tasksmith exec` runs TaskSmith without a terminal UI: one prompt in, one answer out, with exit codes and machine-readable output a script or CI job can branch on. This page documents every flag, the NDJSON wire protocol for bidirectional sessions, the daemon events you'll receive, and the exit-code contract. For workflow-oriented walkthroughs, see the [Headless Execution & CI guide](../guides/headless-exec.md).
 
 Headless runs are **not** a second implementation. They drive the same daemon, sessions, permission engine, and sandbox as the REPL — `exec` is just another client. Anything the REPL can do to a session (send prompts, answer permission prompts, switch models mid-session), `exec` can do too.
 
@@ -282,5 +282,5 @@ Two integration styles:
 ## See Also
 
 - [CLI Command Reference](./cli.md) — REPL flags, slash commands, keybindings, daemon subcommands.
-- [Headless Execution & CI guide](../guides/cli.md#headless-execution--ci) — workflow walkthroughs.
+- [Headless Execution & CI guide](../guides/headless-exec.md) — workflow walkthroughs.
 - [Daemon Architecture](../architecture/daemon.md) — what runs behind `brain.sock`.

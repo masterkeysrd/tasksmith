@@ -1,10 +1,25 @@
-# Run TaskSmith in an editor
+# Run TaskSmith in your editor
 
-Install `tasksmith` on the editor’s `PATH` and configure a [model provider](../reference/providers.md) in TaskSmith. The editor launches `tasksmith acp` as a subprocess; it does not launch `daemon serve` or connect to an HTTP endpoint. Standard output is reserved for protocol messages. If the editor cannot find the executable, use the path printed by `command -v tasksmith` in its launch settings.
+Connect Zed, JetBrains AI Assistant, or Neovim to TaskSmith over Agent Client Protocol (ACP) v1.
+Your editor hosts the conversation; the same local daemon that backs the terminal runs the tools and saves the session.
 
-## Zed
+## Before you start
 
-Merge this entry into your Zed settings, then select **TaskSmith** when starting a new external-agent thread:
+Install TaskSmith and configure a [model provider](../reference/providers.md).
+Check the executable your editor needs to launch:
+
+```bash
+command -v tasksmith
+```
+
+The launch command is `tasksmith acp`, **not** `tasksmith daemon serve` or an HTTP endpoint.
+The editor starts it as a subprocess and uses standard input and output for JSON-RPC messages.
+Don't add a wrapper that writes a greeting or diagnostic to stdout.
+If your editor doesn't inherit your shell's `PATH`, use the path printed above as its command.
+
+## Connect Zed
+
+Merge this entry into your Zed settings:
 
 ```json
 {
@@ -14,9 +29,11 @@ Merge this entry into your Zed settings, then select **TaskSmith** when starting
 }
 ```
 
-## JetBrains AI Assistant
+Start a new external-agent thread and select **TaskSmith**.
 
-In AI Chat choose **Add Custom Agent** and add the following agent to `acp.json`. Disable **Pass custom MCP servers** and **Pass IntelliJ MCP server** for this agent: TaskSmith uses the workspace’s [daemon-managed MCP servers](./tools-and-mcp.md), not servers supplied by the IDE. Select TaskSmith in the chat mode selector.
+## Connect JetBrains AI Assistant
+
+In AI Chat choose **Add Custom Agent**. Add this agent to `acp.json`:
 
 ```json
 {
@@ -26,9 +43,14 @@ In AI Chat choose **Add Custom Agent** and add the following agent to `acp.json`
 }
 ```
 
-## Neovim
+Disable **Pass custom MCP servers** and **Pass IntelliJ MCP server** for this agent.
+TaskSmith uses [daemon-managed MCP servers](./tools-and-mcp.md), not servers supplied by the IDE.
+Select **TaskSmith** in the chat mode selector.
 
-For **codecompanion.nvim**, add a custom adapter under `adapters.acp` in your plugin setup. Select `tasksmith` as the chat adapter:
+## Connect Neovim
+
+For **codecompanion.nvim**, put this adapter under `adapters.acp` in the plugin setup,
+then select `tasksmith` as your chat adapter:
 
 ```lua
 adapters = {
@@ -50,7 +72,7 @@ adapters = {
 }
 ```
 
-For **avante.nvim**, select a named ACP provider instead of an HTTP provider:
+For **avante.nvim**, select a named ACP provider rather than an HTTP provider:
 
 ```lua
 require("avante").setup({
@@ -59,12 +81,44 @@ require("avante").setup({
 })
 ```
 
-## Check the connection
+## What works over ACP v1
 
-Send a prompt, then open the TUI in the same project and look in `/sessions`: both clients use the daemon journal. An editor that supports loading sessions can replay the conversation after restarting. Workspace slash commands run on the daemon; `/compact [focus]` requests compaction. Use the editor’s mode or model selector when available.
+| To… | Use your editor to… |
+| --- | --- |
+| Continue a conversation | Browse paginated sessions. **Load** replays history; **resume** attaches without replay. |
+| Leave or remove a session | **Close** cancels its active turn but keeps the journal. **Delete** removes the session and history. |
+| Guide a turn | Send text, images, audio, or embedded context. Use the available selectors for mode, model, thought level, and agent. |
+| Manage context | Run workspace slash commands on the daemon, or send `/compact` with optional focus instructions. |
+| Monitor a run | Watch context usage, priced usage in USD, session title, and activity time. |
 
-Permission prompts can allow once, grant a displayed pattern for the session or project, or reject. Dismissing a permission prompt does not grant access. The “always reject” option saves the displayed pattern as a project deny rule. Structured questions and plan reviews open an editor form when the editor advertises `elicitation.form`. Otherwise TaskSmith cancels the turn and suggests retrying in the TUI.
+Permission prompts let you allow once, grant a displayed pattern for the session or project,
+or reject. Dismissing the prompt does **not** grant access. **Always reject** saves the
+shown pattern as a project deny rule.
 
-Load a session to replay its history, or resume it without replay. Closing a session cancels its active turn but keeps the journal; deleting it removes the daemon session and history. Session lists are paginated. Editors can send audio, images, or embedded context and select the mode, model, thought level, and agent. During a turn, TaskSmith reports context usage, priced usage in USD, and changes to the session title or activity time.
+Structured questions and plan reviews need the editor's `elicitation.form` capability.
+Without it, TaskSmith cancels the turn and suggests retrying in the TUI rather than waiting indefinitely.
 
-Editors that advertise the corresponding capabilities also receive compaction summaries, diagnostic and quota notices, named plans, and child-session activity. Other editors still receive ordinary tool calls and todo plans. If a child needs permission or a form, editors without child-session views receive the request on the parent session; the answer still goes to the child. When the editor cannot display a required form, TaskSmith cancels the child turn rather than leaving it waiting. TaskSmith does not use the editor’s filesystem or terminal APIs: tools run under daemon sandbox and shell policy. Configure MCP in the workspace and provider credentials through `/login` or the provider environment, not ACP authentication. See the [CLI reference](../reference/cli.md) for socket selection.
+Editors advertising additional capabilities receive compaction summaries, diagnostics,
+quota notices, named plans, and child-session activity. Other editors still receive ordinary
+tool calls and todo plans. Without a child-session view, a child's permission request or form
+appears on the parent; the reply still goes to the child. If a required form cannot be shown,
+TaskSmith cancels the child turn.
+
+Tools run under daemon sandbox and shell policy, not the editor's filesystem or terminal APIs.
+Configure credentials with `/login` or the provider environment, not ACP authentication.
+
+## Verify the connection
+
+1. Open a project in your editor and send `Summarize the README without changing files.`
+2. In a terminal in that same project, run `tasksmith` and open `/sessions`.
+3. Find the editor conversation. If your editor supports loading sessions, restart it,
+   load that session, and check that the earlier exchange reappears.
+
+If no session appears, check the editor's working directory and executable first.
+For a non-default daemon socket, consult the [socket and workspace flags](../reference/cli/flags-and-subcommands.md).
+
+## Next steps
+
+- [Resume or branch an editor conversation in the TUI](./sessions.md).
+- [Choose a permission mode](./modes-and-planning.md) before requesting changes.
+- [Look up ACP launch flags](../reference/cli/flags-and-subcommands.md).

@@ -5,7 +5,8 @@
 <h1 align="center">TaskSmith</h1>
 
 <p align="center">
-  <strong>An extensible, daemon-backed AI coding agent for the terminal with OS-level sandboxing, multi-provider routing, and declarative workspaces.</strong>
+  <strong>Provider-agnostic coding agents. Deterministic environments.</strong><br />
+  Run version-controlled agents, skills, rules, and kernel-sandboxed workflows across any model provider—from your terminal, editor, or CI.
 </p>
 
 <p align="center">
@@ -72,6 +73,8 @@ Built-in driver support and presets include:
 ---
 
 ## Quick Start
+
+Follow the [Quickstart](./docs/guides/quickstart.md) for a guided first session.
 
 ### Prerequisites
 - **Operating System**: macOS or Linux
@@ -161,44 +164,11 @@ TaskSmith provides a rich terminal interface designed for continuous pair progra
 | `/tasks` | Background Tasks | View and manage running background shell processes and compilers. |
 | `!<cmd>` | Instant Bash | Prefix any line with `!` to run a sandboxed shell command directly. |
 
-For the full keyboard shortcut reference and navigation guide, see the [CLI User Guide](./docs/guides/cli.md).
+See the [interactive terminal guide](./docs/guides/cli.md) and [keyboard shortcut reference](./docs/reference/cli/keybindings.md).
 
 ---
 
 ## Documentation Map
-
-Explore the complete TaskSmith documentation:
-
-```text
-docs/
-├── README.md                      # Documentation portal & index
-├── guides/                        # Step-by-step user guides
-│   ├── workspaces.md              # Workspace hierarchy, discovery, and .env secrets
-│   ├── cli.md                     # Terminal interface, keybindings, and workflows
-│   ├── permissions.md             # Security modes, rule matching, and approval scopes
-│   ├── customizations.md          # Authoring custom agents, skills, and commands
-│   └── tools-and-mcp.md           # Built-in tools and Model Context Protocol (MCP)
-├── architecture/                  # Deep-dive subsystem architecture
-│   ├── daemon.md                  # Daemon service, IPC, event bus, and SQLite journal
-│   ├── harness.md                 # Execution graph, suspension, and context compaction
-│   ├── gateway.md                 # Gateway pooling, triple roles, and lazy auth
-│   ├── sandbox.md                 # FS, Proc, Net capability isolation & OS kernels
-│   └── permissions.md             # Security pipeline, shellguard AST, and path guard
-└── reference/                     # Formal specifications & schemas
-    ├── providers.md               # ModelProvider manifest schema & role defaults
-    ├── manifests.md               # Warp resource specifications (Agent, Rule, Skill, Tool)
-    ├── tools.md                   # Built-in tool parameter schemas
-    ├── cli.md                     # Complete CLI flags and subcommand reference
-    └── providers/                 # Upstream provider configuration guides
-        ├── openai.md              # OpenAI (Responses API, ZDR, tools, compatible endpoints)
-        ├── anthropic.md           # Anthropic (Claude 4.5/5, extended thinking, caching)
-        ├── claudecode.md          # Claude Code (subscription inference via claude)
-        ├── github-copilot.md      # GitHub Copilot (subscription inference via copilot)
-        ├── ollama.md              # Ollama (local offline inference, triple roles)
-        ├── google-genai.md        # Google GenAI (Gemini models, 1M+ context, embeddings)
-        ├── typesafe.md            # TypeSafe (System 1 calibrated decision engine)
-        └── antigravity.md         # Antigravity (enterprise gateway & effort tiers)
-```
 
 - **[Documentation Portal](./docs/README.md)**
 - **[System Architecture](./docs/architecture/daemon.md)**

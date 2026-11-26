@@ -66,8 +66,10 @@ Traditional multi-agent frameworks often delegate summarization to secondary "su
 #### 2. Dynamic Safety Reserve & Trigger Formula
 To ensure turns complete reliably without encountering provider context limits during response generation, the harness calculates dynamic operating boundaries based on the active model's profile limits:
 
-$$\text{ReserveTokens} = \max(\lfloor\text{ContextLimit} \times 0.20\rfloor, \text{OutputLimit} + 4096)$$
-$$\text{TriggerTokens} = \text{ContextLimit} - \text{ReserveTokens}$$
+```text
+ReserveTokens = max(⌊ContextLimit × 0.20⌋, OutputLimit + 4096)
+TriggerTokens = ContextLimit - ReserveTokens
+```
 
 | Metric | Source | Purpose |
 | :--- | :--- | :--- |
@@ -185,4 +187,4 @@ Injected reminders are synthetic user messages. Three properties keep them safe:
 
 ---
 
-**See also:** [Rule manifest specification](../reference/manifests.md#5-rule-manifest-rulemd) · [`load_rule` tool contract](../reference/tools.md#load_rule) · [Ambient Rules authoring guide](../guides/customizations.md#2-ambient-rules-rulemd)
+**See also:** [Rule manifest specification](../reference/manifests/rule.md) · [`load_rule` tool contract](../reference/tools/workspace-resources.md#load_rule) · [Ambient Rules authoring guide](../guides/skills-and-rules.md#write-ambient-rules-rulemd)

@@ -11,7 +11,7 @@ The `claudecode` provider is a completion backend for an eligible Claude account
 | `spec.models`, `spec.defaultModels.completion` | Configure completion models and a default your account can use. Preset aliases are [suggestions](../providers.md#tier-aliases), not account entitlements. |
 | Billing | Subscription quota, not per-token dollars. TaskSmith shows remaining percentages and reset windows only when the vendor reports them. |
 
-Choose **Claude Code** in `/setup` and complete sign-in in the browser on the daemon host. In an existing workspace, add the preset from `/providers` and use `/login claudecode` (or `tasksmith auth login claudecode` with a running daemon). This flow does not support callback paste, `--no-browser`, or headless device login. See [Provider Sign-In](../cli.md#provider-sign-in-login) for status and logout.
+Choose **Claude Code** in `/setup` and complete sign-in in the browser on the daemon host. In an existing workspace, add the preset from `/providers` and use `/login claudecode` (or `tasksmith auth login claudecode` with a running daemon). This flow does not support callback paste, `--no-browser`, or headless device login. See [Provider Sign-In](../cli/slash-commands.md#provider-sign-in-login) for status and logout.
 
 Use **Manage models** in `/providers` to browse the available catalog. Actual model access depends on the signed-in account; a preset entry is not proof of access. Use `/model` to select a configured completion model.
 

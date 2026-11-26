@@ -12,21 +12,22 @@ spec:
   triggers:
     globs:
       - "docs/**"
+      - "site/rspress.config.ts"
+      - "site/pages/**"
       - "README.md"
       - "ROADMAP.md"
       - "AGENTS.md"
       - "api/**"
+      - "client/**"
       - "internal/cmd/**"
       - "internal/cli/**"
+      - "internal/ui/**"
+      - "internal/tui/**"
       - "internal/exec/**"
       - "internal/acp/**"
-      - "internal/daemon/tools/builtin/**"
-      - "internal/daemon/workspace/**"
-      - "internal/daemon/gateway/**"
-      - "internal/daemon/sandbox/**"
-      - "internal/daemon/sandboxcfg/**"
-      - "internal/daemon/permissions/**"
-      - "internal/daemon/mcp/**"
+      - "internal/daemon/**"
+      - "internal/core/**"
+      - ".agents/providers/**"
     keywords:
       - docs
       - documentation
@@ -36,53 +37,34 @@ spec:
 
 # Documentation Maintenance & Progressive Disclosure
 
-Maintain strict documentation synchronization, progressive disclosure, portability, and source fidelity whenever modifying TaskSmith's user-facing surfaces or documentation.
+## 1. Source-to-Docs Routing Table
 
----
+When behavior changes, update the matching guide and reference in the same change. Guide paths below are relative to `docs/guides/`, reference paths to `docs/reference/`, and daemon packages to `internal/daemon/`.
 
-## 1. When to Update Documentation
+| Source or behavior | Guide | Reference |
+| --- | --- | --- |
+| `internal/cmd/`, installation and startup | `quickstart.md` | `cli/flags-and-subcommands.md` |
+| `internal/cli/`, `internal/tui/`, `internal/ui/`, composer and shortcuts | `cli.md`, `appearance.md` | `cli/keybindings.md`, `cli/slash-commands.md`, `cli/config-files.md` |
+| `internal/exec/`, `internal/acp/` | `headless-exec.md`, `acp.md` | `exec.md`, `cli/flags-and-subcommands.md` |
+| `session/`, `timeline/`, `metrics/`, `journal/`, session history and usage | `sessions.md` | `cli/slash-commands.md`, `daemon-api.md` |
+| `harness/`, delegation and plan review | `agents-and-subagents.md`, `modes-and-planning.md` | `manifests/agent.md`, `tools/agents-and-planning.md` |
+| `permissions/`, `permreview/`, trust and approvals | `trust.md`, `permissions.md`, `auto-permission-review.md` | `manifests/workspace.md`, `manifests/decision.md`, `cli/keybindings.md` |
+| `sandbox/`, `sandboxcfg/`, path and shell guards | `sandbox.md` | `cli/config-files.md`, `tools/execution-and-tasks.md` |
+| `workspace/`, resource discovery and WARP | `workspaces.md`, `customizations.md`, `skills-and-rules.md`, `commands.md` | `manifests/workspace.md` (includes Context), `manifests/plugin.md`, `manifests/skill.md`, `manifests/rule.md`, `manifests/command.md` |
+| `tools/`, `tasks/`, `mcp/`, `api/tools.go`, custom tool definitions | `tools-and-mcp.md` | Matching `tools/` page: `filesystem.md`, `execution-and-tasks.md`, `web.md`, `agents-and-planning.md`, or `workspace-resources.md`; `manifests/tool.md`, `manifests/mcp.md` |
+| `gateway/`, `models/`, authentication and provider presets | `models-and-providers.md` | `providers.md` (shared schema), matching `providers/` page |
+| `server/`, `broker/`, `api/`, `client/`, daemon transport and lifecycle | `sessions.md`, `headless-exec.md` | `daemon-api.md`, `exec.md` |
 
-Whenever modifying code that alters user-facing behavior, configuration schemas, or system architecture, update the corresponding documentation in the same change:
+For changes to lifecycles or security boundaries, also update the matching `docs/architecture/` page (daemon, harness, gateway, sandbox, or permissions). Update `ROADMAP.md` when a tracked capability changes scope or completion status. Internal-only refactors, fixes, tests, or optimizations do not require documentation changes.
 
-- **CLI Commands, Flags, & Shortcuts**:
-  - Updates to `internal/cmd/`, `internal/cli/`, or REPL keybindings must update `docs/reference/cli.md`.
-  - Every CLI flag, slash command alias, and keyboard shortcut table must reflect real source behavior.
-- **Built-in System Tools**:
-  - Updates to `internal/daemon/tools/builtin/`, `api/tools.go`, or tool manifests (`*.tool.md`) must update `docs/reference/tools.md`.
-  - Tool parameters, output types, default permission behaviors, and safety annotations (`isReadOnly`, `isDangerous`, `isOpenWorld`) must match tool definitions exactly.
-- **Manifest Specifications**:
-  - Updates to `internal/daemon/workspace/` or WARP schemas must update `docs/reference/manifests.md`.
-  - Every resource kind (`Workspace`, `Context`, `Agent`, `Skill`, `Command`, `Decision`, `Rule`, `Tool`, `MCP`, `ModelProvider`, `Plugin`) must have up-to-date schema tables and annotated examples.
-- **Model Providers & Gateways**:
-  - Updates to `internal/daemon/gateway/` or provider presets must update `docs/reference/providers.md` and the appropriate guide in `docs/reference/providers/`.
-- **User Workflows (`docs/guides/`)**:
-  - Updates introducing or changing a user-facing concept or interactive workflow must update the corresponding guide (`cli.md`, `workspaces.md`, `permissions.md`, `customizations.md`, `tools-and-mcp.md`).
-- **Subsystem Architecture (`docs/architecture/`)**:
-  - Updates changing the high-level mental model, lifecycle, or security boundaries of subsystems must update the corresponding specification (`daemon.md`, `harness.md`, `gateway.md`, `sandbox.md`, `permissions.md`).
-- **Public Roadmap (`ROADMAP.md`)**:
-  - When completing, rescoping, or adding a milestone capability tracked in `ROADMAP.md`, update its checkbox/entry in `ROADMAP.md` in the same change.
+## 2. Modularity & User-Driven Style Guardrail
 
-### When NOT to Update Documentation
-
-- Do **not** update `docs/` for internal bug fixes, code refactoring, test additions, performance optimizations, or low-level implementation details that do not alter user-facing behavior, configuration schemas, or high-level subsystem architecture.
-
----
-
-## 2. Progressive Disclosure & Style
-
-Layer documentation so readers and agents only pay for the level of detail their task needs:
-
-- **Reference Docs (`docs/reference/`) — Crisp & Tabular**:
-  - Schema-focused Markdown tables only (flags, parameters, fields, defaults, types).
-  - Avoid narrative tutorials in reference docs; link to User Guides (`../guides/`) or Architecture Deep Dives (`../architecture/`) instead.
-- **User Guides (`docs/guides/`) — Workflow-Oriented**:
-  - Explain end-to-end concepts and practical examples; link to `../reference/` for exhaustive field tables rather than duplicating schemas.
-- **Architecture Specs (`docs/architecture/`) — Boundaries & Invariants**:
-  - Focus on mental models, state lifecycles, and security boundaries rather than line-by-line code walkthroughs that go stale.
-- **Agent Context (`AGENTS.md`, `.agents/rules/`, `.agents/skills/`)**:
-  - Keep always-on context (`AGENTS.md`, `triggers.always: true`) short, high-signal, and focused on non-obvious repository-wide knowledge; place path/tool-specific guardrails in conditional `.agents/rules/*.rule.md` and multi-step domain playbooks in `.agents/skills/<name>/SKILL.md` + `references/*.md`.
-- **Strict Source Truth**:
-  - Never fabricate flags, arguments, or schema properties. Verify every documented detail against actual Go structs, CLI commands, and manifest definitions.
+- Write `docs/guides/` for someone completing a task. Use a clear lead, **Before you start** when relevant, action-verb `##` headings for **On this page**, copy-paste examples, comparison tables where useful, and `## Next steps`. Aim for 120–260 lines per guide.
+- Keep `docs/reference/` crisp and tabular. Put flags, defaults, fields, and safety annotations in `cli/`, `tools/`, `manifests/`, or `providers/` behind concise overview pages. Link to guides for walkthroughs.
+- Never re-bloat `cli.md`, `tools.md`, `manifests.md`, or `customizations.md`. Extend a focused subpage or create one and register it in both `site/rspress.config.ts` and `docs/README.md`.
+- When adding, removing, or renaming a page or heading, update incoming links and anchors, then run `npm run typecheck && npm run build` in `site/`. Resolve dead links before finishing.
+- Describe architecture in terms of boundaries, lifecycles, and invariants. Keep always-on agent context short; put conditional guidance in rules and multi-step workflows in skills.
+- Verify documented flags, arguments, and schema properties against their source definitions.
 
 ---
 

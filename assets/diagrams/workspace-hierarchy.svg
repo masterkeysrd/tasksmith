@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 386" width="920" height="386" role="img" aria-label="TaskSmith four-tier resource hierarchy from lowest to highest precedence: Built-in, User, Workspace, and Project">
+  <defs>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      .tier-title { font-size: 14px; font-weight: 700; fill: #e6edf3; }
+      .tier-desc { font-size: 11.5px; fill: #b1bac4; }
+      .tier-path { font-size: 11px; fill: #9198a1; }
+    </style>
+    <linearGradient id="precedenceGrad" gradientUnits="userSpaceOnUse" x1="68" y1="312" x2="68" y2="66">
+      <stop offset="0%" stop-color="#484f58" />
+      <stop offset="40%" stop-color="#9d7cd8" />
+      <stop offset="75%" stop-color="#58a6ff" />
+      <stop offset="100%" stop-color="#2ac3de" />
+    </linearGradient>
+    <marker id="upArrow" viewBox="0 0 10 10" refX="5" refY="2" markerWidth="7" markerHeight="7" orient="0">
+      <path d="M 1.5 8.5 L 5 1.5 L 8.5 8.5 z" fill="#2ac3de" />
+    </marker>
+  </defs>
+
+  <!-- Outer frame -->
+  <rect x="1" y="1" width="918" height="384" rx="14" fill="#0b0f14" stroke="#30363d" stroke-width="1.5" />
+
+  <!-- Left precedence axis -->
+  <text x="68" y="36" text-anchor="middle" class="sans" font-size="11" font-weight="700" fill="#2ac3de">HIGHER PRIORITY</text>
+  <text x="68" y="51" text-anchor="middle" class="sans" font-size="10" fill="#8b949e">overrides lower</text>
+  <line x1="68" y1="312" x2="68" y2="66" stroke="url(#precedenceGrad)" stroke-width="2.5" marker-end="url(#upArrow)" />
+  <text x="68" y="330" text-anchor="middle" class="sans" font-size="10.5" font-weight="600" fill="#8b949e">BASE DEFAULTS</text>
+
+  <!-- Tier 4: Project (Highest) -->
+  <rect x="136" y="26" width="756" height="68" rx="10" fill="#0d1117" stroke="#2ac3de" stroke-opacity="0.8" stroke-width="1.3" />
+  <rect x="136" y="26" width="5" height="68" rx="2.5" fill="#2ac3de" />
+  <rect x="154" y="40" width="84" height="22" rx="5" fill="#132c33" />
+  <text x="196" y="55" text-anchor="middle" class="mono" font-size="10" font-weight="700" fill="#2ac3de">4 · PROJECT</text>
+  <text x="250" y="52" class="sans tier-title">Project / Subproject</text>
+  <text x="250" y="74" class="sans tier-desc">Service- or package-specific instructions, rules, and agents.</text>
+  <rect x="646" y="42" width="234" height="34" rx="6" fill="#161b22" stroke="#262c36" stroke-width="1" />
+  <text x="763" y="63" text-anchor="middle" class="mono" font-size="10" fill="#9198a1">AGENTS.md · .agents/</text>
+
+  <!-- Tier 3: Workspace -->
+  <rect x="136" y="108" width="756" height="68" rx="10" fill="#0d1117" stroke="#58a6ff" stroke-opacity="0.7" stroke-width="1.2" />
+  <rect x="136" y="108" width="5" height="68" rx="2.5" fill="#58a6ff" />
+  <rect x="154" y="122" width="84" height="22" rx="5" fill="#152438" />
+  <text x="196" y="137" text-anchor="middle" class="mono" font-size="10" font-weight="700" fill="#58a6ff">3 · REPO</text>
+  <text x="250" y="134" class="sans tier-title">Workspace Root</text>
+  <text x="250" y="156" class="sans tier-desc">Shared defaults, aliases, policies, commands, and MCP servers.</text>
+  <rect x="646" y="124" width="234" height="34" rx="6" fill="#161b22" stroke="#262c36" stroke-width="1" />
+  <text x="763" y="145" text-anchor="middle" class="mono" font-size="10" fill="#9198a1">WORKSPACE.md · .agents/</text>
+
+  <!-- Tier 2: User -->
+  <rect x="136" y="190" width="756" height="68" rx="10" fill="#0d1117" stroke="#9d7cd8" stroke-opacity="0.7" stroke-width="1.2" />
+  <rect x="136" y="190" width="5" height="68" rx="2.5" fill="#9d7cd8" />
+  <rect x="154" y="204" width="84" height="22" rx="5" fill="#231c35" />
+  <text x="196" y="219" text-anchor="middle" class="mono" font-size="10" font-weight="700" fill="#9d7cd8">2 · USER</text>
+  <text x="250" y="216" class="sans tier-title">User Global</text>
+  <text x="250" y="238" class="sans tier-desc">Personal providers, skills, rules, and agents across checkouts.</text>
+  <rect x="646" y="206" width="234" height="34" rx="6" fill="#161b22" stroke="#262c36" stroke-width="1" />
+  <text x="763" y="227" text-anchor="middle" class="mono" font-size="10" fill="#9198a1">~/.config/tasksmith/agents/</text>
+
+  <!-- Tier 1: Built-in (Base) -->
+  <rect x="136" y="272" width="756" height="68" rx="10" fill="#0d1117" stroke="#484f58" stroke-opacity="0.8" stroke-width="1.2" />
+  <rect x="136" y="272" width="5" height="68" rx="2.5" fill="#6e7681" />
+  <rect x="154" y="286" width="84" height="22" rx="5" fill="#1c2128" />
+  <text x="196" y="301" text-anchor="middle" class="mono" font-size="10" font-weight="700" fill="#b1bac4">1 · BUILT-IN</text>
+  <text x="250" y="298" class="sans tier-title">Embedded Built-ins</text>
+  <text x="250" y="320" class="sans tier-desc">Default agents, built-in tools, and embedded core skills.</text>
+  <rect x="646" y="288" width="234" height="34" rx="6" fill="#161b22" stroke="#262c36" stroke-width="1" />
+  <text x="763" y="309" text-anchor="middle" class="mono" font-size="10" fill="#9198a1">$XDG_DATA_HOME/tasksmith/builtin/</text>
+
+  <!-- Footer invariant -->
+  <text x="514" y="366" text-anchor="middle" class="sans" font-size="11" fill="#8b949e">A same-kind, same-name resource in a higher tier shadows lower tiers. Explicit workspace deny/tool policies still apply.</text>
+</svg>

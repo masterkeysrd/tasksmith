@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 324" width="920" height="324" role="img" aria-label="Auto-mode permission review pipeline: Tool call passes explicit deny and allow rules, shellguard and ModeAuto gate, then the permission-reviewer decision model which either approves once with a receipt or defers to the user">
+  <defs>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      .kicker { font-size: 10px; font-weight: 700; letter-spacing: 1px; fill: #8b949e; }
+      .title { font-size: 13px; font-weight: 700; fill: #e6edf3; }
+      .sub { font-size: 10.5px; fill: #9198a1; }
+      .edge { font-size: 10px; font-weight: 600; fill: #8b949e; }
+    </style>
+    <marker id="arr-b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#58a6ff" />
+    </marker>
+    <marker id="arr-r" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#ff7b72" />
+    </marker>
+    <marker id="arr-g" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#3fb950" />
+    </marker>
+    <marker id="arr-o" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#f0883e" />
+    </marker>
+  </defs>
+
+  <!-- Outer frame -->
+  <rect x="1" y="1" width="918" height="322" rx="14" fill="#0b0f14" stroke="#30363d" stroke-width="1.5" />
+  <text x="28" y="32" class="sans kicker">AUTO-MODE PERMISSION REVIEW PIPELINE</text>
+
+  <!-- Node 1: Tool Call -->
+  <rect x="28" y="56" width="118" height="74" rx="9" fill="#0d1117" stroke="#2ac3de" stroke-opacity="0.75" stroke-width="1.2" />
+  <rect x="28" y="56" width="118" height="4" rx="2" fill="#2ac3de" />
+  <text x="87" y="88" text-anchor="middle" class="sans title">Tool Call</text>
+  <text x="87" y="108" text-anchor="middle" class="sans sub">Parsed action</text>
+
+  <line x1="146" y1="93" x2="174" y2="93" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr-b)" />
+
+  <!-- Node 2: Explicit Rules -->
+  <rect x="178" y="56" width="166" height="74" rx="9" fill="#0d1117" stroke="#58a6ff" stroke-opacity="0.75" stroke-width="1.2" />
+  <rect x="178" y="56" width="166" height="4" rx="2" fill="#58a6ff" />
+  <text x="261" y="85" text-anchor="middle" class="sans title">Explicit Policies</text>
+  <text x="261" y="105" text-anchor="middle" class="sans sub">Deny / exclusion / allow</text>
+
+  <!-- Branch down from Node 2 -> Block -->
+  <line x1="261" y1="130" x2="261" y2="226" stroke="#ff7b72" stroke-width="1.4" marker-end="url(#arr-r)" />
+  <text x="269" y="180" class="sans edge">Deny / excluded</text>
+  <rect x="184" y="232" width="154" height="54" rx="9" fill="#2c161a" stroke="#ff7b72" stroke-opacity="0.75" stroke-width="1.2" />
+  <text x="261" y="256" text-anchor="middle" class="sans" font-size="13" font-weight="700" fill="#ff7b72">Block</text>
+  <text x="261" y="274" text-anchor="middle" class="sans sub">Never reviewed</text>
+
+  <line x1="344" y1="93" x2="372" y2="93" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr-b)" />
+
+  <!-- Node 3: Shellguard & ModeAuto Gate -->
+  <rect x="376" y="56" width="184" height="74" rx="9" fill="#0d1117" stroke="#9d7cd8" stroke-opacity="0.8" stroke-width="1.2" />
+  <rect x="376" y="56" width="184" height="4" rx="2" fill="#9d7cd8" />
+  <text x="468" y="85" text-anchor="middle" class="sans title">Shellguard &amp; ModeAuto</text>
+  <text x="468" y="105" text-anchor="middle" class="sans sub">Deterministic safety gate</text>
+
+  <!-- Branch down from Node 3 -> Run without review -->
+  <line x1="468" y1="130" x2="468" y2="226" stroke="#3fb950" stroke-width="1.4" marker-end="url(#arr-g)" />
+  <text x="476" y="180" class="sans edge">Safe / granted</text>
+  <rect x="382" y="232" width="172" height="54" rx="9" fill="#163024" stroke="#3fb950" stroke-opacity="0.75" stroke-width="1.2" />
+  <text x="468" y="256" text-anchor="middle" class="sans" font-size="13" font-weight="700" fill="#7ee787">Run Directly</text>
+  <text x="468" y="274" text-anchor="middle" class="sans sub">Zero LLM latency</text>
+
+  <line x1="560" y1="93" x2="612" y2="93" stroke="#f0883e" stroke-width="1.5" marker-end="url(#arr-o)" />
+  <text x="586" y="84" text-anchor="middle" class="sans edge">Grey zone</text>
+
+  <!-- Node 4: LLM Reviewer -->
+  <rect x="616" y="48" width="276" height="90" rx="10" fill="#161b22" stroke="#f0883e" stroke-opacity="0.85" stroke-width="1.4" />
+  <rect x="616" y="48" width="276" height="4" rx="2" fill="#f0883e" />
+  <text x="754" y="76" text-anchor="middle" class="sans title">One-Shot LLM Reviewer</text>
+  <text x="754" y="95" text-anchor="middle" class="mono" font-size="10" fill="#f0883e">permission-reviewer.decision.md</text>
+  <text x="754" y="116" text-anchor="middle" class="sans sub">Approve once &amp; P ≥ threshold?</text>
+
+  <!-- Branches down from Node 4 -> Approve Once / Defer -->
+  <path d="M 696 138 V 226" fill="none" stroke="#3fb950" stroke-width="1.4" marker-end="url(#arr-g)" />
+  <text x="688" y="182" text-anchor="end" class="sans" font-size="10" font-weight="700" fill="#3fb950">Yes</text>
+  <rect x="594" y="232" width="150" height="54" rx="9" fill="#163024" stroke="#3fb950" stroke-opacity="0.75" stroke-width="1.2" />
+  <text x="669" y="255" text-anchor="middle" class="sans" font-size="12.5" font-weight="700" fill="#7ee787">Approve Once</text>
+  <text x="669" y="273" text-anchor="middle" class="sans sub">Logs audit receipt</text>
+
+  <path d="M 812 138 V 226" fill="none" stroke="#f0883e" stroke-width="1.4" marker-end="url(#arr-o)" />
+  <text x="820" y="182" class="sans" font-size="10" font-weight="700" fill="#f0883e">No / error</text>
+  <rect x="756" y="232" width="136" height="54" rx="9" fill="#2d1f14" stroke="#f0883e" stroke-opacity="0.8" stroke-width="1.2" />
+  <text x="824" y="255" text-anchor="middle" class="sans" font-size="12.5" font-weight="700" fill="#f0883e">Defer to You</text>
+  <text x="824" y="273" text-anchor="middle" class="sans sub">Interactive prompt</text>
+</svg>

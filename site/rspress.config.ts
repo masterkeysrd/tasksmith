@@ -12,6 +12,48 @@ function normalizeBase(raw?: string): string {
   return withLeading.endsWith('/') ? withLeading : `${withLeading}/`;
 }
 
+const GUIDES_SIDEBAR = [
+  {
+    text: 'Get Started',
+    items: [
+      { text: 'Overview', link: '/overview' },
+      { text: 'Quickstart', link: '/guides/quickstart' },
+      { text: 'Workspaces & Projects', link: '/guides/workspaces' },
+    ],
+  },
+  {
+    text: 'Core Workflows',
+    items: [
+      { text: 'Interactive Terminal (TUI)', link: '/guides/cli' },
+      { text: 'Sessions, Diffs & Usage', link: '/guides/sessions' },
+      { text: 'Modes & Planning', link: '/guides/modes-and-planning' },
+      { text: 'Connect an Editor (ACP)', link: '/guides/acp' },
+      { text: 'Headless & CI Automation', link: '/guides/headless-exec' },
+    ],
+  },
+  {
+    text: 'Security & Governance',
+    items: [
+      { text: 'Workspace Trust', link: '/guides/trust' },
+      { text: 'Permissions & Rules', link: '/guides/permissions' },
+      { text: 'Auto-Mode Permission Review', link: '/guides/auto-permission-review' },
+      { text: 'Sandboxing', link: '/guides/sandbox' },
+    ],
+  },
+  {
+    text: 'Customize & Extend',
+    items: [
+      { text: 'Customization Overview', link: '/guides/customizations' },
+      { text: 'Models & Providers', link: '/guides/models-and-providers' },
+      { text: 'Agents & Subagents', link: '/guides/agents-and-subagents' },
+      { text: 'Skills & Rules', link: '/guides/skills-and-rules' },
+      { text: 'Slash Commands & Workflows', link: '/guides/commands' },
+      { text: 'Tools & MCP Servers', link: '/guides/tools-and-mcp' },
+      { text: 'Appearance & Status Line', link: '/guides/appearance' },
+    ],
+  },
+];
+
 export default defineConfig({
   root: path.join(__dirname, '../docs'),
   themeDir: path.join(__dirname, 'theme'),
@@ -19,7 +61,7 @@ export default defineConfig({
   ...(process.env.DOCS_ORIGIN ? { siteOrigin: process.env.DOCS_ORIGIN } : {}),
   title: 'TaskSmith',
   description:
-    'An extensible, daemon-backed AI coding agent for the terminal with OS-level sandboxing, multi-provider routing, and declarative workspaces.',
+    'Provider-agnostic coding agents. Deterministic environments. Run version-controlled agents, skills, rules, and kernel-sandboxed workflows across any model provider—from your terminal, editor, or CI.',
   logo: '/tasksmith-logo.svg',
   logoText: 'TaskSmith',
   llms: true,
@@ -71,7 +113,7 @@ export default defineConfig({
     nav: [
       {
         text: 'Guides',
-        link: '/guides/workspaces',
+        link: '/guides/quickstart',
         activeMatch: '^/(guides|overview)',
       },
       {
@@ -95,44 +137,8 @@ export default defineConfig({
       },
     ],
     sidebar: {
-      '/overview': [
-        {
-          text: 'Documentation',
-          items: [
-            { text: 'Overview', link: '/overview' },
-          ],
-        },
-        {
-          text: 'User Guides',
-          items: [
-            { text: 'Workspaces & Projects', link: '/guides/workspaces' },
-            { text: 'Editor Integration (ACP)', link: '/guides/acp' },
-            { text: 'CLI & Interactive Workflow', link: '/guides/cli' },
-            { text: 'Security & Permissions', link: '/guides/permissions' },
-            { text: 'Customizations & Extensions', link: '/guides/customizations' },
-            { text: 'Tools & MCP Servers', link: '/guides/tools-and-mcp' },
-          ],
-        },
-      ],
-      '/guides/': [
-        {
-          text: 'Documentation',
-          items: [
-            { text: 'Overview', link: '/overview' },
-          ],
-        },
-        {
-          text: 'User Guides',
-          items: [
-            { text: 'Workspaces & Projects', link: '/guides/workspaces' },
-            { text: 'Editor Integration (ACP)', link: '/guides/acp' },
-            { text: 'CLI & Interactive Workflow', link: '/guides/cli' },
-            { text: 'Security & Permissions', link: '/guides/permissions' },
-            { text: 'Customizations & Extensions', link: '/guides/customizations' },
-            { text: 'Tools & MCP Servers', link: '/guides/tools-and-mcp' },
-          ],
-        },
-      ],
+      '/overview': GUIDES_SIDEBAR,
+      '/guides/': GUIDES_SIDEBAR,
       '/architecture/': [
         {
           text: 'System Architecture',
@@ -147,18 +153,47 @@ export default defineConfig({
       ],
       '/reference/': [
         {
-          text: 'Reference Specifications',
+          text: 'CLI & Daemon',
           items: [
-            { text: 'CLI Command Reference', link: '/reference/cli' },
-            { text: 'Headless Execution Reference', link: '/reference/exec' },
-            { text: 'Built-in Tool Reference', link: '/reference/tools' },
-            { text: 'Resource Manifests', link: '/reference/manifests' },
-            { text: 'Providers Overview & Schema', link: '/reference/providers' },
+            { text: 'CLI Overview', link: '/reference/cli' },
+            { text: 'Flags & Subcommands', link: '/reference/cli/flags-and-subcommands' },
+            { text: 'Slash Commands', link: '/reference/cli/slash-commands' },
+            { text: 'Keyboard Shortcuts', link: '/reference/cli/keybindings' },
+            { text: 'Config Files & State', link: '/reference/cli/config-files' },
+            { text: 'Headless Execution (exec)', link: '/reference/exec' },
+            { text: 'Daemon HTTP API', link: '/reference/daemon-api' },
+          ],
+        },
+        {
+          text: 'Built-in Tools',
+          items: [
+            { text: 'Tools Overview', link: '/reference/tools' },
+            { text: 'Filesystem Tools', link: '/reference/tools/filesystem' },
+            { text: 'Execution & Tasks', link: '/reference/tools/execution-and-tasks' },
+            { text: 'Web & Network', link: '/reference/tools/web' },
+            { text: 'Agents, Planning & Input', link: '/reference/tools/agents-and-planning' },
+            { text: 'Workspace Resources', link: '/reference/tools/workspace-resources' },
+          ],
+        },
+        {
+          text: 'Resource Manifests (WARP)',
+          items: [
+            { text: 'Manifests Overview', link: '/reference/manifests' },
+            { text: 'Workspace & Context', link: '/reference/manifests/workspace' },
+            { text: 'Agent', link: '/reference/manifests/agent' },
+            { text: 'Skill', link: '/reference/manifests/skill' },
+            { text: 'Rule', link: '/reference/manifests/rule' },
+            { text: 'Command', link: '/reference/manifests/command' },
+            { text: 'Decision', link: '/reference/manifests/decision' },
+            { text: 'Tool', link: '/reference/manifests/tool' },
+            { text: 'MCP Server', link: '/reference/manifests/mcp' },
+            { text: 'Plugin', link: '/reference/manifests/plugin' },
           ],
         },
         {
           text: 'Model Providers',
           items: [
+            { text: 'Providers Overview & Schema', link: '/reference/providers' },
             { text: 'OpenAI', link: '/reference/providers/openai' },
             { text: 'Codex', link: '/reference/providers/codex' },
             { text: 'Anthropic', link: '/reference/providers/anthropic' },

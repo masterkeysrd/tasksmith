@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 280" width="920" height="280" role="img" aria-label="TaskSmith plan review lifecycle: Plan mode writes a plan file, calls exit_plan_mode, opens Review plan, and either approves into accept_edits, default, or auto mode or loops back with feedback to revise the plan">
+  <defs>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      .kicker { font-size: 10px; font-weight: 700; letter-spacing: 1px; fill: #8b949e; }
+      .title { font-size: 13px; font-weight: 700; fill: #e6edf3; }
+      .sub { font-size: 10.5px; fill: #9198a1; }
+    </style>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#58a6ff" />
+    </marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#3fb950" />
+    </marker>
+    <marker id="arr-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#f0883e" />
+    </marker>
+  </defs>
+
+  <!-- Outer card frame -->
+  <rect x="1" y="1" width="918" height="278" rx="14" fill="#0b0f14" stroke="#30363d" stroke-width="1.5" />
+
+  <text x="28" y="34" class="sans kicker">PLAN REVIEW LIFECYCLE</text>
+
+  <!-- Step 1: Plan Mode -->
+  <rect x="28" y="54" width="144" height="82" rx="9" fill="#0d1117" stroke="#9d7cd8" stroke-opacity="0.75" stroke-width="1.2" />
+  <rect x="28" y="54" width="144" height="4" rx="2" fill="#9d7cd8" />
+  <text x="100" y="83" text-anchor="middle" class="sans title">1. Plan Mode</text>
+  <text x="100" y="102" text-anchor="middle" class="mono sub">/plan · [plan]</text>
+  <text x="100" y="120" text-anchor="middle" class="sans sub">Read-only research</text>
+
+  <!-- Arrow 1 -> 2 -->
+  <line x1="172" y1="95" x2="198" y2="95" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr)" />
+
+  <!-- Step 2: Write Plan File -->
+  <rect x="202" y="54" width="160" height="82" rx="9" fill="#0d1117" stroke="#2ac3de" stroke-opacity="0.75" stroke-width="1.2" />
+  <rect x="202" y="54" width="160" height="4" rx="2" fill="#2ac3de" />
+  <text x="282" y="83" text-anchor="middle" class="sans title">2. Write Plan</text>
+  <text x="282" y="102" text-anchor="middle" class="mono sub">plans/*.md</text>
+  <text x="282" y="120" text-anchor="middle" class="sans sub">Saved in session dir</text>
+
+  <!-- Arrow 2 -> 3 -->
+  <line x1="362" y1="95" x2="388" y2="95" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr)" />
+
+  <!-- Step 3: exit_plan_mode -->
+  <rect x="392" y="54" width="148" height="82" rx="9" fill="#0d1117" stroke="#58a6ff" stroke-opacity="0.75" stroke-width="1.2" />
+  <rect x="392" y="54" width="148" height="4" rx="2" fill="#58a6ff" />
+  <text x="466" y="83" text-anchor="middle" class="sans title">3. Submit Plan</text>
+  <text x="466" y="102" text-anchor="middle" class="mono sub">exit_plan_mode</text>
+  <text x="466" y="120" text-anchor="middle" class="sans sub">Pauses for review</text>
+
+  <!-- Arrow 3 -> 4 -->
+  <line x1="540" y1="95" x2="566" y2="95" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr)" />
+
+  <!-- Step 4: Review Plan -->
+  <rect x="570" y="54" width="144" height="82" rx="9" fill="#161b22" stroke="#f0883e" stroke-opacity="0.85" stroke-width="1.4" />
+  <rect x="570" y="54" width="144" height="4" rx="2" fill="#f0883e" />
+  <text x="642" y="83" text-anchor="middle" class="sans title">4. You Review</text>
+  <text x="642" y="102" text-anchor="middle" class="mono sub">Press p to read</text>
+  <text x="642" y="120" text-anchor="middle" class="sans sub">Approve or revise</text>
+
+  <!-- Approve arrow 4 -> 5 -->
+  <line x1="714" y1="95" x2="742" y2="95" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-green)" />
+  <text x="728" y="86" text-anchor="middle" class="sans" font-size="9.5" font-weight="700" fill="#3fb950">OK</text>
+
+  <!-- Step 5: Execute -->
+  <rect x="746" y="54" width="146" height="82" rx="9" fill="#0d1117" stroke="#3fb950" stroke-opacity="0.8" stroke-width="1.3" />
+  <rect x="746" y="54" width="146" height="4" rx="2" fill="#3fb950" />
+  <text x="819" y="81" text-anchor="middle" class="sans title">5. Implement</text>
+  <rect x="758" y="92" width="122" height="22" rx="5" fill="#163024" />
+  <text x="819" y="106" text-anchor="middle" class="mono" font-size="9.5" fill="#7ee787">accept_edits</text>
+  <text x="819" y="128" text-anchor="middle" class="mono" font-size="9.5" fill="#9198a1">or default / auto</text>
+
+  <!-- Revise feedback loop (Step 4 -> Feedback card -> Step 2) -->
+  <path d="M 642 136 V 206 H 558" fill="none" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr-amber)" />
+  <rect x="366" y="176" width="188" height="60" rx="9" fill="#0d1117" stroke="#f0883e" stroke-opacity="0.7" stroke-width="1.2" />
+  <text x="460" y="201" text-anchor="middle" class="sans" font-size="12.5" font-weight="700" fill="#f0883e">Keep Planning &amp; Revise</text>
+  <text x="460" y="220" text-anchor="middle" class="sans sub">Send feedback · stays in plan mode</text>
+  <path d="M 366 206 H 282 V 142" fill="none" stroke="#f0883e" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr-amber)" />
+</svg>

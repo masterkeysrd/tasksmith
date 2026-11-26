@@ -60,7 +60,7 @@ The daemon maintains a pool of active workspace runtimes indexed by canonical ro
 
 ### 3. Session State Machine & Durable Journal
 Every conversation turn is governed by a strict session lifecycle state machine:
-- **Discrete Operational States**: Sessions transition through `idle` $\to$ `running` $\to$ `waiting_permission` (or `waiting_question`) $\to$ `canceling` $\to$ `idle`.
+- **Discrete Operational States**: Sessions transition through `idle` → `running` → `waiting_permission` (or `waiting_question`) → `canceling` → `idle`.
 - **Durable Persistence**: All prompt requests, message chunks, assistant reasoning tokens, tool invocations, and user interactions are committed to a local SQLite journal. If the daemon restarts, in-progress turn history and state remain fully recoverable.
 - **Session Forking**: `POST /v1/sessions/{id}/fork` (and `GET /v1/sessions/latest` for quick resume) branches an idle session into a new top-level thread: the fork copies the harness checkpoint, conversation timeline, and permission grants under fresh IDs while recording provenance in `forked_from`. Both timelines receive a `forked` marker entry — `forked_from` on the fork naming its source, `forked_into` on the source naming the new fork — so each scrollback shows where the branch happened. Forks stay out of the delegation tree, so cascade deletes and subagent cascades never touch them; file rollback history stays with the originating thread.
 

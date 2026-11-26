@@ -1,67 +1,59 @@
-# Workspaces
+# Configure a workspace for your team
 
-A **Workspace** in TaskSmith defines the instructions, AI providers, agents, skills, commands, decisions, tools, and security policies for a project. Workspaces are configured declaratively using Markdown and YAML files committed alongside your code—or kept globally in your user configuration directory—allowing teams to version-control their AI workflows while keeping credentials and personal preferences isolated.
+Share instructions and defaults across a repository while keeping service-specific conventions close to the code.
+Choose where a setting belongs, layer credentials without exposing them to tools, and reload a running session.
 
----
+## Directory structure
 
-## Directory Structure
-
-A TaskSmith workspace is anchored by a `WORKSPACE.md` file (or `AGENTS.md` for a single-project directory) and an optional `.agents/` directory containing modular resource definitions:
+Start small. Add `WORKSPACE.md` when you need a shared root; use `AGENTS.md` for instructions
+that belong to a particular project. Create resource directories only as you need them.
 
 ```text
 my-workspace/
-├── WORKSPACE.md                 # Workspace-wide instructions, defaults, and policies
-├── .env                         # Local API keys and secrets (git-ignored)
+├── WORKSPACE.md
+├── .env
 ├── .agents/
-│   ├── agents/                  # Custom agent personas (*.agent.md)
-│   ├── skills/                  # Reusable domain workflows (*.skill.md or <name>/SKILL.md)
-│   ├── commands/                # Slash commands and prompt templates (*.command.md)
-│   ├── decisions/               # Calibrated System 1 decision classifiers (*.decision.md)
-│   ├── providers/               # AI provider configurations (*.provider.yaml)
-│   ├── tools/                   # Custom script and HTTP tools (*.tool.md)
-│   └── mcps/                    # Model Context Protocol servers (*.mcp.yaml)
+│   ├── agents/
+│   ├── skills/
+│   ├── rules/
+│   ├── commands/
+│   ├── decisions/
+│   ├── providers/
+│   ├── tools/
+│   └── mcps/
 └── packages/
-    └── api/                     # Optional subproject in a monorepo
-        ├── AGENTS.md            # Subproject-specific instructions and overrides
-        └── .agents/             # Subproject-scoped agents, skills, and tools
+    └── api/
+        ├── AGENTS.md
+        └── .agents/
 ```
 
-> [!TIP]
-> You do not need to create every directory up front. TaskSmith works out of the box in any directory using its built-in agents, tools, and your global user configuration.
+Keep shared personas, skill runbooks, conditional rules, slash commands, provider definitions,
+script or HTTP tools, and MCP server manifests in `.agents/`. Decision definitions describe
+classifiers; declaring one isn't a guarantee that a runtime evaluates it.
+For filename conventions and kinds, use the [manifest directory](../reference/manifests.md).
 
----
+## How the four-tier hierarchy works
 
-## Four-Tier Resource Hierarchy
+A higher tier can replace a same-kind, same-name resource from a lower one. Put a personal preference in user scope and a team convention in the repository.
 
-TaskSmith loads and merges resources across four hierarchical tiers, ordered from lowest to highest priority:
+![TaskSmith four-tier resource hierarchy: Project overrides Workspace, User, and Built-in defaults](../../assets/diagrams/workspace-hierarchy.svg)
 
-```mermaid
-flowchart LR
-    T1["1. System (system)\nBuilt-in Agents & Tools"] --> T2["2. User (user)\n~/.config/tasksmith/agents/"]
-    T2 --> T3["3. Workspace (workspace)\n<root>/WORKSPACE.md & .agents/"]
-    T3 --> T4["4. Local (local)\n<subproject>/AGENTS.md & .agents/"]
-```
+| Tier | Example |
+| --- | --- |
+| Built-in | The `main` and `title-generator` agents and built-in skills. Workspace built-ins are mirrored under `$XDG_DATA_HOME/tasksmith/builtin/`. |
+| User | A provider or skill you reuse across checkouts, under `$XDG_CONFIG_HOME/tasksmith/agents/`. |
+| Workspace | A shared review command in `<workspace-root>/.agents/commands/`. |
+| Project | An API-specific agent in `packages/api/.agents/agents/`. |
 
-| Tier | Namespace | Location | Purpose |
-| :--- | :--- | :--- | :--- |
-| **1. System** | `system` | Embedded in TaskSmith; workspace built-ins mirrored in `$XDG_DATA_HOME/tasksmith/builtin/` | Built-in agents (`main`, `title-generator`), the `tasksmith-customizations` skill, and core tools. |
-| **2. User** | `user` | `$XDG_CONFIG_HOME/tasksmith/agents/` | Personal providers, custom agents, and global skills available across every project on your machine. |
-| **3. Workspace** | `workspace` | `<root>/WORKSPACE.md` & `<root>/.agents/` | Shared team configuration, repository conventions, and project-wide agents and tools. |
-| **4. Local** | `local` | `<project>/AGENTS.md` & `<project>/.agents/` | Subproject-specific instructions and overrides when working inside a monorepo package or service. |
+For example, a project `main` agent shadows the built-in `main` for a short-name lookup.
+Use `system/Agent/main` when you mean the built-in regardless of shadowing; agent `extends`
+lets you inherit a base prompt, tools, and subagents rather than copying the definition.
+`local` selects the current project with workspace fallback. Plugins can also export namespaced resources.
 
-### Shadowing, Inheritance, and Qualified Names
+## Configure `WORKSPACE.md` and `AGENTS.md`
 
-- **Automatic Shadowing**: When multiple tiers define a resource with the same name (for example, a custom `main` agent in `.agents/agents/main.agent.md`), the higher-priority tier automatically overrides the lower-priority definition.
-- **Cross-Tier Inheritance (`extends`)**: An agent in a higher tier can extend a lower-tier agent (such as `extends: system:main`) to inherit its base prompt, tools, and subagents while adding project-specific instructions or policies.
-- **Explicit Qualification**: Any resource can be referenced unambiguously using its `<namespace>:<name>` identifier (for example, `system:main`, `user:reviewer`, or `workspace:deploy`).
-
----
-
-## Workspace & Project Manifests
-
-### `WORKSPACE.md`
-
-Placed at the root of a repository or multi-project workspace, `WORKSPACE.md` configures default models, workspace-wide security policies, subproject paths, and shared context injected into agent prompts:
+Put settings that should follow the repository in the frontmatter of `WORKSPACE.md`.
+Put shared instructions in the Markdown body. For a repository with two packages:
 
 ```markdown
 ---
@@ -76,32 +68,37 @@ spec:
   defaultProvider: anthropic
   defaultModels:
     completion: anthropic/claude-sonnet-4-5
-    decision: ollama/nimble-v3
-    embedding: openai/text-embedding-3-small
   modelAliases:
-    fast: anthropic/claude-haiku-4-5
     default: anthropic/claude-sonnet-4-5
   defaultAgent: main
   policies:
     tools:
-      include:
-        - view
-        - glob
-        - grep
       ask:
         - bash
         - write
         - edit
 ---
 
-# Acme Platform Workspace
+# Acme Platform
 
-Follow our Go and TypeScript style guides. Always run unit tests before finalizing changes.
+Run the affected package's tests before declaring a change complete.
 ```
 
-### `AGENTS.md`
+Use a provider and model actually configured in your workspace. `completion` serves chat
+and tool use; `decision` names a classification model and `embedding` a vector model.
+Resolution starts with an explicit model or alias, then project/workspace role defaults,
+provider role defaults, and finally a compatible catalog model. Use `provider/model-id`,
+`@alias`, or `provider/@alias` to select a model.
 
-Placed in a standalone project root or inside a subproject of a monorepo, `AGENTS.md` provides focused instructions and local overrides for that directory:
+`/providers` lets you disable a provider without deleting its endpoint, credentials reference,
+or model definitions. Its models and aliases then disappear from resolution. A workspace shadow
+can disable an inherited user provider locally. The model manager and `F2` alias editor persist
+model/default/alias settings; workspace `spec.modelAliases` takes precedence.
+
+## Work in monorepos and subprojects
+
+List package paths relative to the workspace root under `spec.projects`, as above.
+In `packages/api/AGENTS.md`, describe only what differs in that package:
 
 ```markdown
 ---
@@ -113,155 +110,100 @@ metadata:
   description: Go API service conventions
 ---
 
-# API Service Conventions
+# API service
 
-- All database migrations live in `internal/db/migrations/`.
-- Run `go test -race ./...` to verify changes in this service.
+Migrations live in `internal/db/migrations/`.
+Run `go test -race ./...` from this package after changing a handler.
 ```
 
-For complete schema specifications of `WORKSPACE.md` and `AGENTS.md`, see the [Manifests Reference](../reference/manifests.md).
+Open the API project from the workspace root:
 
----
-
-## Model Role Resolution
-
-TaskSmith routes AI workloads across three specialized cognitive roles:
-
-1. **Completion (`completion`)**: Multi-turn reasoning, code generation, and tool execution.
-2. **Decision (`decision`)**: Fast, calibrated probabilistic classification and routing.
-3. **Embedding (`embedding`)**: Vector generation for semantic search and workspace indexing.
-
-When resolving which model to use for a given role, TaskSmith evaluates candidates in order of specificity. Model identifiers may be fully qualified (`<provider>/<model-id>`) or shorthand aliases declared in `WORKSPACE.md` `modelAliases` (referenced as `@<alias>`, `@default`, or `<provider>/@<alias>`):
-
-```mermaid
-flowchart TD
-    R1["1. Explicit Model Reference\n(agent/decision model, or @alias / <provider>/@alias)"] --> R2["2. Project / Workspace Role Default\n(defaultModels.<role> in AGENTS.md or WORKSPACE.md)"]
-    R2 --> R3["3. Provider Role Default\n(defaultModels.<role> in *.provider.yaml)"]
-    R3 --> R4["4. Catalog Capability Match\n(First registered model supporting the role)"]
+```bash
+tasksmith -w packages/api
 ```
 
-Providers declare `spec.enabled` (`*bool`, default `true`); a disabled `*.provider.yaml` is skipped entirely by resolution — its models and `@aliases` are unavailable, while its endpoint, auth, and model definitions stay in YAML. `/providers` toggles this declaratively (patching the owning manifest, or writing a workspace-tier shadow override to mute an inherited user-tier provider locally), and its model manager plus the `F2` alias editor persist `spec.models`, `defaultModels`, and per-model `aliases` back to the manifest. See [Providers Reference](../reference/providers.md#enabling-and-disabling-providers-specenabled) and [CLI Reference — Providers Browser](../reference/cli.md#providers-browser-providers).
+TaskSmith looks upward for `WORKSPACE.md` and selects the project context. Without a manifest
+it creates a synthetic workspace. In a flat workspace whose only project is `.`, the root
+`.agents/` is loaded as project resources, not duplicated at two tiers.
 
----
+In a plain directory or ordinary Git checkout, first launch goes through trust and setup if needed.
+For a bare-repository hub (`.bare`) with sibling worktrees, opening the hub offers a branch
+worktree to select or create. If a branch contains configuration, choose whether to share it
+at the hub root or keep it branch-specific. A linked worktree can still have its own `.env`.
 
-## Environment Variables & Secrets (`.env`)
+## Layer secrets with `.env` files
 
-TaskSmith isolates credentials per workspace and never mutates the host shell environment. When opening or reloading a workspace, secrets are resolved using a layered hierarchy where process environment variables serve as the foundation fallback layer and on-disk `.env` files override them in increasing order of specificity:
+Reference secrets by variable name in provider and MCP `spec.auth` manifests (for example,
+`${env:ANTHROPIC_API_KEY}` or `${file:...}`), not by value. MCP `spec.env`, `spec.headers`,
+and `spec.command` fields expand `${VAR}` placeholders. TaskSmith resolves these for the workspace
+without mutating your shell. On open or reload, **later rows override earlier rows** for the same name:
 
-| Priority | Source / File Path | Typical Use Case |
-| :--- | :--- | :--- |
-| **1 (Base Fallback)** | Process Environment (`os.Getenv`) | Host shell environment variables passed directly when starting the daemon or CLI. |
-| **2** | `$XDG_CONFIG_HOME/tasksmith/.env` | Personal API keys shared across all workspaces (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). |
-| **3** | `<worktree-hub>/.env` | Shared secrets located in the parent directory of a bare-repository worktree hub. |
-| **4** | `<workspace-root>/.env` | Repository-specific API keys and endpoints committed or kept at workspace root. |
-| **5 (Highest)** | `<subproject>/.env` | Service-local overrides when working inside a monorepo subproject or package. |
+| Order | Source | Use it for |
+| --- | --- | --- |
+| 1 | Daemon process environment | Fallback if no file supplies a value. |
+| 2 | `$XDG_CONFIG_HOME/tasksmith/.env` | Personal provider keys across projects. |
+| 3 | `<worktree-hub>/.env` | Shared credentials for sibling worktrees. |
+| 4 | `<workspace-root>/.env` | Checkout-specific keys or endpoints. |
+| 5 | `<subproject>/.env` | Service-local overrides. |
 
-Higher-priority `.env` files override variables set in lower tiers. If an environment variable is omitted across all `.env` files, TaskSmith falls back to `os.Getenv`.
+For example, keep a shared endpoint at the root and override only its address in the API
+project's `.env`. Do not commit either file if it contains credentials. When setup saves a key
+it uses mode `0600` and ensures the repository `.env` is ignored by Git.
 
-TaskSmith maintains two distinct environment views from these layers:
-- **Daemon Credential View (`Env()`)**: Includes all 5 tiers above and powers `ModelProvider` `${env:...}` expression resolution and MCP `${VAR}` credential expansion inside the daemon.
-- **Subprocess Environment (`SubprocessEnv()`)**: Passed to `bash` commands and custom tool subprocesses (and updated live on workspace reload). It preserves the user's host shell environment (`GH_TOKEN`, `NPM_TOKEN`, `AWS_*`, `PATH`, etc.) and, in trusted workspaces, project `.env` layers (tiers 3–5), while excluding `$XDG_CONFIG_HOME/tasksmith/.env` (`~/.config/tasksmith/.env`), variables referenced in configured `ModelProvider` `spec.auth` `${env:...}` expressions, and the `TASKSMITH_*` internal namespace. In **Restricted Mode**, project `.env` layers (tiers 3–5) are omitted from both views.
+**What reaches commands?** The daemon credential view includes all applicable layers. The
+subprocess view for Bash and custom tools preserves host variables such as `PATH`, `GH_TOKEN`,
+`NPM_TOKEN`, and `AWS_*` and trusted project layers, but excludes the personal `.env` layer,
+variables referenced by provider `spec.auth` environment expressions, and internal `TASKSMITH_*`
+variables. Reload refreshes this view for subsequent subprocesses.
 
-For detailed information on authentication schemes, provider manifests, and lazy credential validation, see the [Providers Reference](../reference/providers.md).
+In Restricted Mode, hub, workspace, and subproject `.env` files are omitted from **both** views.
+Don't diagnose a missing provider key by printing the environment into a terminal transcript;
+check scope, trust, and the provider's credential status instead.
 
-> [!IMPORTANT]
-> When TaskSmith saves an API key during setup or provider configuration, it writes the key to `.env` with `0600` permissions and automatically ensures `.env` is listed in `.gitignore`.
+## Track workspace metadata (`workspace.json`)
 
----
+Workspace state belongs to the daemon, not to the repository. Its version marker lives at
+`$XDG_DATA_HOME/tasksmith/workspaces/<hash>/workspace.json` (normally under `~/.local/share/`).
+A marker looks like this:
 
-## First-Run Onboarding & Trust Model
-
-When TaskSmith is launched in a directory for the first time, it performs a deterministic security check before creating any session or accessing repository configuration:
-
-```mermaid
-flowchart LR
-    Launch(["Launch tasksmith"]) --> Trust["Trust Gate\ntrust.json"]
-    Trust -->|Trusted| Config["Workspace Config?\nWORKSPACE.md · .agents"]
-    Trust -.->|Restricted| Restrict(["Restricted Session\nNo repo tools · MCPs · .env"])
-    Trust -.->|Exit| Exit(["Exit CLI"])
-
-    Config -->|Configured| Creds["Credentials\nReady?"]
-    Config -->|Unconfigured| Setup(["Launch /setup Wizard"])
-
-    Creds -->|Yes| Home(["Session Home"])
-    Creds -->|Missing| Prompt["Prompt Credentials"] --> Home
+```json
+{
+  "schema": 1,
+  "version": "0.1.0"
+}
 ```
 
-### 1. Trust Model (`trust.json`)
+On open, a newer release applies registered migrations in ascending version order. A failed
+step stops the upgrade; the marker stays at the last successful step for retry. An older
+binary leaves a newer marker alone and logs the downgrade. Non-semver development builds skip migrations.
+If an upgrade would change tracked configuration, inspect **Upgrade available** in `/setup`;
+those repository edits require review rather than a silent background rewrite.
 
-To protect your system from executing untrusted scripts, MCP servers, or environment files from arbitrary repositories, TaskSmith requires an explicit trust decision before executing project code:
+## Reload a workspace (`/workspace`)
 
-- **Location**: Stored machine-wide at `~/.local/share/tasksmith/trust.json` (`$XDG_DATA_HOME/tasksmith/trust.json`).
-- **Trust Scopes**:
-  - **Folder Scope**: Grants trust only to the specific directory path.
-  - **Parent Scope**: Grants trust to the directory and all of its subdirectories (ideal for workspaces grouped under a shared directory like `~/Projects/`).
-- **Fingerprint Change Detection**: TaskSmith records a cryptographic hash of executable definitions (`.agents/tools/`, `.agents/mcps/`, `.env`). If an untrusted git pull or checkout introduces new or modified executable configurations, TaskSmith detects the fingerprint divergence and re-prompts for trust.
-- **Restricted Mode**: If trust is declined, TaskSmith opens a safe restricted session:
-  - Project-level tools (`.agents/tools/`) and project MCP servers (`.agents/mcps/`) are disabled.
-  - Local repository `.env` files are ignored (only global `$XDG_CONFIG_HOME/tasksmith/.env` applies).
-  - Mutating operations require explicit user approval.
+After changing files on disk, return to the composer and run:
 
-### 2. Interactive Setup Wizard (`/setup`)
-
-The setup wizard can be re-run at any time using the `/setup` slash command. It provides a cohesive configuration hub:
-
-```mermaid
-flowchart LR
-    S1["1. Provider\nSource"] -->|Workspace| S2["2. Provider\n& Scope"]
-    S2 --> S3["3. Verify\nCredentials"]
-    S3 --> S4["4. Mode &\nTool Toggles"]
-    S1 -.->|Reuse Global| S4
-    S4 --> S5["5. Review\n& Write"]
-    S5 -->|AGENTS.md present| Home(["Session Home"])
-    S5 -.->|No AGENTS.md| Init["Offer /init"] --> Home
+```text
+/workspace reload
 ```
 
-1. **Provider Source**: Choose whether to inherit shared model providers from `~/.config/tasksmith/` or configure project-specific settings.
-2. **Provider & Scope**: Select provider preset (e.g., Anthropic, OpenAI, Ollama, Gemini) and target persistence scope:
-   - **User Scope**: Persists credentials in `~/.config/tasksmith/.env` and provider definition in `~/.config/tasksmith/agents/providers/<name>.yaml`, leaving the repository untouched.
-   - **Workspace Scope**: Commits `WORKSPACE.md` policies and repository configuration while keeping secrets in git-ignored `<workspace-root>/.env`.
-   - **Project Scope**: Writes project overrides in `<subproject>/AGENTS.md`.
-3. **Real-Time Credential Verification**: Tests upstream API keys, connects via interactive browser OAuth (e.g., Antigravity/Google Cloud Code), and validates custom endpoints live before writing configuration files to disk.
-4. **Permission Mode & Tool Toggles**: Set default session permission mode and selectively exclude built-in tools or global MCP servers.
-5. **Review & Write**: Summarizes planned filesystem mutations and offers to run `/init` if `AGENTS.md` is not yet present.
+With no turns yet, reload is immediate. With history, **Cancel** is selected by default:
+changing the system prompt or available tools can invalidate the provider's prompt cache,
+so previously cached input may be billed at the uncached rate on the next turn. Select
+**Reload workspace** and press `Enter` to continue, or `Esc` to leave it unchanged.
 
-Adding another provider preset leaves existing model aliases in place. For example, if `@smart` already points to a model, setup reports it and skips `@smart` on the new model. You can still select either model by its full ID or change the assignment intentionally in the [alias editor](../reference/cli.md#model-alias-editor-f2).
+If you have already considered that cost, skip the confirmation deliberately:
 
----
+```text
+/workspace reload --force
+```
 
-## Workspace Metadata & Version Migrations (`workspace.json`)
+`/ws -y` is the short form; `refresh` is also accepted for `reload`. Check `/warnings`
+afterward for active workspace, provider, alias, or MCP configuration problems.
 
-TaskSmith tracks workspace state and engine versioning using an isolated metadata file:
+## Next steps
 
-- **Path**: `~/.local/share/tasksmith/workspaces/<hash>/workspace.json`
-- **Schema**:
-  ```json
-  {
-    "schema": 1,
-    "version": "0.1.0"
-  }
-  ```
-
-### Automated Migration Pipeline
-
-When opening a workspace, the Brain daemon checks the stored `version` against the running binary version:
-
-1. **Ascending Semver Execution**: If the running version is newer than the recorded `version`, TaskSmith executes all registered migration actions in strict ascending semver order.
-2. **Atomic Version Updates**: After all migrations succeed, `workspace.json` is updated to the running version. If a migration fails, execution halts immediately and the version remains at the last successfully applied step, allowing clean retries on subsequent runs.
-3. **Downgrade Safety**: If a workspace was previously opened with a newer TaskSmith binary, the daemon skips migrations, leaves the file untouched, and logs a downgrade notice.
-4. **Development Builds**: Non-semver development versions skip automated migrations to avoid corrupting workspace metadata.
-5. **Committed Files Guard**: Migrations that alter version-controlled files (`WORKSPACE.md` or `.agents/`) are never applied silently in the background; they surface as "Upgrade available" in `/setup` and require explicit user review.
-
----
-
-## Repository Topologies & Startup Flows
-
-TaskSmith works seamlessly across plain directories, standard Git repositories, linked Git worktrees, and bare-repository worktree hubs (`.bare`):
-
-### 1. Plain Directory or Standard Repository
-When opened, TaskSmith verifies directory trust and checks for workspace configuration. If uninitialized, it presents the first-run onboarding wizard. Once configured, subsequent launches immediately open the interactive session.
-
-### 2. Bare Repositories & Worktree Hubs (`.bare`)
-For developers who organize repositories with sibling branch worktrees:
-- **Branch Selection**: Opening the hub directory prompts to select or create a branch worktree.
-- **Configuration Sharing**: When a branch worktree contains configuration, TaskSmith prompts whether to share it across all sibling worktrees at the hub root or keep it scoped to that specific branch.
+- [Decide which workspace configurations to trust](./trust.md).
+- [Create a shared command or skill](./customizations.md).
+- [Look up workspace and project manifest fields](../reference/manifests/workspace.md).
+- [Check provider authentication and model resolution](../reference/providers.md).

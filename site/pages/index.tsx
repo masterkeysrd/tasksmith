@@ -108,7 +108,7 @@ const FEATURES: Feature[] = [
     title: 'Transactional Timeline & Revert',
     description:
       'Automatic content-addressable file snapshots before edit, write, or bash runs. Inspect syntax-highlighted diffs with /changes and roll back with /revert.',
-    href: '/guides/cli',
+    href: '/guides/sessions',
     accent: '#2ac3de',
   },
   {
@@ -208,7 +208,7 @@ const TOUR_SCENARIOS = [
     caption:
       'Pre-mutation CAS snapshots track every edit and shell write so you can inspect unified diffs with /changes and roll back instantly with /revert.',
     linkText: 'See CLI Slash Commands →',
-    linkHref: '/reference/cli',
+    linkHref: '/reference/cli/slash-commands',
   },
 ] as const;
 
@@ -789,15 +789,14 @@ export default function HomePage() {
         />
 
         <h1 className="ts-hero-title">
-          Autonomous coding in your terminal,{' '}
-          <span className="ts-hero-gradient">sandboxed at the kernel.</span>
+          Provider-agnostic coding agents.{' '}
+          <span className="ts-hero-gradient">Deterministic environments.</span>
         </h1>
 
         <p className="ts-hero-subtitle">
-          TaskSmith pairs a persistent Unix-socket <strong style={{ color: 'var(--rp-c-text-1)' }}>Brain Daemon</strong>{' '}
-          with <strong style={{ color: 'var(--rp-c-text-1)' }}>OS-level Seatbelt &amp; Bubblewrap isolation</strong>,{' '}
-          <strong style={{ color: 'var(--rp-c-text-1)' }}>triple-role model routing</strong>, and{' '}
-          <strong style={{ color: 'var(--rp-c-text-1)' }}>declarative WARP workspaces</strong>.
+          Run the same <strong style={{ color: 'var(--rp-c-text-1)' }}>version-controlled agents, skills, and rules</strong>{' '}
+          inside <strong style={{ color: 'var(--rp-c-text-1)' }}>kernel-sandboxed workflows</strong> across{' '}
+          <strong style={{ color: 'var(--rp-c-text-1)' }}>any model provider</strong>—from your terminal, editor, or CI.
         </p>
 
         {/* Fixed-Width Install Switcher */}
@@ -848,7 +847,7 @@ export default function HomePage() {
 
         {/* Action Buttons */}
         <div className="ts-cta-row">
-          <a href={withBase('/guides/cli')} className="ts-btn-primary">
+          <a href={withBase('/guides/quickstart')} className="ts-btn-primary">
             <span>Get Started</span>
             <span aria-hidden="true">→</span>
           </a>
@@ -1017,7 +1016,7 @@ export default function HomePage() {
           </p>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.65rem' }}>
-          <a href={withBase('/guides/cli')} className="ts-btn-primary">
+          <a href={withBase('/guides/quickstart')} className="ts-btn-primary">
             <span>Quickstart Guide</span>
             <span aria-hidden="true">→</span>
           </a>

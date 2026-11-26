@@ -22,7 +22,7 @@ TaskSmith includes built-in drivers and presets for the following providers:
 | **TypeSafe** | `typesafe` | `decision` | Ultra-fast native System 1 decisions (`jev-latest`), sub-50ms deterministic classifications | [TypeSafe Guide](./providers/typesafe.md) |
 | **Antigravity** | `antigravity` | `completion` | Enterprise model gateway with managed thinking effort tiers (`gemini-4-hydrogen`, `gemini-3.8-flash`) | [Antigravity Guide](./providers/antigravity.md) |
 
-**Manage models** browses the configured provider's live models when its driver supports discovery. It can also show the provider's known profiles or the bundled preset. See [Provider Model Catalog](./cli.md#provider-model-catalog).
+**Manage models** browses the configured provider's live models when its driver supports discovery. It can also show the provider's known profiles or the bundled preset. See [Provider Model Catalog](./cli/slash-commands.md#provider-model-catalog).
 
 ---
 
@@ -135,7 +135,7 @@ For HTTP providers, `spec.auth.type` selects how the resolved credential is put 
 
 Secret fields (`auth.token`, `auth.password`) use declarative WARP expressions (`${env:<VAR>}` or `${file:<PATH>}`). `${file:...}` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value, new file contents, or signing in or switching accounts on an `oauth2` provider — changes the gateway fingerprint. For Claude Code and GitHub Copilot, gateways share a backend for the selected registration; signing out clears that local registration independently of best-effort vendor cleanup. See [Gateway Architecture](../architecture/gateway.md#vendor-cli-completion-drivers).
 
-Use `/login <provider>` in the REPL or `tasksmith auth login <provider>` from a shell. Check sign-in with `tasksmith auth status` and clear credentials with `tasksmith auth logout <provider>`. Antigravity supports `--paste` for remote callbacks. Codex, Claude Code, and GitHub Copilot complete sign-in in a browser on the daemon host. See [CLI Reference — Provider Sign-In](./cli.md#provider-sign-in-login).
+Use `/login <provider>` in the REPL or `tasksmith auth login <provider>` from a shell. Check sign-in with `tasksmith auth status` and clear credentials with `tasksmith auth logout <provider>`. Antigravity supports `--paste` for remote callbacks. Codex, Claude Code, and GitHub Copilot complete sign-in in a browser on the daemon host. See [CLI Reference — Provider Sign-In](./cli/slash-commands.md#provider-sign-in-login).
 
 ### Thinking Capability Fields
 
@@ -212,13 +212,13 @@ Two additional references are valid in agent `spec.models`:
 - **`@default`** — resolves through the workspace/provider role-default hierarchy.
 - **`@inherit`** — reserved by TaskSmith for subagent delegation: it resolves to the delegating parent session's model and is never a provider target on its own. Listing `@inherit` in an agent's `spec.models` also permits `invoke_agent`'s `model: "@inherit"`.
 
-When an agent declares `spec.models`, the list doubles as the allowlist enforced on the `model` parameter of [invoke_agent](tools.md#invoke_agent); agents without `spec.models` accept any resolvable model.
+When an agent declares `spec.models`, the list doubles as the allowlist enforced on the `model` parameter of [invoke_agent](tools/agents-and-planning.md#invoke_agent); agents without `spec.models` accept any resolvable model.
 
 ### Alias Editing & 1-to-1 Moves
 
 During a preset install, existing aliases take precedence over the preset, including aliases inherited from user providers and aliases defined in `WORKSPACE.md`. Conflicting aliases are omitted only from the new manifest; every preset model remains selectable by ID.
 
-Bare aliases are kept 1-to-1 across providers: saving from the `F2` alias editor (shared by `/model` and `/providers`) strips a reassigned alias from every other model across writable manifests before adding it to the target model — an atomic move persisted directly to the owning `*.provider.yaml` — and checking `@default` writes the owning manifest's `spec.defaultModels.completion` instead of a model alias. Manual YAML edits that declare the same bare alias on two models are reported as `⚠ duplicate on …` in the editor, and saving assigns the alias only to the edited model. `WORKSPACE.md` `spec.modelAliases` entries shadow per-model aliases and are never rewritten by the editor. See [CLI Reference — Model Alias Editor](./cli.md#model-alias-editor-f2).
+Bare aliases are kept 1-to-1 across providers: saving from the `F2` alias editor (shared by `/model` and `/providers`) strips a reassigned alias from every other model across writable manifests before adding it to the target model — an atomic move persisted directly to the owning `*.provider.yaml` — and checking `@default` writes the owning manifest's `spec.defaultModels.completion` instead of a model alias. Manual YAML edits that declare the same bare alias on two models are reported as `⚠ duplicate on …` in the editor, and saving assigns the alias only to the edited model. `WORKSPACE.md` `spec.modelAliases` entries shadow per-model aliases and are never rewritten by the editor. See [CLI Reference — Model Alias Editor](./cli/slash-commands.md#model-alias-editor-f2).
 
 ### Enabling and Disabling Providers (`spec.enabled`)
 

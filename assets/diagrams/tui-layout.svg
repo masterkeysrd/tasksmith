@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" width="980" height="560" role="img" aria-label="TaskSmith terminal UI layout showing Header, Transcript, Slot modal, Composer, and Status Line">
+  <defs>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      .callout-title { font-size: 13px; font-weight: 700; fill: #e6edf3; }
+      .callout-desc { font-size: 11.5px; fill: #9198a1; }
+    </style>
+  </defs>
+
+  <!-- Outer card frame -->
+  <rect x="1" y="1" width="978" height="558" rx="14" fill="#0b0f14" stroke="#30363d" stroke-width="1.5" />
+
+  <!-- Real terminal surface (single dark canvas, minimal chrome) -->
+  <rect x="20" y="20" width="644" height="520" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="1.2" />
+  <path d="M20 30 a10 10 0 0 1 10 -10 h624 a10 10 0 0 1 10 10 v20 h-644 z" fill="#161b22" />
+  <line x1="20" y1="50" x2="664" y2="50" stroke="#21262d" stroke-width="1" />
+  <circle cx="39" cy="35" r="4.5" fill="#484f58" />
+  <circle cx="55" cy="35" r="4.5" fill="#484f58" />
+  <circle cx="71" cy="35" r="4.5" fill="#484f58" />
+  <text x="342" y="39" text-anchor="middle" class="mono" font-size="11" fill="#8b949e">tasksmith</text>
+
+  <!-- 1. Header Banner (exact mascot + 3 info lines, unboxed) -->
+  <g transform="translate(36, 70)">
+    <text x="0" y="14" class="mono" font-size="12" xml:space="preserve" fill="#2ac3de">  ▜████████▛ </text>
+    <text x="0" y="30" class="mono" font-size="12" xml:space="preserve" fill="#1abc9c">     █▜▛█    </text>
+    <text x="0" y="46" class="mono" font-size="12" xml:space="preserve" fill="#ff5f5f">    ▟▛▀▀▜▙   </text>
+
+    <text x="114" y="14" class="mono" font-size="12" font-weight="700" fill="#9d7cd8">TaskSmith</text>
+    <text x="184" y="14" class="mono" font-size="12" fill="#b1bac4">v0.0.3</text>
+    <text x="114" y="30" class="mono" font-size="11.5" fill="#b1bac4">GPT-6.2 Sol (codex) with default effort</text>
+    <text x="114" y="46" class="mono" font-size="11.5" fill="#b1bac4">~/projects/acme-api · native sandbox</text>
+  </g>
+
+  <!-- 2. Committed Transcript (pure scrollback lines) -->
+  <g transform="translate(36, 146)">
+    <text x="0" y="0" class="mono" font-size="11.5"><tspan font-weight="700" fill="#56d4dd">&gt;</tspan><tspan fill="#e6edf3"> Tighten rate limits in </tspan><tspan fill="#58a6ff">@internal/http/limiter.go</tspan></text>
+
+    <text x="0" y="24" class="mono" font-size="11.5"><tspan fill="#3fb950">●</tspan><tspan fill="#e6edf3"> Edited internal/http/limiter.go </tspan><tspan font-size="11" fill="#8b949e">(+1 / -1)</tspan></text>
+
+    <text x="14" y="44" class="mono" font-size="11" fill="#6e7681">⎿</text>
+    <rect x="30" y="32" width="582" height="16" fill="#381a1f" />
+    <text x="36" y="44" class="mono" font-size="11" fill="#ff7b72">- const defaultBurst = 100</text>
+    <rect x="30" y="50" width="582" height="16" fill="#163024" />
+    <text x="36" y="62" class="mono" font-size="11" fill="#7ee787">+ const defaultBurst = 25</text>
+
+    <text x="0" y="84" class="mono" font-size="11.5" fill="#e6edf3">● Updated the burst limit. Running the package test suite next.</text>
+  </g>
+
+  <!-- 3. Inline <Slot /> Modal (real rounded border PermissionPrompt) -->
+  <g transform="translate(36, 252)">
+    <rect x="0" y="0" width="612" height="130" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="1.2" />
+    <text x="14" y="20" class="mono" font-size="11.5" font-weight="700" fill="#f0883e">Permission required</text>
+    <text x="14" y="38" class="mono" font-size="11.5"><tspan font-weight="700" fill="#e6edf3">bash</tspan><tspan fill="#9198a1"> · </tspan><tspan fill="#56d4dd">go</tspan><tspan fill="#e6edf3"> test </tspan><tspan fill="#79c0ff">-race -count=1</tspan><tspan fill="#e6edf3"> ./internal/http/...</tspan></text>
+
+    <text x="14" y="64" class="mono" font-size="11.5" font-weight="700" fill="#58a6ff">❯</text>
+    <text x="28" y="64" class="mono" font-size="11.5" font-weight="700" fill="#58a6ff">Yes, allow once</text>
+    <text x="596" y="64" text-anchor="end" class="mono" font-size="11" fill="#6e7681">y</text>
+
+    <text x="28" y="82" class="mono" font-size="11.5" xml:space="preserve"><tspan fill="#b1bac4">Always allow bash(go test *)  </tspan><tspan fill="#f0883e">[session]</tspan></text>
+
+    <text x="28" y="100" class="mono" font-size="11.5" fill="#b1bac4">No, deny</text>
+    <text x="596" y="100" text-anchor="end" class="mono" font-size="11" fill="#6e7681">n</text>
+
+    <text x="14" y="120" class="mono" font-size="10.5" fill="#6e7681">↑/↓ Navigate · tab Scope · enter Confirm · r Feedback</text>
+  </g>
+
+  <!-- 4. Composer (top + bottom horizontal rules only, > indicator, media pill) -->
+  <g transform="translate(36, 404)">
+    <line x1="0" y1="0" x2="612" y2="0" stroke="#58a6ff" stroke-width="1.2" />
+    <text x="2" y="21" class="mono" font-size="11.5"><tspan font-weight="700" fill="#56d4dd">&gt;</tspan><tspan fill="#e6edf3"> Verify edge cases in </tspan><tspan fill="#58a6ff">@limiter_test.go</tspan><tspan fill="#e6edf3"> [Image #1] </tspan><tspan fill="#e6edf3">█</tspan></text>
+    <line x1="0" y1="32" x2="612" y2="32" stroke="#58a6ff" stroke-width="1.2" />
+    <!-- Staged media pill -->
+    <rect x="0" y="38" width="142" height="18" rx="3" fill="#161b22" />
+    <text x="8" y="51" class="mono" font-size="10.5" font-weight="700" fill="#e6edf3">Image #1 · 42 KB</text>
+  </g>
+
+  <!-- 5. Status Line (2 unboxed monospace rows) -->
+  <g transform="translate(36, 492)">
+    <!-- Row 1 -->
+    <text x="0" y="12" class="mono" font-size="10.5" fill="#6e7681">Shift+Tab mode · /help</text>
+    <text x="612" y="12" text-anchor="end" class="mono" font-size="10.5" xml:space="preserve"><tspan font-weight="700" fill="#3fb950">[auto]</tspan><tspan fill="#e6edf3">  GPT-6.2 Sol (codex)</tspan><tspan fill="#9198a1">  default effort  </tspan><tspan fill="#f0883e">⚠ 1 warning</tspan></text>
+    <!-- Row 2 -->
+    <text x="0" y="32" class="mono" font-size="10.5" fill="#9198a1">Context 48.2k/200.0k (24%)</text>
+    <text x="612" y="32" text-anchor="end" class="mono" font-size="10.5" fill="#9198a1">Cost $0.14 · Tokens ↑42.1k ↓6.1k</text>
+  </g>
+
+  <!-- Subtle bracket indicators & numbered callouts on the right -->
+  <!-- 1. Header -->
+  <path d="M668 72 h8 v46 h-8 M676 95 h18" fill="none" stroke="#2ac3de" stroke-width="1.4" />
+  <circle cx="706" cy="95" r="11" fill="#2ac3de" />
+  <text x="706" y="99" text-anchor="middle" class="sans" font-size="11.5" font-weight="700" fill="#0b0f14">1</text>
+  <text x="726" y="88" class="sans callout-title">Header Banner</text>
+  <text x="726" y="104" class="sans callout-desc">Mascot, version, active model &amp;</text>
+  <text x="726" y="119" class="sans callout-desc">effort, workspace &amp; sandbox badge.</text>
+
+  <!-- 2. Transcript -->
+  <path d="M668 138 h8 v96 h-8 M676 186 h18" fill="none" stroke="#58a6ff" stroke-width="1.4" />
+  <circle cx="706" cy="186" r="11" fill="#58a6ff" />
+  <text x="706" y="190" text-anchor="middle" class="sans" font-size="11.5" font-weight="700" fill="#0b0f14">2</text>
+  <text x="726" y="179" class="sans callout-title">Committed Transcript</text>
+  <text x="726" y="195" class="sans callout-desc">Scrollback of prompts, tool cards,</text>
+  <text x="726" y="210" class="sans callout-desc">diffs, Markdown &amp; Unicode math.</text>
+
+  <!-- 3. Stream & Slot -->
+  <path d="M668 254 h8 v126 h-8 M676 317 h18" fill="none" stroke="#f0883e" stroke-width="1.4" />
+  <circle cx="706" cy="317" r="11" fill="#f0883e" />
+  <text x="706" y="321" text-anchor="middle" class="sans" font-size="11.5" font-weight="700" fill="#0b0f14">3</text>
+  <text x="726" y="310" class="sans callout-title">Live Stream &amp; &lt;Slot /&gt;</text>
+  <text x="726" y="326" class="sans callout-desc">Streaming output and inline modals</text>
+  <text x="726" y="341" class="sans callout-desc">(approvals, /model, /sandbox, plans).</text>
+
+  <!-- 4. Composer -->
+  <path d="M668 404 h8 v54 h-8 M676 431 h18" fill="none" stroke="#9d7cd8" stroke-width="1.4" />
+  <circle cx="706" cy="431" r="11" fill="#9d7cd8" />
+  <text x="706" y="435" text-anchor="middle" class="sans" font-size="11.5" font-weight="700" fill="#0b0f14">4</text>
+  <text x="726" y="424" class="sans callout-title">Composer</text>
+  <text x="726" y="440" class="sans callout-desc">Multi-line input with @ mentions,</text>
+  <text x="726" y="455" class="sans callout-desc">/commands, ! shell &amp; media pills.</text>
+
+  <!-- 5. Status Line -->
+  <path d="M668 492 h8 v36 h-8 M676 510 h18" fill="none" stroke="#3fb950" stroke-width="1.4" />
+  <circle cx="706" cy="510" r="11" fill="#3fb950" />
+  <text x="706" y="514" text-anchor="middle" class="sans" font-size="11.5" font-weight="700" fill="#0b0f14">5</text>
+  <text x="726" y="503" class="sans callout-title">Status Line</text>
+  <text x="726" y="519" class="sans callout-desc">Two configurable rows: mode, model,</text>
+  <text x="726" y="534" class="sans callout-desc">effort, warnings, context, cost &amp; tokens.</text>
+</svg>

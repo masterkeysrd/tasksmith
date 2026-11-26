@@ -130,7 +130,7 @@ Clients read and manage the layer through the workspace-scoped daemon API: `GET 
 
 ### 10. Privileged Host Transfer Boundary (`Upload` & `Download`)
 Tools given the `FS` capability can never reference paths outside the sandbox root. However, the daemon occasionally needs to move files between the host and the sandbox (for example, staging a user-attached file from outside the workspace or exporting a build artifact).
-- **`Upload` (Host $\to$ Sandbox)** and **`Download` (Sandbox $\to$ Host)** are exposed exclusively on the top-level **Sandbox Controller** held by the session orchestrator, keeping the tool-facing `FS` capability strictly jailed.
+- **`Upload` (Host → Sandbox)** and **`Download` (Sandbox → Host)** are exposed exclusively on the top-level **Sandbox Controller** held by the session orchestrator, keeping the tool-facing `FS` capability strictly jailed.
 
 ### 11. Per-Session Lifecycle & Deterministic Teardown
 Each active session owns its Sandbox instance:

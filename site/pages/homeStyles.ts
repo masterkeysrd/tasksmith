@@ -76,7 +76,7 @@ export const HOME_CSS = `
 }
 
 .ts-install-card {
-  width: min(100%, 740px);
+  width: min(100%, 920px);
   display: flex;
   flex-direction: column;
   border-radius: 12px;

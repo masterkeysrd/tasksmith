@@ -1,270 +1,234 @@
-# Tools & MCP Servers
+# Give agents tools and connect MCP servers
 
-TaskSmith provides a robust tool execution system that equips agents with capabilities to inspect files, execute commands, manipulate code, and integrate external services. You can extend this foundation with custom project tools and Model Context Protocol (MCP) servers.
+Control which tools an agent sees, wrap a project executable as a tool, or
+connect a service that publishes tools, prompts and resources over MCP.
 
----
+## Inspect and toggle built-in tools (`/tools`)
 
-## Built-in Tools
+Open `/tools`, select a tool and press `i` to inspect its schemas,
+annotations and, for custom tools, rendered command. Start here if one
+agent can use a tool but another can't.
 
-TaskSmith ships with core tools built directly into the daemon binary and executed within an isolated, path-confined sandbox:
+| Status | What it means for the active agent |
+| --- | --- |
+| `[Eager]` | The definition is present from the first request. |
+| `[Deferred]` | Registered; the agent discovers it with `tool_search` when needed. |
+| `[Denied]` | An agent tool policy blocks it. |
+| `[Inactive]` | This session doesn't activate the tool. |
+| `[Disabled]` | Opted out in configuration; it never enters model context. |
 
-| Tool | Action Type | Safety | Description |
-| :--- | :--- | :--- | :--- |
-| `view` | `read` | `safe` | Read file contents or specific line ranges with line numbering. Supports images, PDFs, and syntax highlighting. |
-| `write` | `write` | `outside` / `unsafe` | Create new files or overwrite existing files in the workspace. |
-| `edit` | `write` | `outside` / `unsafe` | Perform precise, surgical find-and-replace edits across files. |
-| `bash` | `exec` | Evaluated by AST | Execute shell commands in the workspace environment or spawn long-running background tasks. |
-| `grep` | `read` | `safe` | Search for regex patterns across files with line numbers and file path filtering. |
-| `glob` | `read` | `safe` | Find files matching wildcard patterns (e.g., `**/*.go`, `src/**/*.tsx`). |
-| `web_fetch`| `net` | `outside` | Fetch web pages or REST API endpoints, converting HTML into clean Markdown for context injection. |
-| `web_search` | `net` | `outside` | Run a web search from the daemon host and return ranked titles, URLs, and snippets with optional domain filters. |
-| `ask_question` | `read` | `safe` | Prompt the user with interactive single-select, multi-select, or free-form questionnaires. |
-| `todos` | `write` | `safe` | Create and update the session's structured task checklist. |
-| `load_skill` | `read` | `safe` | Load specialized domain instructions and runbooks from a workspace or built-in skill. |
-| `invoke_agent` | `exec` | `safe` | Spawn an asynchronous child subagent session (optionally in an isolated Git worktree). |
-| `manage_agents` | `exec` | `safe` | List child subagents, check their status and output, send follow-up messages, kill them, or discover models subagents can run on. |
+`view`, `glob` and `grep` inspect the workspace. `write` and `edit` change
+files; `bash` executes commands subject to shell inspection. `web_fetch`
+and `web_search` access the network. Other built-ins handle questions,
+checklists, skills and delegation. See the [tool catalog](../reference/tools.md)
+for parameters, safety annotations and approval behavior.
 
-For complete parameter schemas and tool options, see the [Built-in Tools Reference](../reference/tools.md).
+Press `Space` to toggle availability. This is a manifest edit, not a hidden
+runtime switch. For a workspace-owned tool TaskSmith can patch its own
+`spec.enabled: false`. To disable a built-in or inherited user tool for just
+this repository, the equivalent `WORKSPACE.md` frontmatter fragment is:
 
----
+```yaml
+spec:
+  policies:
+    tools:
+      exclude: [web_search]
+```
 
-## Creating Custom Tools (`*.tool.md`)
+Re-enabling removes the applicable opt-out. Disabling `tool_search` also
+removes deferred tools from the agent's prompt and tool list. To make a
+permitted tool eager instead, list its name in the Agent's `spec.tools`.
+Availability does not grant permission for every call.
 
-Custom tools allow agents to execute project-specific scripts, test runners, linters, or external utilities. Tools are authored as Markdown files with YAML frontmatter specifying their parameters and sandbox behavior.
+## Create a custom tool (`*.tool.md`)
 
-### Where Tools Live
+For a Git project, expose a narrow operation rather than a general shell.
+This tool lists tracked files under one of two known directories:
 
-- **Project Scope**: `.agents/tools/<name>.tool.md` (or `.agents/tools/<name>.tool.yaml`)
-- **Global User Scope**: `~/.config/tasksmith/tools/<name>.tool.md`
+```sh
+mkdir -p .agents/tools
+```
 
-### Example: Docker Service Inspector Tool
-
-Create `.agents/tools/docker-service-logs.tool.md`:
+Save `.agents/tools/tracked-files.tool.md`:
 
 ```markdown
 ---
 apiVersion: warp/v1alpha1
 kind: Tool
 metadata:
-  name: docker-service-logs
-  displayName: Docker Service Logs
-  description: Fetches recent container logs for a running docker-compose service.
+  name: tracked-files
+  description: List files tracked by Git under a selected project directory.
 spec:
-  command:
-    - docker
-    - compose
-    - logs
-    - "--tail"
-    - "{{.tail}}"
-    - "{{.service}}"
+  command: [git, ls-files, "--", "{{.directory}}"]
   inputSchema:
     type: object
     properties:
-      service:
+      directory:
         type: string
-        description: Name of the docker-compose service (e.g., "db", "redis", "api").
-      tail:
-        type: integer
-        description: Number of recent log lines to retrieve.
-        default: 50
-    required:
-      - service
+        enum: [docs, scripts]
+        description: Project directory to list.
+    required: [directory]
   outputSchema:
     type: string
   annotations:
     isReadOnly: true
     isDangerous: false
     isOpenWorld: false
-    userHint: "Fetch logs for docker service: %s"
+    userHint: List tracked project files
 ---
-
-# Docker Service Logs
-
-Use this tool when debugging containerized services or database connection issues in local development.
-Always inspect logs before attempting to restart failing containers.
+Use to inventory tracked documentation or scripts without listing untracked files.
 ```
 
-### Tool Annotations
-- **`isReadOnly`**: Marks the tool as safe for read-only exploration modes (such as `plan` mode).
-- **`isDangerous`**: Flags potentially destructive tools, ensuring they trigger confirmation even in lenient permission modes.
-- **`userHint`**: Defines the prompt displayed to the user when requesting authorization in the CLI.
+Try it in the composer: `Use tracked-files to list the docs directory.`
+The tool receives `{"directory":"docs"}`. It runs inside the session
+sandbox; discovery and validation alone don't make it safe to execute.
 
-### How Arguments Reach Your Script
+- **Arguments on the command line:** an explicit `{{…}}` that consumes an
+  argument renders an argv element; stdin stays closed. Missing template
+  values fail the call rather than reaching the executable as placeholders.
+- **Arguments on stdin:** with `command: [python, scripts/format.py]` and
+  no consumed argument, the script receives one JSON object on stdin.
+  Shell-style `$var`, `${var}` or `$1` alone don't opt in to templating.
+- **Long-running calls:** after the 60-second wait window the task continues
+  in the background. Use `tasks` to inspect or kill it; completion wakes the
+  agent. Stdin is fixed at launch, so it can't accept interactive input.
 
-A tool whose `spec.command` contains an explicit `{{ … }}` action is rendered per call. When at least one command element interpolates a supplied argument, the rendered argv is the only channel and standard input is left closed. When no command element consumes an argument, the validated arguments are sent as a single JSON object on standard input instead, so a plain CLI script can simply read and parse stdin:
+Describe real effects: `isReadOnly` for inspection, `isDangerous` for
+potentially destructive operations, `isOpenWorld` for external access and
+`userHint` for a human-readable action. Risk isn't inferred from argv. An
+unannotated tool is not automatically safe. Project tool definitions are
+trust-fingerprinted: after a change, inspect the diff before accepting a
+new trust prompt. User tools belong under `~/.config/tasksmith/agents/tools/`.
 
-```markdown
-spec:
-  command: [python, scripts/format.py]
-```
+## Connect an MCP server (`*.mcp.yaml`)
 
-Templates are opt-in: a command containing only shell-style references (`$var`, `${var}`, `$1`) is executed verbatim, so conventional scripts keep their own positional parameters. A template that references an argument the model did not supply fails the call as an argument validation error rather than executing with a literal `<no value>` placeholder.
+Place project or workspace definitions in `.agents/mcps/`, or personal
+ones under `~/.config/tasksmith/agents/mcps/`. Choose the transport that
+your server actually offers:
 
-The security posture of a custom tool comes strictly from its annotations — TaskSmith never infers risk from argument values or command strings — so an unannotated tool is never treated as auto-allowed safe. See [Custom Tool Execution Model](../reference/tools.md#4-custom-tool-execution-model) for the full annotation-to-permission mapping.
+| Transport | What you supply | When discovery updates |
+| --- | --- | --- |
+| `stdio` | A local executable and argument array. | On connection and supported server change notifications. |
+| `sse` | An SSE endpoint. | Also supports pushed tool, prompt and resource list changes. |
+| `http` / `streamable-http` | A Streamable HTTP endpoint. | Reload or restart to refresh; no server-pushed list change stream. |
 
-Long-running tools behave like background bash commands: a call that outlives the 60-second wait window is moved to the background, stays killable through the `tasks` tool, and wakes the agent with a completion notification — so a slow formatter or deploy script never blocks the turn, and a hung one never wedges it. One difference from bash: a backgrounded custom tool does not take interactive input, because its standard input is fixed when the tool launches (the JSON payload, or closed when the command used templated arguments).
-
-### Checking What The Agent Actually Sees
-
-Run `/tools` to browse every built-in and custom tool with its status for the active agent. A tool that is `[Deferred]` is registered but withheld from the initial context until the agent finds it through `tool_search`; to make a custom tool `[Eager]`, list its name in the agent's `spec.tools`. `[Denied]` means an agent tool policy blocks it, and `[Inactive]` means the current session does not activate it at all. Press `i` in the browser to inspect a tool's rendered command, annotations, and JSON schemas.
-
-### Enabling And Disabling Tools
-
-A tool is unavailable only through manifests — never a hidden runtime switch — in exactly two ways:
-
-- **`spec.enabled: false`** in the tool's own manifest opts it out everywhere that manifest loads. The opt-out travels with the resource and is visible in version control.
-- **`spec.policies.tools.exclude`** in `WORKSPACE.md` excludes the named tool from this repository only. This is also how built-in and global user-scope tools get switched off without touching any shared file.
-
-Unavailable tools stay listed in `/tools` with a `[Disabled]` badge and never enter the model's context. Press `space` on one to toggle it: disabling patches `spec.enabled: false` into a workspace-scope manifest when the tool has one, otherwise adds the name to the `WORKSPACE.md` exclusion list; enabling removes whichever opt-out exists. Both edits are saved in workspace manifests. Disabling `tool_search` also removes deferred tools from the agent’s tool list and prompt.
-
----
-
-## Connecting Model Context Protocol (MCP) Servers
-
-TaskSmith supports the open **Model Context Protocol (MCP)**, allowing agents to access tools, resources, and prompt templates exposed by local or remote MCP servers.
-
-### Where MCP Configurations Live
-
-- **Project Scope**: `<subproject>/.agents/mcps/<name>.mcp.yaml`
-- **Workspace Scope**: `.agents/mcps/<name>.mcp.yaml`
-- **Global User Scope**: `~/.config/tasksmith/agents/mcps/<name>.mcp.yaml` (`$XDG_CONFIG_HOME/tasksmith/agents/mcps/`)
-
-### 1. Stdio MCP Server (Local Process)
-
-Stdio MCP servers run as child processes communicating over standard input and output:
+For example, if your team ships a local notes MCP executable, save this as
+`.agents/mcps/notes.mcp.yaml`, replacing the command with its actual path:
 
 ```yaml
 apiVersion: warp/v1alpha1
 kind: MCP
 metadata:
-  name: github
-  displayName: GitHub MCP
-  description: Access GitHub issues, pull requests, and repository metadata.
+  name: notes
+  description: Read the team's engineering notes
 spec:
   type: stdio
-  command:
-    - npx
-    - "-y"
-    - "@modelcontextprotocol/server-github"
-  env:
-    GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
-  annotations:
-    isReadOnly: false
-    isDangerous: false
+  command: [./scripts/notes-mcp]
   policies:
     tools:
-      include:
-        - "get_issue"
-        - "list_issues"
-        - "create_issue"
-      exclude:
-        - "delete_repo"
+      include: ["get_*", "list_*"]
+    resources:
+      include: ["notes://specs/*"]
 ```
 
-### 2. HTTP / SSE MCP Server (Remote Endpoint)
-
-Remote MCP servers connect over HTTP using Server-Sent Events (SSE):
+For a remote server, replace `type` and `command` with its network settings;
+for example, this fragment is for a server that advertises SSE:
 
 ```yaml
-apiVersion: warp/v1alpha1
-kind: MCP
-metadata:
-  name: sentry
-  displayName: Sentry Error Monitoring
-  description: Search and inspect production exceptions and error traces.
-spec:
-  type: sse
-  endpoint: https://mcp.sentry.internal.acme.com/sse
-  auth:
-    type: bearer
-    token: "${env:SENTRY_AUTH_TOKEN}"
-  annotations:
-    isReadOnly: true
-  policies:
-    tools:
-      include:
-        - "*"
+type: sse
+endpoint: https://mcp.sentry.internal.acme.com/sse
+auth:
+  type: bearer
+  token: "${env:SENTRY_AUTH_TOKEN}"
 ```
 
-### Scoping MCP Resources
+Server tools have canonical names like `notes__list_notes` (`<server>__<tool>`).
+They're deferred by default. In the MCP's own filter, use the **server's**
+name, such as `list_notes`; in the agent's eager list, use `notes__list_notes`.
+Exclusions win over inclusions. A filter can also limit prompts and resources.
+A tool's schema and description come from the server. Check its annotations:
+server manifest defaults override remote annotations; use `overrides` to
+correct one tool. Don't mark a whole server read-only if it can write.
 
-Use `policies.tools` to control which tools from the MCP server are exposed to agents:
-- **`include: ["*"]`**: Expose all tools provided by the server.
-- **`include: ["get_*", "list_*"]`**: Use wildcards to expose only safe inspection tools.
-- **`exclude: [...]`**: Blacklist dangerous operations (e.g., delete actions).
+### Check the connection and control its lifecycle
 
-Exclusions apply after inclusions, so a wildcard `exclude` still blocks a name that `include` lists. The same `policies` block accepts `prompts` and `resources`, filtering what the server offers for prompt rendering and resource reads.
+Open `/mcp`. Servers are grouped by scope; `connecting` is normal while
+background discovery runs. `connected` means discovery succeeded. `error`
+has failure details; `disconnected` means no connection was attempted or the
+workspace has no MCP runtime. `auth_required` needs attention (see below).
+Programmatic clients can inspect `GET /v1/workspace/mcps`.
 
-A policy filter is a **hard block for the agent**, not a prompt it can talk its way past. A blocked tool is never registered, and calling it anyway — by name, through a stale session, or after a reload that tightened the filter — fails with an error naming the policy section and the manifest path. To call a blocked tool you must edit `spec.policies.tools`; there is no override for a single tool call, and the agent is never granted one on your behalf.
+Tools become available to open sessions on the next turn after connection.
+Reload reconnects changed servers (including environment and render-context
+changes) and republishes unchanged ones. A tightened filter blocks even
+previously discovered tools immediately. Restart a single enabled server:
 
-*You* can still reach a blocked prompt or resource when you decide it is worth it. Invoking a prohibited item — from the composer with `/mcp:<server>:<prompt>` or `@mcp:<server>:<uri>`, or from the [`/mcp` browser](../reference/cli.md#mcp-browser-mcp) — opens a confirmation naming the item, the policy section, and the manifest path, with three choices:
+```text
+/mcp restart notes
+```
 
-| Choice | What it does |
-| :--- | :--- |
-| **`Cancel`** *(default)* | Does nothing. `Enter` lands here, so an accidental keypress changes nothing. |
-| **`Use once`** | Sends this one request with `allowProhibited`, leaving the manifest and every future turn untouched. |
-| **`Enable in manifest`** | Adds the item to `spec.policies`, refreshes the server, then runs it as an allowed item — the durable choice. |
+Press `e` or `Space` on the **server** to toggle it. A workspace manifest
+can set `spec.enabled: false`; a repo-only opt-out for an inherited server
+uses `WORKSPACE.md` `spec.policies.mcps.exclude`. A disabled server stays
+listed, never starts and exposes no tools. Enable it before restart or auth.
 
-`Enable in manifest` appears only for a workspace- or project-scoped manifest with a known path; a user- or builtin-scope server offers `Use once` alone, because rewriting it would edit files outside your project. Tools are deliberately absent from this prompt: the override exists for reading content you asked for, not for handing the agent a destructive operation it was filtered out of mid-task. Widening a tool is a deliberate act instead — you read what it does and what its schema expects in the [tool detail view](../reference/cli.md#mcp-tool-drill-down) and press `e` there, which writes the same policy section for the same scopes. The same override is available programmatically by passing `allowProhibited: true` to the [MCP HTTP endpoints](../reference/cli.md#mcp-http-endpoints), which never widens the filter and is never set on the agent's behalf.
+## Authenticate OAuth MCP servers
 
-Prohibited items stay visible wherever they are counted — the overview card reports `2 prompts (1 allowed, 1 prohibited)` rather than hiding the gap, tool rows carry a red `✘` and a `[Prohibited]` badge, and completion menus list prohibited items labeled `[Prohibited]` — so a policy that hides something never hides the fact that it exists.
+For `auth.type: oauth2`, select the server in `/mcp` and press `a`, or run:
 
-### Reading Server Resources
+```text
+/mcp auth notes
+```
 
-A server may publish resources alongside its tools: documentation, templates, an index of what it can do. The built-in [`read_mcp_resource`](../reference/tools.md#read_mcp_resource) tool reads one of them by URI:
+1. Check the server name on the authorization screen. Complete sign-in in
+   the browser, or press `c` to copy the URL to a browser you can access.
+2. If the loopback redirect can't reach the daemon, paste the final URL,
+   query string or authorization code into the screen and press `Enter`.
+3. Look for `connected` and the outcome in the timeline. `Esc` dismisses
+   the view without cancelling the pending, time-limited callback.
+
+The browser reports **Authentication Complete** or **Authentication Failed**.
+OAuth credentials persist with owner-only permissions under
+`$XDG_DATA_HOME/tasksmith/mcp/credentials.json`. Don't edit that file.
+For static auth there's no browser page: supply the missing environment
+variable, header or credential file, then restart the server. Unresolved
+placeholders in `spec.env` or `spec.headers` can cause the same warning.
+Passive refresh updates `/warnings` and the status-line count without adding
+transcript noise; explicit auth and restart actions still report outcomes.
+
+## Use MCP prompts and resources
+
+Invoke a published prompt with `/mcp:<server>:<prompt>`. To attach content
+yourself, select `@mcp:<server>:<uri>` from composer completion or press `u`
+on the server overview. For an agent-initiated read, `read_mcp_resource`
+activates automatically when a connected server has a permitted resource:
 
 ```json
 { "server": "notes", "uri": "notes://specs/spec-1" }
 ```
 
-It is activated automatically while any connected server exposes a resource your policies permit, and it costs nothing when none do, so there is nothing to declare. Text resources that exceed the output limits arrive as a head-plus-tail preview pointing at a file you can open with `view`.
+Large text resources produce a head-and-tail preview with a file to open
+using `view`. For repository files use `view` or `grep` directly instead.
 
-To attach a resource to your own turn instead of leaving the choice to the agent, type `@mcp:` in the composer and pick one, or open the server in [`/mcp`](../reference/cli.md#mcp-server-overview) and press `u`. Both keep the resource out of the agent's hands until you decide it belongs in the conversation.
+Prohibited items remain visible in counts and completion lists. A blocked
+tool is never registered for the agent. A stale call fails with the policy
+section and manifest path; the agent cannot grant itself an exception.
+When **you** request a blocked prompt or resource, choose deliberately:
 
-Resources are server content, not repository files — `view` and `grep` remain the tools for the workspace itself.
+| Choice | Effect |
+| --- | --- |
+| **Cancel** (default) | Don't read the item. |
+| **Use once** | Authorize this request only (`allowProhibited: true` in the HTTP API). |
+| **Enable in manifest** | Update a writable workspace/project policy, refresh, then read it. |
 
-### Server Lifecycle
+A user- or built-in-scope item has no durable enable option here. Tools have
+no one-call override: inspect the tool detail and press `e` there to change
+its writable manifest policy. For help scaffolding an integration, ask the
+`tasksmith-customizations` skill and describe its intended side effects.
 
-The daemon connects each declared server in the background when its workspace opens, so a slow or offline server never delays a session. Run [`/mcp`](../reference/cli.md#mcp-browser-mcp) to see where things stand — servers are grouped under their scope heading (`Workspace MCPs (.agents/mcps)`, `User MCPs (~/.config/tasksmith/agents/mcps)`, …) with a `✔`, `⚠`, `✘`, `⟳`, or `○` glyph and a plain-language status to the right — or ask the agent to inspect `GET /v1/workspace/mcps`:
+## Next steps
 
-| Status | Meaning |
-| :--- | :--- |
-| `connecting` | The connection is in progress. |
-| `connected` | Tools, prompts, and resources are discovered and available. |
-| `auth_required` | The server could not authenticate. With `authUrl` set, an interactive authorization flow is waiting; otherwise a static credential is missing or was rejected. |
-| `error` | The last attempt failed; `error` explains why. |
-| `disconnected` | No connection has been attempted or the workspace has no MCP runtime. |
-
-A server can also be **disabled** — `spec.enabled: false` in its own manifest, or an entry in `WORKSPACE.md` `spec.policies.mcps.exclude` for this repository only. Disabled servers never spawn, expose zero tools, and never enter the model's context, but they stay listed in `/mcp` with a `[Disabled]` marker so you can re-enable them. Press `e` (or `space`) on a server to toggle it: disabling patches the manifest when the server has a workspace-scope one, otherwise writes the `WORKSPACE.md` exclusion; enabling removes whichever opt-out exists. Restarting or authorizing a disabled server is refused until you enable it.
-
-Because connections happen in the background, a server that is still `connecting` when a session starts contributes no tools yet. When it finishes connecting, open sessions pick the server's tools up automatically and they become invocable on the next turn — no restart, no reload, and no need to mention them in the agent's `spec.tools`. The same refresh activates `read_mcp_resource` if the server publishes a permitted resource.
-
-Reloading the workspace (`.agents/`, `.env`, or manifest changes) reconnects servers whose definition, environment, or render context changed, and re-publishes the tools of servers that stayed the same. A reload that **tightens** `spec.policies` also takes effect immediately: tools an in-flight session already holds stop being callable.
-
-A server that advertises it can change its own tool, prompt, or resource lists triggers a re-sync automatically, so tools it adds or removes mid-session become available or stop being offered without a restart. Server-pushed change notifications need a live server-to-client stream: they arrive over `sse` and `stdio`, but `type: http` and `streamable-http` disable that stream per the transport specification, so those servers are only refreshed on reload or restart.
-
-Discovered tools are named `<server>__<tool>` and are **deferred by default**, so they cost context only once the agent finds them through `tool_search`. List one in an agent's `spec.tools` to load it on the first request. See [Tool partitioning](../reference/tools.md#5-tool-partitioning-eager-vs-deferred).
-
-What a discovered tool looks like to the model — its schema, description, and safety annotations — comes from the server, and those annotations decide whether calls need approval: a server or manifest declaring `isReadOnly: true` lets read-style tools run without prompting, while an unannotated tool always surfaces a prompt. Annotate servers you trust in the manifest, and use `overrides` to correct a single tool the server describes wrongly. See [MCP Tool Execution Model](../reference/tools.md#6-mcp-tool-execution-model).
-
-Credentials for `auth.type: oauth2` servers are stored in `~/.local/share/tasksmith/mcp/credentials.json` (`$XDG_DATA_HOME/tasksmith/mcp/credentials.json`) with owner-only permissions, and are reused across daemon restarts.
-
-To authorize a server stuck at `auth_required`, highlight it in `/mcp` and press `a` (or run `/mcp auth <name>`): TaskSmith opens an authorization screen that names the server, opens the authorization page in your browser, and keeps checking until the server reports `connected`, then leaves the outcome in the conversation timeline. The screen also prints the URL, so if no browser can be launched you can press `c` to copy it and open it yourself.
-
-The screen covers the case where the browser cannot hand the login back to TaskSmith. TaskSmith listens for the redirect on a loopback port of its own, but a browser on another machine, a blocked `localhost`, or a redirect page that failed to load leaves the code stuck in the address bar — so the screen offers a field to paste that URL back, and `Enter` hands it to the waiting flow. The full address-bar URL, a bare query string, or the authorization code alone all work. Pressing `Esc` leaves the screen without cancelling the login: the daemon keeps its callback open on a timer, so finishing in the browser afterwards still connects the server. See [CLI Interface](../reference/cli.md#mcp-authentication) for the screen's layout and shortcuts.
-
-Whatever the browser does, it is answered with a TaskSmith page rather than a wall of text: a successful login shows an `Authentication Complete` card naming the server, and a rejected one shows `Authentication Failed` with the reason the identity provider gave.
-
-A server that authenticates with static credentials has no authorization page to open, so the same action tells you which credential to provide instead — the environment variable to set, the header to render, or the credential file to point at — and you run `/mcp restart <name>` once it is in place. Unresolved `${VAR}` placeholders in `spec.headers` or `spec.env` are reported the same way.
-
-Passive server refresh updates the [status-line warning count and `/warnings` view](cli.md#4-status-line) without adding transcript announcements. Open `/warnings` for the current problem and suggested next step, such as `/mcp auth <name>` for a server that needs authorization. Resolved health warnings drop out of the view; previously printed scrollback is not rewritten. Explicit `/mcp` actions such as authorization and restart still report their outcomes as before.
-
----
-
-## Scaffolding Tools with the Customizations Skill
-
-Ask the active agent to create a custom tool or MCP server. It can load `tasksmith-customizations`, inspect the tools and MCP reference, and write the appropriate manifest without switching agents. Describe the command, input schema, and intended side effects so safety annotations are accurate.
-
----
-
-For complete YAML frontmatter specifications and manifest schemas, see the [Manifests Reference](../reference/manifests.md).
+- [Check tool parameters and permission behavior](../reference/tools.md).
+- [Look up custom Tool fields](../reference/manifests/tool.md).
+- [Configure MCP transports, filters and authentication](../reference/manifests/mcp.md).
+- [Review workspace trust before enabling executable resources](./trust.md).

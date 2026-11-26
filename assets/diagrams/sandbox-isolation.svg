@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 314" width="920" height="314" role="img" aria-label="TaskSmith native sandbox isolation: Agent subprocess runs inside the OS kernel sandbox with filesystem and process rules, routing outbound network only through the local HTTP CONNECT proxy which allows or refuses hosts">
+  <defs>
+    <style>
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      .kicker { font-size: 10px; font-weight: 700; letter-spacing: 1px; fill: #8b949e; }
+      .title { font-size: 13.5px; font-weight: 700; fill: #e6edf3; }
+      .sub { font-size: 11px; fill: #9198a1; }
+      .edge { font-size: 10px; font-weight: 600; fill: #8b949e; }
+    </style>
+    <marker id="s-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#58a6ff" />
+    </marker>
+    <marker id="s-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#3fb950" />
+    </marker>
+    <marker id="s-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#ff7b72" />
+    </marker>
+  </defs>
+
+  <!-- Outer frame -->
+  <rect x="1" y="1" width="918" height="312" rx="14" fill="#0b0f14" stroke="#30363d" stroke-width="1.5" />
+  <text x="28" y="32" class="sans kicker">NATIVE SANDBOX &amp; PROXY ALLOWLIST FLOW</text>
+
+  <!-- Left container: OS Kernel Sandbox -->
+  <rect x="28" y="48" width="296" height="236" rx="11" fill="#101820" stroke="#3fb950" stroke-opacity="0.75" stroke-width="1.4" stroke-dasharray="6 4" />
+  <text x="46" y="72" class="sans" font-size="11" font-weight="700" fill="#7ee787">OS KERNEL SANDBOX</text>
+  <text x="46" y="88" class="mono" font-size="10" fill="#8b949e">macOS Seatbelt · Linux Bubblewrap</text>
+
+  <!-- Inner subprocess card -->
+  <rect x="46" y="104" width="260" height="72" rx="8" fill="#0d1117" stroke="#2ac3de" stroke-opacity="0.7" stroke-width="1.2" />
+  <rect x="46" y="104" width="4" height="72" rx="2" fill="#2ac3de" />
+  <text x="64" y="132" class="sans title">Agent Subprocess / bash</text>
+  <text x="64" y="152" class="sans sub">No direct host network socket</text>
+
+  <!-- Kernel rules list -->
+  <rect x="46" y="188" width="260" height="78" rx="8" fill="#0d1117" stroke="#262c36" stroke-width="1" />
+  <text x="60" y="210" class="sans" font-size="11.5" font-weight="600" fill="#e6edf3">Kernel-enforced boundaries</text>
+  <text x="60" y="229" class="sans sub">• FS read / write / deny path rules</text>
+  <text x="60" y="247" class="sans sub">• Process &amp; credential dir isolation</text>
+
+  <!-- Arrow Kernel -> Proxy -->
+  <line x1="324" y1="166" x2="392" y2="166" stroke="#58a6ff" stroke-width="1.6" marker-end="url(#s-arr)" />
+  <text x="358" y="154" text-anchor="middle" class="sans edge">Only egress</text>
+  <text x="358" y="183" text-anchor="middle" class="mono" font-size="9.5" fill="#8b949e">loopback</text>
+
+  <!-- Center: Local HTTP / CONNECT Proxy -->
+  <rect x="398" y="86" width="230" height="160" rx="11" fill="#161b22" stroke="#58a6ff" stroke-opacity="0.85" stroke-width="1.4" />
+  <rect x="398" y="86" width="230" height="4" rx="2" fill="#58a6ff" />
+  <text x="513" y="116" text-anchor="middle" class="sans title">Local HTTP / CONNECT</text>
+  <text x="513" y="135" text-anchor="middle" class="sans title">Proxy</text>
+  <rect x="410" y="152" width="206" height="34" rx="6" fill="#0d1117" stroke="#262c36" stroke-width="1" />
+  <text x="513" y="173" text-anchor="middle" class="mono" font-size="9.5" fill="#79c0ff">allowedDomains / deniedDomains</text>
+  <rect x="410" y="196" width="206" height="34" rx="6" fill="#0d1117" stroke="#262c36" stroke-width="1" />
+  <text x="513" y="217" text-anchor="middle" class="mono" font-size="9.5" fill="#f0883e">Live net(host) approval</text>
+
+  <!-- Branches: Proxy -> Allowed / Denied -->
+  <path d="M 628 136 H 668 V 104 H 706" fill="none" stroke="#3fb950" stroke-width="1.5" marker-end="url(#s-green)" />
+  <text x="668" y="95" text-anchor="middle" class="sans" font-size="10" font-weight="700" fill="#3fb950">Allowed</text>
+
+  <path d="M 628 196 H 668 V 228 H 706" fill="none" stroke="#ff7b72" stroke-width="1.5" marker-end="url(#s-red)" />
+  <text x="668" y="246" text-anchor="middle" class="sans" font-size="10" font-weight="700" fill="#ff7b72">Denied</text>
+
+  <!-- Right outcomes -->
+  <rect x="712" y="64" width="180" height="80" rx="9" fill="#163024" stroke="#3fb950" stroke-opacity="0.8" stroke-width="1.2" />
+  <text x="802" y="98" text-anchor="middle" class="sans" font-size="13.5" font-weight="700" fill="#7ee787">External Network</text>
+  <text x="802" y="119" text-anchor="middle" class="sans sub">Connection forwarded</text>
+
+  <rect x="712" y="188" width="180" height="80" rx="9" fill="#2c161a" stroke="#ff7b72" stroke-opacity="0.8" stroke-width="1.2" />
+  <text x="802" y="222" text-anchor="middle" class="sans" font-size="13.5" font-weight="700" fill="#ff7b72">Refuse Connection</text>
+  <text x="802" y="243" text-anchor="middle" class="sans sub">Blocked before egress</text>
+</svg>

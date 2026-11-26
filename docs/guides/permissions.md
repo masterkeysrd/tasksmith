@@ -1,271 +1,160 @@
-# Permission & Security Policies
+# Control which tool calls need approval
 
-TaskSmith employs a multi-tiered security model that balances agent autonomy with developer oversight. You have full control over when tools run automatically, when TaskSmith must ask for your explicit approval, and which actions are strictly prohibited.
+Let routine work run without interruption, stop unwanted actions outright, and
+choose when TaskSmith should ask. Keep personal grants separate from policies
+you want everyone in a repository to inherit.
 
----
+## Understand how permission evaluation works
 
-## Permission Modes
+Start with **deny > allow > ask**, not “the most specific rule wins.” A project
+allow does not cancel a global deny. The decision applies to a planned action,
+including its tool, target, safety classification, and sandbox posture.
 
-TaskSmith supports five session-wide permission modes. Each mode adjusts the approval threshold according to your workflow:
+![TaskSmith permission evaluation order: workspace and agent policies, deny rules, trust and safety, allow rules and mode baseline, and remaining requests](../../assets/diagrams/permission-evaluation.svg)
 
-| Mode | Identifier | Permission Gate | Behavioral Posture & Recommended Use |
-| :--- | :--- | :--- | :--- |
-| **Default** | `default` | Read-only inspection tools (`view`, `grep`, `glob`, `ls`, `ask_question`, `todos`, read-only `bash`) run automatically. Mutating operations (`write`, `edit`, mutating `bash`, `web_fetch`, `web_search`) prompt unless matched by an allow rule (writes to `<session-dir>/plans/` always auto-allow). | Standard **Act** posture for everyday pair-programming and general development. |
-| **Accept Edits** | `accept_edits` | Same read baseline as `default`, plus workspace file write/edit/remove operations (`write`, `edit`, `remove`) execute automatically without prompting. Shell commands (`bash`) and network requests still require approval. | Standard **Act** posture for iterative code refactoring with shell auditing. |
-| **Plan** | `plan` | Same permission gate as `default` (reads run; mutations prompt). Writes, edits, and removals inside `<session-dir>/plans/` auto-allow without prompting. | **Plan** posture: investigates the codebase, clarifies ambiguities via `ask_question`, asks where to save the plan (`<session-dir>/plans/` vs. workspace), and submits via `exit_plan_mode` for approval. |
-| **Ask** | `ask` | Same permission gate as `default` (reads run; mutations prompt). | **Ask** posture: answers questions and explains code without modifying project files. |
-| **Auto** | `auto` | Workspace-safe non-destructive operations (and non-unsafe plans matching an allow rule) run immediately. Risky operations (`SafetyUnsafe`, unmatched outside-workspace reads/writes, unmatched `remove`/deletes, `bypass_sandbox` retries, and unlisted proxy hosts) undergo a calibrated one-shot decision-model review (`permission-reviewer`), interrupting only if the reviewer defers or is unavailable. Explicit `deny` rules and policy exclusions always block immediately. | Standard **Act** posture for automated CI/CD runs or trusted local sandbox workflows. |
+| Check | What it means for you |
+| --- | --- |
+| Workspace and active-agent policies | An excluded or denied tool cannot be approved. An agent may narrow the workspace policy, never widen it. |
+| Session, project, and global deny rules | A match at **any** scope blocks the call without a prompt or model review. |
+| Trust and safety | Restricted workspaces block mutations. Safe mutations in the session's own plans directory are a special case after denials. |
+| Allow rules and session mode | An eligible matching grant or the mode's safe baseline runs the call. An ordinary allow cannot clear an unsafe classification. |
+| Remaining requests | TaskSmith asks. In `auto`, the one-shot reviewer can resolve a request before you see it. |
 
-> [!NOTE]
-> Even in `auto` mode, explicit `deny` rules and workspace policy exclusions are strictly enforced with zero model calls. To learn how Abstract Syntax Tree (AST) command analysis, path confinement, and the calibrated reviewer interact under the hood, see the [Permissions Architecture](../architecture/permissions.md).
+For example, in `default` a safe read normally runs; an ordinary file edit
+normally prompts. A workspace `ask` on a read-only tool can still trigger an
+approval. Under `auto`, a policy `ask` does not unconditionally force a human
+prompt; use a deny or exclusion for a boundary that must never be crossed.
 
-### Calibrated Permission Review in `auto` Mode
-
-When `auto` mode encounters a risky tool call or an unlisted proxy host, the daemon runs a one-shot evaluation against the `permission-reviewer` `Decision` manifest before interrupting you:
-
-- **What triggers review**: `SafetyUnsafe` actions, unmatched outside-workspace paths (`SafetyOutside`), unmatched delete actions (`ActionDelete`), `bypass_sandbox` retries, and unlisted sandbox-proxy `net(host)` connections. Ordinary workspace-safe reads, writes, edits, and sandboxed commands execute with zero model calls.
-- **One-shot receipts**: A model `approve_once` verdict applies **only** to that exact request and never creates `permissions.json` rules or modifies `sandbox.json`. Auto-approved tool cards display an `[Auto-approved]` header badge, proxy approvals add a `Host access auto-approved` transcript notice, and `/usage` reports review counts, outcomes, tokens, and cost.
-- **Safe deferral**: Every non-approving outcome (`defer_to_user`, below-threshold probability, oversize card evidence, missing model, timeout, or error) falls back cleanly to the standard human permission prompt (or `needs_input` exit code `4` in non-interactive `tasksmith exec`).
-- **Model routing & overrides**: By default, `permission-reviewer` tries `@permission-reviewer`, `defaultModels.decision` in `WORKSPACE.md`, and finally `@fast`. `permission-reviewer.decision.md` is the single source of truth for both the rubric and `threshold` (default `0.85`, validated in `(0, 1]`): teams can tune `threshold` or add repo-specific rubric rules in `.agents/decisions/permission-reviewer.decision.md` (which is trust-fingerprinted alongside `.agents/tools/` and `.agents/mcps/`).
-
----
-
-## Switching Modes in the CLI
-
-You can change permission modes at any time without restarting your session:
-
-1. **Cycle with Shortcut**: Press `Shift+Tab` in the composer to cycle through permission modes (`default` $\to$ `accept_edits` $\to$ `plan` $\to$ `ask` $\to$ `auto`).
-2. **Slash Command**: Use `/mode` in the composer:
-   ```text
-   /mode accept_edits
-   ```
-   Omitting the argument (`/mode`) opens an interactive mode picker with descriptions.
-
-When you widen the session mode, TaskSmith rechecks pending approvals in the session and its active subagents. It approves a pending request once only if the new mode allows it and the request is not classified as unsafe. Already-pending unsafe requests, explicit sandbox-bypass retries, and unlisted proxy hosts still require an explicit decision. Switching modes never automatically rejects a pending request or creates a permission rule.
-
----
-
-## Interactive Tool Approvals
-
-When an agent proposes an action requiring authorization, TaskSmith pauses execution and presents an interactive permission modal in the terminal. Workspace or agent `ask` policies can also gate specific tools (including `ask_question`) unless a matching allow rule exists. A deny rule or rejection prevents the tool from running.
-
-For example:
+To inspect or change the current mode, enter:
 
 ```text
-┌─ Permission required ──────────────────────────────────────────────────┐
-│ bash · go test ./...                                                  │
-│                                                                        │
-│ ❯ Yes, allow once                                                      │
-│   Always allow bash(go test *)                               [session] │
-│   Always allow bash(go *)                                    [session] │
-│   No, deny                                                             │
-│                                                                        │
-│ ↑/↓ Navigate · tab Scope · enter Confirm · r Feedback                 │
-└────────────────────────────────────────────────────────────────────────┘
+/mode
 ```
 
-### Authorization Details
-- **Tool & Target**: The modal displays the tool name (`bash`, `write`, `edit`, `web_fetch`) and its specific command, file path, or URL.
-- **Unified Diff Preview**: If an agent requests to `edit` or `write` a file, TaskSmith displays an inline, syntax-highlighted unified diff showing exactly what lines will be added and removed before you approve.
+`Shift+Tab` cycles modes from the composer. Compare the five modes, including
+planning and question-answering behavior, in [Modes and planning](./modes-and-planning.md).
 
-### Approval Choices
+## Respond to interactive approval prompts
 
-| Option | Shortcut | Behavior |
-| :--- | :--- | :--- |
-| **Yes, allow once** | `y` or `Enter` on the first row | Grants permission exclusively for this specific tool call. |
-| **Yes, and switch to accept_edits** | `e` or `Enter` on this row | Approves the selected write and switches the current session to `accept_edits`, which may also approve other eligible writes waiting in the same batch. Does not create a rule. |
-| **Always allow `<pattern>`** | `a` or `Enter` on pattern rows | Automatically approves this action and any future matching action according to the selected persistence scope. |
-| **No, deny** | `n` or `Enter` on last row | Rejects the tool call. The agent receives a permission-denied error and can attempt an alternative approach. |
-| **Reject with feedback** | `r` | Opens an inline text input to provide explanatory feedback to the agent (e.g., *"Do not delete this test; update it to match the new return type"*). |
+Read the tool name and target first. For `bash`, read the **whole command**, not
+just its first executable. For `edit` and `write`, inspect the diff when supplied.
+An `UNSANDBOXED` warning means the kernel wrapper will not protect that command.
 
-The `e` option appears only in the main session's permission prompt for a write that is not classified as unsafe and is not an explicit sandbox-bypass retry. It is not offered in subagent prompts or if the session is already in `accept_edits` or `auto`.
+| To do this | Choose this in the prompt |
+| --- | --- |
+| Allow once | **Yes, allow once** (`y`); no future grant. |
+| Allow for this session | Select an **Always allow** pattern and choose `[session]` with `Tab`. |
+| Allow in this project | Select the narrow pattern, then `Tab` to `[project]` before confirming. |
+| Allow across projects | Choose `[global]` only if the rule makes sense for every workspace you use. |
+| Reject this call | **No, deny** (`n`), or press `r` to reject with feedback explaining what to do instead. |
+| Always reject matching calls | Reject now, then add a **deny** in `/permissions`. There is no persistent-reject row in the prompt. |
+| Approve this write and change mode | **Yes, and switch to accept_edits** (`e`) when offered. No rule is created. |
 
-### Scoping Persistent Rules (`Tab`)
+Use the arrows and `Enter` to confirm the highlighted choice. Compare suggested
+patterns: `bash(go test *)` is narrower than `bash(go *)`. If neither pattern is
+appropriate, allow once instead of granting all invocations of a tool.
 
-When selecting an **Always allow** pattern, press `Tab` to cycle the persistence scope:
-- **`[session]`**: Stored in-memory for the duration of the current CLI session. Rules reset when you exit.
-- **`[project]`**: Saved to the local workspace state directory (`~/.local/share/tasksmith/workspaces/<hash>/permissions.json`). Persists across sessions for this project only.
-- **`[global]`**: Saved to your user-wide configuration (`~/.config/tasksmith/permissions.json`). Applies across every project on your machine.
+The mode-switch row is for eligible main-session writes, not unsafe actions,
+sandbox-bypass retries, or subagent prompts. It isn't offered in `auto` or when
+already accepting edits. Widening a mode rechecks outstanding approvals in the
+session and its subagents: other eligible calls may receive a one-time approval.
+Pending unsafe calls, explicit bypasses, and unlisted hosts still need a decision.
+Tightening a mode doesn't reject the requests already waiting.
 
----
+## Write rule patterns
 
-## Rule Syntax & Practical Examples
+Use `tool(pattern)`: both parts must be nonempty and parentheses cannot be nested.
+Match the **target on the card**. For a filesystem tool this may be a resolved
+absolute path rather than the relative argument the agent originally supplied.
+The prompt's exact-path suggestion avoids guessing the target.
 
-Permission rules follow the normalized format:
+| Pattern | Matches |
+| --- | --- |
+| `bash(git status *)` | `git status` itself and command strings beginning with `git status ` |
+| `bash(go test *)` | Go test invocations; `bash(npm test *)` and `bash(cargo check *)` work the same way |
+| `edit(internal/server/*.go)` | Go files directly in `internal/server` **on a relative target** |
+| `write(src/**)` | The relative `src` target itself or its descendants |
+| `view(**/CHANGELOG.md)` | A changelog by suffix, including on absolute targets |
+| `net(registry.npmjs.org)` | An unlisted proxy host, not every network tool |
+| `web_fetch(api.github.com)` | Fetches targeting this host; you may also match a complete URL |
+| `web_search(*)` | Any search query; queries aren't URLs |
+| `notes__echo(*)` | One discovered MCP tool, named `<server>__<tool>`; not every tool on `notes` |
+| `bash_unsandboxed(git commit *)` | An explicit unsandboxed commit retry, not an ordinary sandboxed commit |
 
-```text
-<tool-name>(<pattern>)
-```
+`*` is a wildcard, `?` matches one non-slash character, and `**` can span
+subdirectories. `write(*.md)` matches a single relative path component. A
+trailing ` *` on a command is a string prefix, not an argument policy: it does
+not certify that all following arguments, redirects, or piped commands are safe.
+TaskSmith inspects shell structure separately.
 
-### Pattern Matching Rules
-- `*`: Matches any character sequence within a token or path.
-- `/**`: In filesystem paths, matches arbitrary recursive subdirectories.
-- Shell commands: Matches the binary and command arguments prefix-wise (e.g., `bash(go test *)`).
-- Network URLs: Matches hostnames or complete endpoints (e.g., `web_fetch(github.com)`).
+The tool name can also be a wildcard: `*(src/**)` matches any tool with that
+relative target. Avoid granting `*(*)`: it covers all tools and targets,
+including explicit sandbox-bypass plans. Prefer the exact tool and target.
 
-### Practical Rule Examples
+A plain `bash(git *)` **deny** also covers unsandboxed Git. In contrast, a
+`bash_unsandboxed(git *)` deny targets only unsandboxed Git, including excluded
+commands. A plain `bash(...)` **allow** does not approve explicit bypass retries.
 
-```text
-# Shell Execution Rules
-bash(git status *)               # Allow git status commands
-bash(git diff *)                 # Allow git diff commands
-bash(go test *)                  # Allow Go test executions
-bash(npm test *)                 # Allow npm test commands
-bash(cargo check *)              # Allow cargo check
+## Manage rules interactively with /permissions
 
-# Filesystem Access Rules
-write(src/**)                    # Allow writing anywhere under the src/ directory
-edit(internal/server/*.go)       # Allow editing Go files in internal/server/
-write(*.md)                      # Allow writing root Markdown documentation files
+1. Enter `/permissions` (aliases: `/perm`, `/perms`).
+2. Choose **Project** or **Global**, then press `Enter`.
+3. Switch between the allowlist and denylist with `Tab` or the arrow keys.
+4. Press `a`, type one pattern, and submit with `Enter`. For example, add
+   `notes__echo(*)` to the denylist to prevent that tool from running.
+5. Highlight a rule and press `e` to edit, or `d`, `Backspace`, or `Delete`
+   to remove it. `Esc` backs out of the current step.
 
-# Network Access Rules
-web_fetch(api.github.com)        # Allow fetching GitHub API endpoints
-web_fetch(docs.rs)               # Allow fetching Rust documentation
-web_search(*)                    # Allow all web searches (queries are not URLs, so grant the tool-wide rule)
+If an allowed operation is still blocked, inspect the denylist in **both**
+scopes. Removing one copy doesn't remove the same rule from another scope.
+Session grants are specific to the session, not a third persistent editor tab.
 
-# Catch-All Rules
-*(src/**)                        # Allow any tool operating inside src/
-*(*)                             # Allow all tools and targets
-```
+## Configure permissions.json
 
----
+Use the editor above, or edit the appropriate file yourself. Project rules are
+local to your workstation, not checked into the repository.
 
-## Managing Rules with `/permissions`
+| Scope | Location | Applies to |
+| --- | --- | --- |
+| Global | `$XDG_CONFIG_HOME/tasksmith/permissions.json` | All your workspaces; normally `~/.config/tasksmith/permissions.json` |
+| Project | `$XDG_DATA_HOME/tasksmith/workspaces/<hash>/permissions.json` | This workspace root; the data home defaults to `~/.local/share` |
+| Session | Session grant, not either of these files | This session and its active subagents |
 
-TaskSmith includes an interactive rule editor accessible via the `/permissions` slash command (aliases: `/perm`, `/perms`):
-
-```text
-┌─ Permissions Manager ──────────────────────────────────────────────────┐
-│ [Project Scope]                                                        │
-│   Allow:                                                               │
-│     • bash(go test *)                                                  │
-│     • write(internal/**)                                               │
-│   Deny:                                                                │
-│     • bash(rm -rf *)                                                   │
-│                                                                        │
-│ [Global Scope]                                                         │
-│   Allow:                                                               │
-│     • bash(git status *)                                               │
-│                                                                        │
-│ a Add rule · e Edit rule · d Delete rule · esc Close                   │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-- **Add Rule (`a`)**: Define a new rule by selecting the scope (`project` or `global`), effect (`allow` or `deny`), and typing the `tool(pattern)` string.
-- **Edit Rule (`e`)**: Update an existing rule pattern.
-- **Delete Rule (`d`)**: Remove a rule from your configuration.
-
----
-
-## Persistent Configuration Schema (`permissions.json`)
-
-TaskSmith stores persistent permission settings in `permissions.json` across two scopes:
-- **Global Configuration**: `~/.config/tasksmith/permissions.json` (`$XDG_CONFIG_HOME/tasksmith/permissions.json`)
-- **Project Configuration**: `~/.local/share/tasksmith/workspaces/<hash>/permissions.json` (`$XDG_DATA_HOME/tasksmith/workspaces/<hash>/permissions.json`)
-
-### Schema Specification
+For example, start new sessions in `default`, permit Go tests, and block force
+pushes matching this command prefix:
 
 ```json
 {
   "schema": 1,
   "defaultMode": "default",
-  "allow": [
-    "bash(go test *)",
-    "write(internal/**)"
-  ],
-  "deny": [
-    "bash(rm -rf *)"
-  ]
+  "allow": ["bash(go test *)"],
+  "deny": ["bash(git push --force *)"]
 }
 ```
 
-### Hierarchy & Merge Semantics
+This deny matches that spelling, not all Git equivalents or actions by other
+tools. The rule lists combine across scopes. `defaultMode` instead takes the
+project setting if present, otherwise the global setting. Changing the current
+session mode does not rewrite either file.
 
-When evaluating effective permissions for a session, TaskSmith merges global and project-level settings using deterministic rules:
+There is **no `ask` array** in this file. Use the workspace policy below for a
+persistent request to ask. Legacy `disabledTools` and `disabledMcps` keys have
+no effect. Use `/tools` (`Space`) or `/mcp` (`e` or `Space`) for availability:
+a resource's `spec.enabled: false` or a workspace exclusion removes it from the
+agent's available tools, rather than waiting to reject a call.
 
-| Field | Type | Merge Semantics | Description |
-| :--- | :--- | :--- | :--- |
-| `schema` | integer | — | Schema format version for format migrations. |
-| `defaultMode` | string | **Project overrides Global** | Default session permission mode (`default`, `accept_edits`, `plan`, `ask`, `auto`). Setting `/mode` or pressing `Shift+Tab` overrides both for the current session only. |
-| `allow` | array of strings | **Union** | Normalized `tool(pattern)` rules that auto-approve matching actions. |
-| `deny` | array of strings | **Union (Strict Priority)** | Normalized `tool(pattern)` rules that unconditionally reject matching actions. |
+Policy files are not agent-editable preferences. Writes targeting TaskSmith's
+stores are treated as sensitive, and the native sandbox protects the config and
+data directories from writes by subprocesses. Use the human-facing editor;
+do not ask the agent to edit the rule that is stopping it.
 
-> [!NOTE]
-> Tool and MCP **availability** is no longer configured here. Earlier versions kept `disabledTools` / `disabledMcps` lists in `permissions.json`; those keys are now ignored (legacy files still decode). Availability is deterministic from manifests: a resource's own `spec.enabled: false`, or a `WORKSPACE.md` `spec.policies.tools.exclude` / `spec.policies.mcps.exclude` entry for this repository. Manage both from the [`/tools`](../reference/cli.md#tools-browser-tools) and [`/mcp`](../reference/cli.md#mcp-browser-mcp) browsers, which show disabled resources with a `[Disabled]` badge and toggle them with `space` (`e` in `/mcp`). See [Enabling And Disabling Tools](tools-and-mcp.md#enabling-and-disabling-tools).
+## Set declarative workspace policies in WORKSPACE.md
 
----
+Put a team baseline in the manifest's frontmatter. This example asks about
+shell calls outside `auto` unless explicitly allowed, and excludes `download`
+regardless of mode. It does not grant permission to any shell command:
 
-## Isolation Settings (`sandbox.json`)
-
-While `permissions.json` decides *whether* a tool call needs your approval, `sandbox.json` decides *what the operating-system isolation itself permits* once a command runs. It lives in the same two scopes:
-
-- **Global Configuration**: `~/.config/tasksmith/sandbox.json` (`$XDG_CONFIG_HOME/tasksmith/sandbox.json`)
-- **Project Configuration**: `~/.local/share/tasksmith/workspaces/<hash>/sandbox.json` (`$XDG_DATA_HOME/tasksmith/workspaces/<hash>/sandbox.json`) — never committed to git.
-
-```json
-{
-  "schema": 1,
-  "mode": "native",
-  "failIfUnavailable": false,
-  "allowUnsandboxed": true,
-  "autoAllowBash": false,
-  "excludedCommands": ["git commit *"],
-  "filesystem": {
-    "allowWrite": ["~/.kube"],
-    "denyWrite": ["./vendor"],
-    "denyRead": ["~/Secrets"],
-    "allowRead": ["~/Secrets/pub"]
-  },
-  "network": {
-    "mode": "allowlist",
-    "allowedDomains": ["*.example.com"],
-    "deniedDomains": []
-  }
-}
-```
-
-| Key | Merge Semantics | Description |
-| :--- | :--- | :--- |
-| `mode` | **Project overrides Global** | Default isolation backend for new sessions (`native` or `local`). A session flag or explicit request still wins over both. |
-| `failIfUnavailable` | **Monotonic lock (OR)** | When any scope enables it, sessions requiring `native` fail loudly on hosts without kernel sandboxing instead of quietly falling back to `local`. |
-| `allowUnsandboxed` | **Monotonic lock (AND)** | Gates per-command unsandboxed execution. Any scope setting it `false` locks the hatch off; restricted (untrusted) workspaces always force it `false`. |
-| `autoAllowBash` | **Project overrides Global** | Auto-approves safe, sandboxed shell plans in `default`/`accept_edits` modes. |
-| `excludedCommands` | **Union (locked by `allowUnsandboxed`)** | Command patterns exempt from the kernel sandbox. Cleared entirely in restricted workspaces or whenever any scope pins `allowUnsandboxed` false. |
-| `filesystem.*` | **Union with fixed precedence** | Extra writable directories (`allowWrite`), additional read-only paths (`denyWrite`), read masks (`denyRead`), and narrower re-opens inside a mask (`allowRead`). Project-relative paths resolve against the workspace root; `~` expands to your home. Built-in protected paths (agent resources, Git hooks/config, TaskSmith's own stores) can never be made writable, and TaskSmith's secret stores can never be re-opened. |
-| `network.*` | **Union** | Subprocess network posture (`open`, `allowlist`, or `disabled`) with domain allow/deny lists (exact hosts, `*.domain` wildcards, or IP literals such as `::1` / `[::1]`). The allowlist activates when `mode` is `allowlist`, or when `mode` is unset and `allowedDomains` is non-empty; an explicit `"mode": "open"` always wins over a lingering domain list. In `native` sandboxes it routes all child traffic through a daemon-side HTTP + `CONNECT` proxy: denied and (unless you approve the prompt) unlisted hosts get `403`, DNS is resolved daemon-side with loopback, `0.0.0.0/8`, link-local, and metadata addresses blocked unless listed literally, and `disabled` removes connectivity entirely. If the proxy cannot start, allowlisted children get no network rather than open access; approving a host "for workspace" persists it to `sandbox.json` `allowedDomains`. In open posture, `deniedDomains` still blocks matching hosts for network tools. |
-
-Both files are written atomically with owner-only (`0600`) permissions, and TaskSmith refuses to let tools or sandboxed commands modify them — a sandboxed process can never loosen its own next invocation. Edits apply to running sessions on the next workspace reload (`/workspace reload`). Repository-committed manifests (`WORKSPACE.md`, `.agents/`) may only narrow these settings, never widen them.
-
-You can also edit either scope interactively from the REPL with `/sandbox`: a tabbed editor showing the host kernel backend's health (with remediation guidance when sandboxing is unavailable), the posture knobs with their effective values and lock reasons, `excludedCommands` management, and a read-only view of the fully resolved path and network rules. See the [CLI Reference](../reference/cli.md#sandbox-editor-sandbox).
-
-### Unsandboxed Command Execution
-
-Some commands genuinely need host access the kernel sandbox withholds — `git commit` with GPG signing (needs `~/.gnupg`), `git push` over SSH (needs `~/.ssh`), or a client talking to the Docker daemon socket. TaskSmith offers three controlled ways across that boundary, all gated by `allowUnsandboxed` (default `true` in trusted workspaces, always `false` in restricted ones) and never available in read-only sessions:
-
-- **Agent bypass requests** (`bypass_sandbox`). The agent may retry a command that demonstrably failed due to sandbox restrictions without the kernel wrapper. Every such request prompts in **every permission mode** — including `auto` — and shows an `UNSANDBOXED` warning in the approval modal. Approving it grants a rule in a dedicated namespace, so ordinary `bash(...)` approvals never cover unsandboxed runs:
-
-  ```text
-  bash_unsandboxed(git commit *)      # Pre-approve unsandboxed git commits
-  bash_unsandboxed(ssh *)             # Pre-approve unsandboxed ssh
-  ```
-
-  A plain `bash(git *)` **deny** rule still blocks both variants; `bash_unsandboxed(git *)` denies only the unsandboxed variant.
-
-- **Trusted command exclusions** (`excludedCommands`). Patterns like `"git commit *"` pre-exempt matching commands from the kernel wrapper. Matching is strict AST analysis: a command with any redirection, command substitution, variable-expanded argument, subshell, environment prefix, `cd`, `eval`, or background operator is *not* excluded and stays sandboxed. Excluded commands still flow through ordinary `bash(...)` rules and modes — only the kernel boundary is skipped.
-
-- **Direct `!` commands**. Commands you run yourself from the REPL execute unsandboxed in trusted workspaces when `allowUnsandboxed` is enabled, since they are explicit, human-initiated host actions.
-
-Additionally, `autoAllowBash: true` auto-approves *safe, sandboxed* shell commands in `default`/`accept_edits` modes (native backend only). It never widens `plan`/`ask` modes, unsafe or network-opening commands, or anything unsandboxed.
-
-See [Sandbox Architecture](../architecture/sandbox.md) for how the merged posture is enforced by the kernel.
-
----
-
-## Workspace Declarative Policies (`WORKSPACE.md`)
-
-In addition to interactive rules, team-wide security baselines can be committed directly to version control in `WORKSPACE.md`. Policies are declared under `spec.policies.tools` and are enforced as a monotonic `allow < ask < deny` ceiling that is evaluated before permission modes and allow rules:
-
-```markdown
+```yaml
 ---
 apiVersion: warp/v1alpha1
 kind: Workspace
@@ -274,51 +163,26 @@ metadata:
 spec:
   policies:
     tools:
-      # Tools that execute automatically without prompting
-      include:
-        - view
-        - glob
-        - grep
-      # Tools that always prompt for developer approval
-      ask:
-        - bash
-        - write
-        - edit
-        - web_fetch
-      # Tools that are completely disabled for all agents
-      exclude:
-        - download
----
-```
-
-The `tools` ceiling also accepts the annotation-driven actions `dangerous` and `openWorld` (each `allow`, `ask`, or `deny`; defaulting to `ask` and `allow` respectively) and a boolean `readOnly` that restricts the workspace to `isReadOnly` tools:
-
-```markdown
----
-apiVersion: warp/v1alpha1
-kind: Workspace
-metadata:
-  name: backend-service
-spec:
-  policies:
-    tools:
-      readOnly: true
-      dangerous: deny
+      ask: [bash, edit, write]
+      exclude: [download]
+      dangerous: ask
       openWorld: ask
 ---
 ```
 
-`include`, `exclude`, and `ask` match a tool's short name, `namespace/name`, or fully-qualified `namespace/Kind/name` pattern. When an agent requests a tool call, TaskSmith first verifies that the tool is permitted by the workspace ceiling; excluded or denied tools cannot be authorized by interactive prompts, and an `ask` ceiling forces approval unless a matching user allow rule grants the plan.
+`include` is an allowlist of **eligible tools**, not an approval rule: setting
+`include: [view, grep, glob]` excludes other tools from that policy. `include`,
+`exclude`, and `ask` accept short names and namespace-qualified name patterns
+(`namespace/name` or `namespace/Kind/name`). An `ask` can name `ask_question` too.
 
-An active `Agent` manifest may further narrow this ceiling through its own `spec.policies.tools` (for example, excluding `write` or `edit`), but it can never widen it: the effective policy is the stricter of the workspace and agent ceilings (`allow < ask < deny`).
+`dangerous` and `openWorld` apply to tool annotations and accept `allow`, `ask`,
+or `deny`; their defaults are `ask` and `allow`, respectively. `readOnly: true`
+limits the policy to read-only tools. The stricter workspace or active-agent
+policy wins. With the native backend, read-only workspace/agent policy also
+makes the workspace read-only to child processes regardless of permission mode.
 
-### Kernel Read-Only Enforcement
+## Next steps
 
-Permission gates decide *whether* a tool call may run; the OS kernel sandbox independently decides what a running process can touch. Read-only kernel enforcement is deliberately decoupled from permission modes and operates on two levels:
-
-- **Session level**: When the workspace is restricted (untrusted repository) or the effective workspace/agent `policies.tools.readOnly` policy is true, the session's sandbox enforces the workspace root as read-only at the kernel level — even while the session runs in `default` mode.
-- **Per-command**: Whenever an authorized plan is classified `ReadOnly` — in any mode — the individual `bash` or custom-tool process runs under a read-only kernel profile. If `shellguard` or an `isReadOnly` annotation misclassifies a mutating command, the kernel still blocks the write.
-
-Kernel enforcement requires the native sandbox backend (Apple Seatbelt on macOS, Bubblewrap on Linux); sessions fall back to in-process confinement with a startup notice when it is unavailable. See [Sandbox Architecture](../architecture/sandbox.md) for the profile details, including host credential paths (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.netrc`, and TaskSmith's own config/data secrets) shared with `shellguard` and masked from child processes.
-
-For keyboard shortcuts and command syntax, see the [CLI Reference](../reference/cli.md). For the underlying security implementation, see the [Permissions Architecture](../architecture/permissions.md).
+- [Use one-shot automatic review](./auto-permission-review.md) instead of adding a broad grant.
+- [Control subprocess and network isolation](./sandbox.md) after a tool is approved.
+- [Inspect permission evaluation](../architecture/permissions.md) or [look up workspace policy fields](../reference/manifests/workspace.md).
