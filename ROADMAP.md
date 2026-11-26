@@ -35,6 +35,10 @@ Ground-up architectural rewrite around a headless local daemon, OS-level sandbox
 - [x] **SmartReplace in `edit`**: exact-first matching with conservative fallbacks for line endings, whitespace, indentation, and minor typos; preserves diff previews and file-change checks.
 - [x] **ChatGPT Codex & live model catalogs** — Sign in with a ChatGPT plan and browse the models available to that account in `/providers`. The gateway uses live catalogs where providers expose them. OpenAI, Google GenAI, and Antigravity presets include updated models and tier aliases. [Codex setup](./docs/reference/providers/codex.md)
 - [x] **Claude Code & GitHub Copilot providers**: subscription-backed `claudecode` and `github-copilot` completion via Loom, with browser sign-in, built-in presets, four model-tier aliases, and provider-reported quota. Copilot requires a CLI that speaks protocol 4, such as `1.0.114`. [Claude Code setup](./docs/reference/providers/claudecode.md) · [Copilot setup](./docs/reference/providers/github-copilot.md)
+- [x] **Calibrated `auto`-mode permission reviewer**: one-shot static-evaluator emulation (`action`, `safety`, `requested`) backed by `permission-reviewer.decision.md` (`@permission-reviewer`), factual evidence without static anchoring, live receipts, and `/usage` review telemetry
+- [x] **Built-in `/review` workflow**: read-only `code-reviewer` subagent (`@code-reviewer` → `@smart` → `@inherit`) paired with an overridable `code-review` skill across TUI, `tasksmith exec`, and ACP
+- [x] **Terminal rendering & ergonomics**: Unicode Markdown math/LaTeX rendering (`$...$`, `$$...$$`), AST-driven shell syntax highlighting across previews, debounced resize transcript redraw, Git branch in the header banner, and `~/.agents/` user resource discovery
+- [x] **Modular user-driven docs & full-repo CI lint gate**: topic-focused guides and reference subdirectories with branded diagrams, zero-issue full-repo `golangci-lint` in CI, and hardened security boundaries across CodeQL checks
 
 ---
 
