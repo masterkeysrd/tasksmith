@@ -30,6 +30,7 @@ type FileAccessConfig struct {
 type FileAccessChecker struct {
 	workDir       string
 	realWorkDir   string
+	policyErr     error
 	denyRules     []string
 	wsPolicies    *warp.Policies
 	agentPolicies *warp.Policies
@@ -60,9 +61,11 @@ func NewFileAccessChecker(cfg FileAccessConfig) *FileAccessChecker {
 
 	var denyRules []string
 	if mgr != nil {
-		if eff, err := mgr.Effective(); err == nil {
-			denyRules = append(denyRules, eff.Deny...)
+		eff, err := mgr.Effective()
+		if err != nil {
+			return &FileAccessChecker{policyErr: fmt.Errorf("file access: load permissions: %w", err)}
 		}
+		denyRules = append(denyRules, eff.Deny...)
 	}
 	if cfg.Session != nil {
 		denyRules = deduplicateRules(append(denyRules, cfg.Session.Permissions().Deny...))
@@ -85,6 +88,9 @@ func NewFileAccessChecker(cfg FileAccessConfig) *FileAccessChecker {
 func (c *FileAccessChecker) Check(path, displayPath string, isDir bool) error {
 	if c == nil {
 		return nil
+	}
+	if c.policyErr != nil {
+		return c.policyErr
 	}
 	label := cmp.Or(displayPath, path)
 	clean := filepath.ToSlash(filepath.Clean(path))

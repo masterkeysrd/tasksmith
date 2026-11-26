@@ -837,6 +837,10 @@ func TestEvaluateMalformedPermissionsFile(t *testing.T) {
 	}
 	sess := mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
 
+	if err := mgr.AddRule(api.ScopeGlobal, api.EffectDeny, "view(private.txt)"); err != nil {
+		t.Fatal(err)
+	}
+
 	// Write corrupt JSON to project permissions file
 	wsDataDir, err := xdg.WorkspaceDir(dir)
 	if err != nil {
@@ -848,6 +852,13 @@ func TestEvaluateMalformedPermissionsFile(t *testing.T) {
 	}
 	if err := os.WriteFile(projectFile, []byte("{invalid-json"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
+	}
+
+	checker := permissions.NewFileAccessChecker(permissions.FileAccessConfig{WorkDir: dir, Session: sess})
+	for _, path := range []string{"private.txt", "ordinary.txt"} {
+		if err := checker.Check(path, path, false); err == nil {
+			t.Errorf("allowed %s with unreadable project policy", path)
+		}
 	}
 
 	plan := &tools.Plan{
