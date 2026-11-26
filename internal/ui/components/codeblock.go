@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -283,7 +284,10 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 
 // ResolveTokenStyle maps a chroma.TokenType to an editor color dynamically from the active theme.
 func ResolveTokenStyle(t *theme.Scheme, tokType chroma.TokenType) style.Style {
-	themeText := t.Color.Text.Primary
+	return resolveTokenStyle(t, tokType, t.Color.Text.Primary).WhiteSpace(style.WhiteSpacePre)
+}
+
+func resolveTokenStyle(t *theme.Scheme, tokType chroma.TokenType, themeText color.Color) style.Style {
 	themeMuted := t.Color.Syntax.Comment
 	themeKeyword := t.Color.Syntax.Keyword
 	themeFunction := t.Color.Syntax.Function
@@ -294,7 +298,7 @@ func ResolveTokenStyle(t *theme.Scheme, tokType chroma.TokenType) style.Style {
 	themeVariable := t.Color.Syntax.Variable
 	themePunctuation := t.Color.Syntax.Punctuation
 
-	styled := style.S().WhiteSpace(style.WhiteSpacePre)
+	styled := style.S()
 
 	if tokType.InCategory(chroma.Comment) {
 		styled = styled.Foreground(themeMuted)

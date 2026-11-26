@@ -479,7 +479,7 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 | `Enter` | Composer | Submits prompt to the agent, executes a `/command`, or runs a direct `!bash` command. |
 | `Shift+Enter` / `Alt+Enter` | Composer | Inserts a literal newline without submitting the prompt. |
 | `Shift+Tab` | Composer | Cycles session permission mode: `default` $\to$ `accept_edits` $\to$ `plan` $\to$ `ask` $\to$ `auto`. |
-| `!` *(on empty input)* | Composer | Switches composer to direct Bash command mode (`!command`). |
+| `!` *(on empty input)* | Composer | Switches composer to direct Bash command mode (`!command`). Shell syntax colors appear in the transcript, Bash tool cards, and permission previews, not while typing. |
 | `Backspace` *(on empty Bash prompt)* | Composer | Exits direct Bash command mode and returns to standard prompt. |
 | `Ctrl+Y` | Composer | Approves the pending tool authorization request for the first waiting subagent once without leaving the composer. |
 | `Ctrl+G` | Composer | Opens the live subagent chat view for the waiting subagent in the slot. |

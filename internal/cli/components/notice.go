@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
@@ -74,8 +75,8 @@ var BashCommand = trail.FC("BashCommand", func(record api.CommandRecord) trail.N
 			Style: style.S().Bold(true).Foreground(bashColor).WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
 		}, trail.Text("! ")),
 		trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(primaryColor),
-		}, trail.Text(record.Command)),
+			Style: style.S().WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere),
+		}, components.HighlightShellSpans(record.Command, scheme, primaryColor)...),
 	}
 	if record.ExitCode != 0 {
 		headerChildren = append(headerChildren, trail.Span(trail.SpanProps{

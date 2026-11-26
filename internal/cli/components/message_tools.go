@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
@@ -1007,7 +1008,7 @@ var BashToolWidget = trail.FC("BashToolWidget", func(props BashToolWidgetProps) 
 					TextOverflow(style.TextOverflowEllipsis).
 					WhiteSpace(style.WhiteSpacePre).
 					Foreground(scheme.Color.Text.Secondary),
-			}, trail.Text(cmd)),
+			}, components.HighlightShellSpans(cmd, scheme, scheme.Color.Text.Secondary)...),
 		}
 		if input.Dir != "" && input.Dir != "." {
 			line2Nodes = append(line2Nodes, trail.Span(trail.SpanProps{

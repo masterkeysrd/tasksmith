@@ -157,10 +157,14 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 
 	var subtitleNodes []trail.Node
 	if perm.ToolName != "" && targetText != "" {
+		target := trail.Span(trail.SpanProps{Style: targetStyle}, trail.Text(targetText))
+		if perm.ToolName == "bash" {
+			target = trail.Span(trail.SpanProps{Style: style.S().WhiteSpace(style.WhiteSpacePreWrap)}, components.HighlightShellSpans(targetText, scheme, scheme.Color.Text.Primary)...)
+		}
 		subtitleNodes = append(subtitleNodes,
 			trail.Span(trail.SpanProps{Style: toolStyle}, trail.Text(perm.ToolName)),
 			trail.Span(trail.SpanProps{Style: dotStyle}, trail.Text(" · ")),
-			trail.Span(trail.SpanProps{Style: targetStyle}, trail.Text(targetText)),
+			target,
 		)
 	} else if targetText != "" {
 		subtitleNodes = append(subtitleNodes,
