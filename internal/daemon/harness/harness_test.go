@@ -3847,4 +3847,57 @@ func TestLastUserIntentTextMetaOverride(t *testing.T) {
 	if got := s.LastUserIntentText(); got != "/commit — Commit the intended changes" {
 		t.Fatalf("LastUserIntentText = %q, want MetaUserIntent override", got)
 	}
+
+	// Inherited multi-turn parent intents (>600 bytes) must not be cropped to
+	// 600 bytes and lose the trailing [latest] turn.
+	inherited := "[prev] " + strings.Repeat("x", 350) + "\n[prev] " + strings.Repeat("y", 350) + "\n[latest] commit it"
+	childUser := message.NewUserText("expanded subagent task")
+	SetUserIntent(childUser, inherited)
+	childState := State{Messages: message.MessageList{childUser}}
+	if got := childState.LastUserIntentText(); got != inherited {
+		t.Fatalf("inherited MetaUserIntent truncated: len=%d, want %d", len(got), len(inherited))
+	}
+}
+
+func TestLastUserIntentTextShortFollowUpAndCropping(t *testing.T) {
+	reminder := message.NewUserTextMeta(
+		"<system_reminders>secret policy</system_reminders>",
+		map[string]any{MetaSystemKind: SystemKindReminder},
+	)
+
+	s := State{
+		Messages: message.MessageList{
+			message.NewUserText("Oldest turn that should be dropped"),
+			message.NewUserText("Consolidate the adapter files and clean up old tests"),
+			&message.Assistant{Content: message.Content{&message.TextBlock{Text: "assistant reply excluded"}}},
+			message.NewUserText("Should we remove the legacy test files too?"),
+			reminder,
+			message.NewUserText("yes"),
+		},
+	}
+
+	got := s.LastUserIntentText()
+	want := "[prev] Consolidate the adapter files and clean up old tests\n" +
+		"[prev] Should we remove the legacy test files too?\n" +
+		"[latest] yes"
+	if got != want {
+		t.Fatalf("LastUserIntentText() =\n%s\nwant:\n%s", got, want)
+	}
+
+	longPrev := strings.Repeat("a", 400)
+	longLatest := strings.Repeat("b", 800)
+	sLong := State{
+		Messages: message.MessageList{
+			message.NewUserText("ignored older turn"),
+			message.NewUserText(longPrev),
+			message.NewUserText(longLatest),
+		},
+	}
+	gotLong := sLong.LastUserIntentText()
+	if strings.Contains(gotLong, "ignored older turn") {
+		t.Fatalf("long latest turn should include at most 1 prior turn, got %q", gotLong)
+	}
+	if len(gotLong) > 900 {
+		t.Fatalf("cropped multi-turn intent unexpectedly long: len=%d", len(gotLong))
+	}
 }

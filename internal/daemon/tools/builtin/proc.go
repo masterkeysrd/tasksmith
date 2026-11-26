@@ -82,13 +82,15 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 	readOnly := worstAction == api.ActionRead && worstSafety == api.SafetySafe
 
 	plan := &tools.Plan{
-		ToolName: ToolBash,
-		Action:   worstAction,
-		Safety:   worstSafety,
-		Target:   cmdStr,
-		Paths:    t.collectPaths(ops),
-		Summary:  summary,
-		ReadOnly: readOnly,
+		ToolName:      ToolBash,
+		Action:        worstAction,
+		Safety:        worstSafety,
+		Target:        cmdStr,
+		Paths:         t.collectPaths(ops),
+		Summary:       summary,
+		ReadOnly:      readOnly,
+		ProtectedPath: t.guard.TouchesProtectedPath(cmdStr),
+		ScriptPaths:   shellguard.ExtractScriptPaths(cmdStr),
 	}
 
 	// A read-only session or read-only plan classification is a ceiling the

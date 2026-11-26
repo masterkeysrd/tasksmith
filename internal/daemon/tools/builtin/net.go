@@ -72,7 +72,7 @@ func (t *downloadTool) Prepare(ctx context.Context, in api.DownloadInput) (*tool
 	if _, evalSafety := t.guard.EvaluatePath(res.Path, api.ActionWrite); evalSafety == api.SafetyUnsafe {
 		safety = api.SafetyUnsafe
 	}
-	return &tools.Plan{
+	return withPathPosture(t.guard, &tools.Plan{
 		ToolName: ToolDownload,
 		Action:   api.ActionWrite,
 		Safety:   safety,
@@ -80,7 +80,7 @@ func (t *downloadTool) Prepare(ctx context.Context, in api.DownloadInput) (*tool
 		Paths:    []string{res.Path},
 		Summary:  fmt.Sprintf("Download file: %s", res.Path),
 		ReadOnly: false,
-	}, nil
+	}, res.Path), nil
 }
 
 func (t *downloadTool) Execute(ctx context.Context, in api.DownloadInput) (api.DownloadOutput, error) {

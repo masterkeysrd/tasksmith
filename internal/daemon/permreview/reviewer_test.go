@@ -72,22 +72,115 @@ func (p *fakeDecisionProvider) count() int {
 }
 
 func cannedResponse(probApprove float64, refused bool) *decision.Response {
+	return cannedClassification("exec", probApprove, "safe", probApprove, "yes", probApprove, refused)
+}
+
+func cannedClassification(
+	action string,
+	probAction float64,
+	safety string,
+	probSafety float64,
+	requested string,
+	probRequested float64,
+	refused bool,
+) *decision.Response {
+	otherAction := "read"
+	if action == otherAction {
+		otherAction = "exec"
+	}
+	otherSafety := "unsafe"
+	if safety == otherSafety {
+		otherSafety = "safe"
+	}
+	otherReq := "no"
+	if requested == otherReq {
+		otherReq = "yes"
+	}
 	return &decision.Response{
 		Model: "fakedec-model",
 		Answers: map[string]decision.Answer{
-			"verdict": {
-				Name:    "verdict",
+			actionQuestionName: {
+				Name:    actionQuestionName,
 				Type:    decision.QuestionChoice,
 				Refused: refused,
-				Choice:  string(VerdictApproveOnce),
+				Choice:  action,
 				ChoiceProbabilities: []decision.OptionProbability{
-					{Value: string(VerdictApproveOnce), Probability: probApprove},
-					{Value: string(VerdictDefer), Probability: 1 - probApprove},
+					{Value: action, Probability: probAction},
+					{Value: otherAction, Probability: 1 - probAction},
 				},
-				Confidence: 2*probApprove - 1,
+				Confidence: 2*probAction - 1,
+			},
+			safetyQuestionName: {
+				Name:    safetyQuestionName,
+				Type:    decision.QuestionChoice,
+				Refused: refused,
+				Choice:  safety,
+				ChoiceProbabilities: []decision.OptionProbability{
+					{Value: safety, Probability: probSafety},
+					{Value: otherSafety, Probability: 1 - probSafety},
+				},
+				Confidence: 2*probSafety - 1,
+			},
+			requestedQuestionName: {
+				Name:    requestedQuestionName,
+				Type:    decision.QuestionChoice,
+				Refused: refused,
+				Choice:  requested,
+				ChoiceProbabilities: []decision.OptionProbability{
+					{Value: requested, Probability: probRequested},
+					{Value: otherReq, Probability: 1 - probRequested},
+				},
+				Confidence: 2*probRequested - 1,
 			},
 		},
 	}
+}
+
+func testClassifierManifest(thresholdLine string) string {
+	th := ""
+	if thresholdLine != "" {
+		th = "      " + thresholdLine
+	}
+	return fmt.Sprintf(`---
+apiVersion: warp/v1alpha1
+kind: Decision
+metadata:
+  name: permission-reviewer
+spec:
+  models: ["fake/decider"]
+  questions:
+    - name: action
+      type: choice
+%s      options:
+        - value: read
+          description: read
+        - value: write
+          description: write
+        - value: delete
+          description: delete
+        - value: exec
+          description: exec
+        - value: net
+          description: net
+    - name: safety
+      type: choice
+%s      options:
+        - value: safe
+          description: safe
+        - value: outside
+          description: outside
+        - value: unsafe
+          description: unsafe
+    - name: requested
+      type: choice
+%s      options:
+        - value: "yes"
+          description: yes
+        - value: "no"
+          description: no
+---
+rubric
+`, th, th, th)
 }
 
 // fakeLLMProvider answers structured-output calls with a canned verdict JSON,
@@ -246,7 +339,15 @@ func newTestService(t *testing.T, mode api.PermissionMode, wsDir string, decisio
 	if err != nil {
 		t.Fatalf("workspace.Open: %v", err)
 	}
-	gw := &fakeGateway{native: &fakeDecisionProvider{}, llm: &fakeLLMProvider{raw: `{"answers":{"verdict":{"choice":"approve_once","probabilities":{"approve_once":0.97,"defer_to_user":0.03}}}}`}}
+	gw := &fakeGateway{
+		native: &fakeDecisionProvider{},
+		llm: &fakeLLMProvider{
+			raw: `{"answers":{` +
+				`"action":{"choice":"exec","probabilities":{"exec":0.97,"read":0.03}},` +
+				`"safety":{"choice":"safe","probabilities":{"safe":0.97,"unsafe":0.03}},` +
+				`"requested":{"choice":"yes","probabilities":{"yes":0.97,"no":0.03}}}}`,
+		},
+	}
 	cat, err := models.Build(ws.Catalog(), gw)
 	if err != nil {
 		t.Fatalf("models.Build: %v", err)
@@ -345,7 +446,7 @@ func TestReviewManifestThresholdIsSourceOfTruth(t *testing.T) {
 			if err := mkdirAll(decDir); err != nil {
 				t.Fatal(err)
 			}
-			manifest := fmt.Sprintf("---\napiVersion: warp/v1alpha1\nkind: Decision\nmetadata:\n  name: permission-reviewer\nspec:\n  models: [\"fake/decider\"]\n  questions:\n    - name: verdict\n      type: choice\n      %s      options:\n        - value: approve_once\n          description: allow once\n        - value: defer_to_user\n          description: ask human\n---\nrubric\n", tc.manifestThreshold)
+			manifest := testClassifierManifest(tc.manifestThreshold)
 			if err := writeFile(decDir+"/permission-reviewer.decision.md", manifest); err != nil {
 				t.Fatal(err)
 			}
@@ -372,12 +473,15 @@ func TestReviewAdaptedUsesSameManifestThreshold(t *testing.T) {
 	if err := mkdirAll(decDir); err != nil {
 		t.Fatal(err)
 	}
-	manifest := "---\napiVersion: warp/v1alpha1\nkind: Decision\nmetadata:\n  name: permission-reviewer\nspec:\n  models: [\"fake/decider\"]\n  questions:\n    - name: verdict\n      type: choice\n      options:\n        - value: approve_once\n          description: allow once\n        - value: defer_to_user\n          description: ask human\n---\nrubric\n"
+	manifest := testClassifierManifest("")
 	if err := writeFile(decDir+"/permission-reviewer.decision.md", manifest); err != nil {
 		t.Fatal(err)
 	}
 	svc, gw, _, _ := newTestService(t, api.ModeAuto, wsDir, false)
-	gw.llm.raw = `{"answers":{"verdict":{"choice":"approve_once","probabilities":{"approve_once":0.80,"defer_to_user":0.20}}}}`
+	gw.llm.raw = `{"answers":{` +
+		`"action":{"choice":"exec","probabilities":{"exec":0.95,"read":0.05}},` +
+		`"safety":{"choice":"safe","probabilities":{"safe":0.80,"unsafe":0.20}},` +
+		`"requested":{"choice":"yes","probabilities":{"yes":0.95,"no":0.05}}}}`
 	res := svc.Review(context.Background(), ReviewRequest{Request: testCard(), UserIntent: "clean"})
 	if res.Verdict != VerdictDefer {
 		t.Fatalf("verdict = %s, want defer below 0.85 manifest threshold", res.Verdict)
@@ -385,7 +489,10 @@ func TestReviewAdaptedUsesSameManifestThreshold(t *testing.T) {
 	if gw.llm.calls != 1 {
 		t.Fatalf("expected 1 adapted llm call, got %d", gw.llm.calls)
 	}
-	gw.llm.raw = `{"answers":{"verdict":{"choice":"approve_once","probabilities":{"approve_once":0.88,"defer_to_user":0.12}}}}`
+	gw.llm.raw = `{"answers":{` +
+		`"action":{"choice":"exec","probabilities":{"exec":0.95,"read":0.05}},` +
+		`"safety":{"choice":"safe","probabilities":{"safe":0.88,"unsafe":0.12}},` +
+		`"requested":{"choice":"yes","probabilities":{"yes":0.95,"no":0.05}}}}`
 	res = svc.Review(context.Background(), ReviewRequest{Request: testCard(), UserIntent: "clean"})
 	if res.Verdict != VerdictApproveOnce {
 		t.Fatalf("verdict = %s (%s), want approve_once at 0.88 using manifest threshold", res.Verdict, res.ReasonCode)
@@ -402,7 +509,7 @@ func TestReviewInvalidThresholdDefers(t *testing.T) {
 		if err := mkdirAll(decDir); err != nil {
 			t.Fatal(err)
 		}
-		manifest := fmt.Sprintf("---\napiVersion: warp/v1alpha1\nkind: Decision\nmetadata:\n  name: permission-reviewer\nspec:\n  models: [\"fake/decider\"]\n  questions:\n    - name: verdict\n      type: choice\n      threshold: %s\n      options:\n        - value: approve_once\n          description: allow once\n        - value: defer_to_user\n          description: ask human\n---\nrubric\n", bad)
+		manifest := testClassifierManifest(fmt.Sprintf("threshold: %s\n", bad))
 		if err := writeFile(decDir+"/permission-reviewer.decision.md", manifest); err != nil {
 			t.Fatal(err)
 		}
@@ -471,15 +578,19 @@ func TestReviewPayloadAllowlist(t *testing.T) {
 	gw.native.mu.Lock()
 	defer gw.native.mu.Unlock()
 	req := gw.native.calls[0]
-	if len(req.Questions) != 1 || req.Questions[0].Name != verdictQuestionName {
+	if len(req.Questions) != 3 ||
+		req.Questions[0].Name != actionQuestionName ||
+		req.Questions[1].Name != safetyQuestionName ||
+		req.Questions[2].Name != requestedQuestionName {
 		t.Fatalf("questions = %+v", req.Questions)
 	}
-	q := req.Questions[0]
-	if !strings.Contains(q.Instructions, "calibrated permission reviewer") || !strings.Contains(q.Instructions, "Choose the single verdict") {
-		t.Fatalf("instructions missing rendered rubric or question instructions:\n%s", q.Instructions)
+	qSafety := req.Questions[1]
+	if !strings.Contains(qSafety.Instructions, "calibrated permission classifier") ||
+		!strings.Contains(qSafety.Instructions, "Classify the real harm") {
+		t.Fatalf("safety instructions missing rendered rubric or question instructions:\n%s", qSafety.Instructions)
 	}
-	if strings.Count(strings.ToLower(q.Instructions), "untrusted data") < 1 {
-		t.Fatalf("instructions missing untrusted data framing:\n%s", q.Instructions)
+	if strings.Count(strings.ToLower(qSafety.Instructions), "untrusted data") < 1 {
+		t.Fatalf("instructions missing untrusted data framing:\n%s", qSafety.Instructions)
 	}
 	raw, err := json.Marshal(req.Input.State)
 	if err != nil {
@@ -493,12 +604,19 @@ func TestReviewPayloadAllowlist(t *testing.T) {
 		t.Fatalf("payload keys = %v, want exactly card+user_intent", decoded)
 	}
 	card, ok := decoded["card"].(map[string]any)
-	if !ok || len(card) != 9 {
-		t.Fatalf("card keys = %v", decoded["card"])
+	if !ok {
+		t.Fatalf("card missing or wrong type: %v", decoded["card"])
+	}
+	if _, leaked := card["action"]; leaked {
+		t.Fatalf("static action pre-label must not be sent in card: %v", card)
+	}
+	if _, leaked := card["safety"]; leaked {
+		t.Fatalf("static safety pre-label must not be sent in card: %v", card)
 	}
 	for k := range card {
 		switch k {
-		case "tool_name", "action", "safety", "target", "summary", "diff", "sandbox_enforced", "unsandboxed", "bypass_sandbox":
+		case "tool_name", "target", "summary", "diff", "script_preview",
+			"inside_workspace", "protected_path", "sandbox_enforced", "unsandboxed", "bypass_sandbox":
 		default:
 			t.Fatalf("unexpected card field %q in outbound payload", k)
 		}
@@ -534,7 +652,11 @@ func TestReviewPayloadSandboxPostureAndScriptPreview(t *testing.T) {
 		Target:   "./scripts/format.sh",
 		Summary:  "Format Go files",
 	}
-	res := svc.Review(context.Background(), ReviewRequest{Request: card, UserIntent: "fix formatting"})
+	res := svc.Review(context.Background(), ReviewRequest{
+		Request:     card,
+		ScriptPaths: []string{"./scripts/format.sh"},
+		UserIntent:  "fix formatting",
+	})
 	if res.Verdict != VerdictApproveOnce {
 		t.Fatalf("verdict = %s (%s), want approve_once", res.Verdict, res.ReasonCode)
 	}
@@ -571,7 +693,12 @@ func TestReviewPayloadSandboxPostureAndScriptPreview(t *testing.T) {
 		Unsandboxed:   true,
 		BypassSandbox: true,
 	}
-	_ = svc.Review(context.Background(), ReviewRequest{Request: envCard, UserIntent: "run"})
+	_ = svc.Review(context.Background(), ReviewRequest{
+		Request:       envCard,
+		ProtectedPath: true,
+		ScriptPaths:   []string{".env"},
+		UserIntent:    "run",
+	})
 	gw.native.mu.Lock()
 	rawEnv, err := json.Marshal(gw.native.calls[len(gw.native.calls)-1].Input.State)
 	gw.native.mu.Unlock()

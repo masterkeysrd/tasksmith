@@ -1470,6 +1470,66 @@ func TestStaticHeredocDevNullHomeAndUnknownTargets(t *testing.T) {
 			wantAction: api.ActionRead,
 			wantSafety: api.SafetyOutside,
 		},
+		{
+			name:       "git show with --no-pager is read safe",
+			command:    `git --no-pager show --stat HEAD`,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "git ls-tree is read safe",
+			command:    `git ls-tree -r --name-only HEAD docs`,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "go doc is read safe",
+			command:    `go doc github.com/masterkeysrd/tasksmith/api.Session`,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "gofmt -l is read safe",
+			command:    `gofmt -l .`,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "gofmt -w is write safe",
+			command:    `gofmt -w .`,
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "gofmt --w is write safe",
+			command:    `gofmt --w .`,
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "gofmt -w=true is write safe",
+			command:    `gofmt -w=true .`,
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "gofmt -cpuprofile is write",
+			command:    `gofmt -cpuprofile out.prof .`,
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "go env -w is exec not read",
+			command:    `go env -w CC=/tmp/pwn`,
+			wantAction: api.ActionExec,
+			wantSafety: api.SafetySafe,
+		},
+		{
+			name:       "go env -u is exec not read",
+			command:    `go env -u CC`,
+			wantAction: api.ActionExec,
+			wantSafety: api.SafetySafe,
+		},
 	}
 
 	for _, tc := range cases {

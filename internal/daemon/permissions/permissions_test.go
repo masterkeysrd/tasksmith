@@ -1535,3 +1535,45 @@ func TestSessionManagerSetWorkspaceEnforcesSubprojectTrust(t *testing.T) {
 		t.Fatalf("expected restricted subproject workspace to deny repo write even under trusted root manager, got %s", dec)
 	}
 }
+
+func TestSessionManagerAutoModeReversibleDelete(t *testing.T) {
+	sess := attachTestSession(t, api.ModeAuto)
+
+	safeReversibleDelete := &tools.Plan{
+		ToolName:   "remove",
+		Action:     api.ActionDelete,
+		Safety:     api.SafetySafe,
+		Target:     "internal/pkg/old.go",
+		Reversible: true,
+	}
+	if dec, _, _ := sess.Evaluate(safeReversibleDelete); dec != tools.AccessAllow {
+		t.Fatalf("ModeAuto safe reversible delete = %s, want allow", dec)
+	}
+
+	unsafeReversibleDelete := &tools.Plan{
+		ToolName:   "remove",
+		Action:     api.ActionDelete,
+		Safety:     api.SafetyUnsafe,
+		Target:     ".agents/rules/security.rule.md",
+		Reversible: true,
+	}
+	if dec, _, _ := sess.Evaluate(unsafeReversibleDelete); dec != tools.AccessAsk {
+		t.Fatalf("ModeAuto unsafe reversible delete = %s, want ask", dec)
+	}
+
+	irreversibleDelete := &tools.Plan{
+		ToolName:   "bash",
+		Action:     api.ActionDelete,
+		Safety:     api.SafetySafe,
+		Target:     "rm -f internal/pkg/old.go",
+		Reversible: false,
+	}
+	if dec, _, _ := sess.Evaluate(irreversibleDelete); dec != tools.AccessAsk {
+		t.Fatalf("ModeAuto irreversible delete = %s, want ask", dec)
+	}
+
+	defaultSess := attachTestSession(t, api.ModeDefault)
+	if dec, _, _ := defaultSess.Evaluate(safeReversibleDelete); dec != tools.AccessAsk {
+		t.Fatalf("ModeDefault safe reversible delete = %s, want ask", dec)
+	}
+}

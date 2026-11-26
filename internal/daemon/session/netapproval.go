@@ -83,7 +83,7 @@ func (s *Session) interactive() bool {
 // hostApprovalReviewTimeout bounds the silent decision-model review that
 // precedes a human host prompt in auto mode. The full hostApprovalTimeout
 // still applies to the human prompt after a deferral.
-const hostApprovalReviewTimeout = 3 * time.Second
+const hostApprovalReviewTimeout = 5 * time.Second
 
 // requestHostApproval is the sandbox proxy's OnUnlistedHost callback. It runs
 // the synthetic net(host) plan through the session permission engine: rules
@@ -281,7 +281,13 @@ func (s *Session) reviewHostApproval(ctx context.Context, perm permissions.Sessi
 	})
 	reviewCtx, cancel := context.WithTimeout(scopedCtx, hostApprovalReviewTimeout)
 	defer cancel()
-	res := s.permReviewer.Review(reviewCtx, permreview.ReviewRequest{Request: req, UserIntent: s.lastTurnUserIntent()})
+	res := s.permReviewer.Review(reviewCtx, permreview.ReviewRequest{
+		Request:         req,
+		InsideWorkspace: plan.InsideWorkspace,
+		ProtectedPath:   plan.ProtectedPath,
+		ScriptPaths:     plan.ScriptPaths,
+		UserIntent:      s.lastTurnUserIntent(),
+	})
 	if res.WarnOnce != "" {
 		s.logger.Warn(res.WarnOnce)
 	}

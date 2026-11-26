@@ -705,19 +705,34 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		t.Fatalf("Execute(download) failed: err=%v, text=%s", err, dlRes.Content.Text())
 	}
 
-	// Remove downloaded file
+	// Remove downloaded file (safe inside workspace; protected paths stay SafetyUnsafe)
 	rmCall := &message.ToolCall{
 		ID:   "call-rm",
 		Name: builtin.ToolRemove,
 		Args: map[string]any{"path": "downloaded.txt"},
 	}
 	rmPlan, err := c.Prepare(ctx, rmCall)
-	if err != nil || rmPlan.Action != api.ActionDelete || rmPlan.Safety != api.SafetyUnknown {
+	if err != nil || rmPlan.Action != api.ActionDelete || rmPlan.Safety != api.SafetySafe {
 		t.Fatalf("unexpected remove plan: %+v, err=%v", rmPlan, err)
 	}
 	rmRes, err := c.Execute(ctx, rmCall)
 	if err != nil || rmRes.IsError {
 		t.Fatalf("Execute(remove) failed: err=%v, text=%s", err, rmRes.Content.Text())
+	}
+
+	// Removing workspace control-plane or secret files must stay SafetyUnsafe.
+	for _, protectedName := range []string{"WORKSPACE.md", ".env"} {
+		if err := os.WriteFile(filepath.Join(dir, protectedName), []byte("secret=1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		p, err := c.Prepare(ctx, &message.ToolCall{
+			ID:   "call-rm-" + protectedName,
+			Name: builtin.ToolRemove,
+			Args: map[string]any{"path": protectedName, "force": true},
+		})
+		if err != nil || p.Action != api.ActionDelete || p.Safety != api.SafetyUnsafe {
+			t.Fatalf("remove(%q) plan = %+v (err=%v), want ActionDelete+SafetyUnsafe", protectedName, p, err)
+		}
 	}
 
 	// 3. Protected paths and outside/sensitive path classification in Prepare + Gate.Evaluate

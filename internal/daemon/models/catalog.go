@@ -312,6 +312,44 @@ func (c *Catalog) ResolveContext(ctx context.Context, role Role, explicit ...str
 	return Model{}, false
 }
 
+// ResolveDecisionCandidates resolves ordered Decision spec.models preferences
+// into deduplicated concrete models. Non-@default references try RoleDecision
+// first, then RoleCompletion (so completion models can be adapted via
+// LLMAdapter). @default resolves strictly against RoleDecision so it never
+// grabs a slow chat default before later fallbacks such as @fast.
+func (c *Catalog) ResolveDecisionCandidates(ctx context.Context, refs ...string) []Model {
+	if c.cat == nil || ctx.Err() != nil {
+		return nil
+	}
+
+	out := make([]Model, 0, len(refs))
+	seen := make(map[ID]bool, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+
+		var (
+			m     Model
+			found bool
+		)
+		if ref == "@default" {
+			m, found = c.ResolveContext(ctx, RoleDecision)
+		} else if dm, ok := c.ResolveContext(ctx, RoleDecision, ref); ok {
+			m, found = dm, true
+		} else if dm, ok := c.ResolveContext(ctx, RoleCompletion, ref); ok {
+			m, found = dm, true
+		}
+		if !found || seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		out = append(out, m)
+	}
+	return out
+}
+
 // List returns every model listed in the workspace manifests.
 func (c *Catalog) List() []Model {
 	all := c.listed.Snapshot().All()

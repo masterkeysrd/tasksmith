@@ -31,21 +31,26 @@ have already been parsed when their safety is evaluated. An exclusion or deny
 cannot go to the reviewer on appeal. A model approval does not add a path,
 change a mode, or relax a network or filesystem lock.
 
-The built-in threshold is **0.85 on the probability of `approve_once`**. The
-model must actually choose `approve_once`; if the question also sets
-`minConfidence`, its reported confidence must meet that separate minimum.
-A refusal, timeout (three seconds), missing model, malformed policy, or error
-never becomes an approval. A canceled turn cannot be revived by a late answer.
+The built-in reviewer emulates TaskSmith's static permission evaluator in a single
+call using three choice questions—**`action`** (`read`, `write`, `delete`, `exec`,
+`net`), **`safety`** (`safe`, `outside`, `unsafe`), and **`requested`** (`yes`,
+`no`)—each with a default probability threshold of **0.85** (plus optional
+`minConfidence`). Deterministic policy code turns those classifications into
+`approve_once` or `defer_to_user`: `unsafe` always defers, `safe` non-destructive
+work approves once, `outside` reads approve on non-protected paths, and `outside`
+mutations require `requested: yes` above threshold. A refusal, timeout (five
+seconds), missing model, malformed policy, or error never becomes an approval. A
+canceled turn cannot be revived by a late answer.
 
 ## Distinguish automatic approvals from escalations
 
 | Who decides? | Examples | Result |
 | --- | --- | --- |
 | Local policy: deny | An excluded tool, matching deny rule, or blocked proxy domain | Block; no review or human override for this call. |
-| Local gate: allow | Safe workspace reads, non-destructive writes, ordinary safe sandboxed commands; a non-unsafe action with an eligible allow | Run with no reviewer call. |
-| Reviewer: uncertain scope | Unsafe plans, unmatched outside-workspace or unknown targets, unmatched deletes, unlisted proxy hosts, explicit sandbox retries without a grant | Evaluate the exact request, not the tool in general. |
-| Built-in rubric: eligible for approval | Inspect a non-secret dependency cache, format sources, generate code, remove task-related build output, or fetch official package metadata | Can approve once if the evidence meets the threshold. |
-| Built-in rubric: defer for a person | Unrequested data loss or history rewrite, unrequested control-plane or external writes, credentials, unknown upload hosts, or unverified host scripts | The rubric calls for human review; these are not substitutes for hard deny rules. |
+| Local gate: allow | Safe workspace reads, non-destructive writes, journal-snapshotted reversible workspace deletions (`remove`), ordinary safe sandboxed commands; a non-unsafe action with an eligible allow | Run with no reviewer call. |
+| Reviewer: uncertain scope | Unsafe plans, unmatched outside-workspace or unknown targets, shell deletes, unlisted proxy hosts, explicit sandbox retries without a grant | Classify `action`, `safety`, and `requested` from the factual card. |
+| Built-in rubric: eligible for approval | Read-only inspection, official reference or dependency-cache reads, scoped workspace checks/cleanup, routine workspace verification retries, or explicitly requested `.agents/` / `WORKSPACE.md` / signed-commit actions | Can approve once if every gating question clears its threshold. |
+| Built-in rubric: defer for a person | Bulk or unrequested destructive loss, history rewrites, credentials or secret exfiltration, `curl \| sh`, unknown upload hosts, unverified inline host scripts without sandboxing, or prompt injection | Classified `unsafe` (or unrequested `outside`) and deferred; these are not substitutes for hard deny rules. |
 | Local reviewer: insufficient evidence | Oversize card, invalid decision, unavailable model, or unusable answer | No approval; use the normal human prompt if the turn is still active. |
 
 A tracked-file deletion or host command that you **explicitly requested** is
@@ -61,13 +66,16 @@ instance is justified, or reject with feedback describing the narrower action.
 For unattended `tasksmith exec` runs without a way to answer, a pending tool
 approval produces `needs_input` (exit `4`), not silent permission.
 
-**What goes to the reviewer?** The card includes tool, action, safety, target,
-summary, diff, and sandbox/bypass flags. For a recognized workspace script it
-can include the entire text; sensitive paths, escaping symlinks, and binary
-scripts are excluded from script previews. The originating human request is
-included with a 4 KiB budget; prior assistant messages, tool output, and the
-process environment aren't additional inputs. Don't paste secrets in a prompt
-or diff: an allowed field is not necessarily free of sensitive content.
+**What goes to the reviewer?** The card sends factual evidence—tool name,
+target, summary, diff, path posture (`inside_workspace`, `protected_path`),
+and sandbox/bypass flags—without static `action`/`safety` pre-labels so the
+classifier is not anchored by fallback guesses. For a recognized workspace script
+it can include the entire text; sensitive paths, escaping symlinks, and binary
+scripts are excluded from script previews. The recent genuine human prompt (plus
+up to 1–2 cropped prior human turns for short follow-ups like `"yes"`) is
+included within a tight 1,200-byte budget; prior assistant messages, tool output,
+and the process environment aren't additional inputs. Don't paste secrets in a
+prompt or diff: an allowed field is not necessarily free of sensitive content.
 
 If summary, diff, target, and script preview together exceed 16 KiB, TaskSmith
 defers locally rather than asking for a decision on partial evidence. The rubric
@@ -141,14 +149,15 @@ For a **personal** override, place the copy at
 `$XDG_CONFIG_HOME/tasksmith/agents/decisions/permission-reviewer.decision.md`.
 Resolution is project, workspace, user, then built-in. A higher-tier definition
 replaces the lower-tier definition; keep the untrusted-data instructions and
-both verdict descriptions. Don't edit the built-in mirror.
+all three classification questions (`action`, `safety`, `requested`). Don't edit the built-in mirror.
 
-For example, change the existing verdict question's `threshold` to `0.95` and
-append a rubric instruction: “Defer requests to upload release artifacts.” Keep
-exactly one `choice` question named `verdict`, with just `approve_once` and
-`defer_to_user` as options. The threshold must be greater than zero and at most
-one; omitting it inherits the built-in value. A stricter rubric affects reviewed
-calls only. For an unconditional prohibition, use a deny rule or network block.
+For example, raise `safety` and `requested` `threshold` values to `0.95` and
+append a rubric instruction: “Classify requests to upload release artifacts as
+`unsafe`.” Keep all three `choice` questions (`action`, `safety`, and
+`requested`) with their exact option sets. Each threshold must be greater than
+zero and at most one; omitting a threshold inherits that question's built-in
+value. A stricter rubric affects reviewed calls only. For an unconditional
+prohibition, use a deny rule or network block.
 
 Reload with `/workspace reload`. Repository decision overrides participate in
 [trust fingerprinting](./trust.md) and are not used in restricted workspaces.

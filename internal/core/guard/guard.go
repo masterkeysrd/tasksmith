@@ -190,6 +190,85 @@ func IsSensitiveWritePath(targetPath, homeDir string) bool {
 // execution, so they must stay read-only at the kernel level.
 var ProtectedWorkspaceWriteFiles = []string{".bashrc", ".zshrc", ".profile", ".gitconfig"}
 
+func isProtectedWorkspaceFile(cleaned, workDir string) bool {
+	root := filepath.Clean(workDir)
+	if cleaned == filepath.Join(root, "WORKSPACE.md") {
+		return true
+	}
+	for _, name := range ProtectedWorkspaceWriteFiles {
+		if cleaned == filepath.Join(root, name) {
+			return true
+		}
+	}
+	return false
+}
+
+var homeStartupDotfiles = []string{
+	".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile", ".gitconfig",
+}
+
+// IsProtectedTarget reports whether targetPath (or its symlink-resolved target)
+// points to a secret/credential file, TaskSmith XDG config/data store, home
+// startup dotfile, or workspace control-plane path (.git, .bare, .agents,
+// WORKSPACE.md, workspace startup dotfiles).
+func IsProtectedTarget(targetPath, workDir, homeDir string) bool {
+	cleaned := filepath.Clean(targetPath)
+	candidates := []string{cleaned}
+	if deref := fsutils.ResolveDeepestExisting(targetPath); deref != "" && deref != cleaned {
+		candidates = append(candidates, deref)
+	}
+
+	cleanHome := ""
+	if homeDir != "" {
+		cleanHome = filepath.Clean(homeDir)
+	}
+	cleanWS := ""
+	if workDir != "" {
+		cleanWS = filepath.Clean(workDir)
+	}
+
+	var xdgRoots []string
+	for _, kind := range []xdg.VarType{xdg.VarTypeConfig, xdg.VarTypeData} {
+		dir, err := xdg.Home(kind)
+		if err != nil || strings.TrimSpace(dir) == "" {
+			continue
+		}
+		cleanDir := filepath.Clean(dir)
+		xdgRoots = append(xdgRoots, cleanDir)
+		if deref := fsutils.ResolveDeepestExisting(cleanDir); deref != "" && deref != cleanDir {
+			xdgRoots = append(xdgRoots, deref)
+		}
+	}
+
+	for _, p := range candidates {
+		if IsSecretEnvFile(filepath.Base(p)) ||
+			IsSensitivePath(p, homeDir) ||
+			IsSensitiveWritePath(p, homeDir) {
+			return true
+		}
+		for _, xr := range xdgRoots {
+			if fsutils.IsInsideDir(p, xr) {
+				return true
+			}
+		}
+		if cleanHome != "" {
+			for _, dotfile := range homeStartupDotfiles {
+				if p == filepath.Join(cleanHome, dotfile) {
+					return true
+				}
+			}
+		}
+		if cleanWS != "" {
+			if IsProtectedPath(p, cleanWS, DefaultProtectedDirs...) ||
+				isProtectedWorkspaceFile(p, cleanWS) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // ProtectedWorkspaceWritePaths returns canonical absolute host paths that
 // native OS sandbox profiles must keep read-only for child processes even
 // when they sit inside the sandbox work directory: the workspace's agent
@@ -368,7 +447,10 @@ func EvaluatePathWithConfig(targetPath string, action api.ActionType, cfg PathCo
 		}
 	}
 	if cfg.WorkspaceDir != "" && fsutils.IsInsideDir(resolved, cfg.WorkspaceDir) {
-		if IsProtectedPath(resolved, cfg.WorkspaceDir, cfg.ProtectedDirs...) && action != api.ActionRead {
+		if action != api.ActionRead &&
+			(IsProtectedPath(resolved, cfg.WorkspaceDir, cfg.ProtectedDirs...) ||
+				IsSecretEnvFile(filepath.Base(resolved)) ||
+				isProtectedWorkspaceFile(resolved, cfg.WorkspaceDir)) {
 			return resolved, api.SafetyUnsafe
 		}
 		return resolved, api.SafetySafe

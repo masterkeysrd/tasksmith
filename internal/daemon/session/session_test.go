@@ -2748,8 +2748,8 @@ func TestModePermissionAutoPreservesOutsideAndDeletePrompts(t *testing.T) {
 		},
 		&message.ToolCall{
 			ID:   "delete-file",
-			Name: "remove",
-			Args: map[string]any{"path": "victim.txt", "force": true},
+			Name: "bash",
+			Args: map[string]any{"command": "rm -f victim.txt"},
 		},
 	)
 	if err := os.WriteFile(filepath.Join(sess.WorkDir, "victim.txt"), []byte("keep"), 0o644); err != nil {

@@ -863,15 +863,15 @@ func TestExecAutoModePermissionReviewJSONLApproveAndDefer(t *testing.T) {
 	}{
 		{
 			name:        "approve_once_executes_and_emits_receipt",
-			choice:      "approve_once",
+			choice:      "outside",
 			probability: 0.96,
 			wantExit:    exec.ExitOK,
 			wantDeleted: true,
 		},
 		{
 			name:        "defer_to_user_triggers_needs_input",
-			choice:      "defer_to_user",
-			probability: 0.20,
+			choice:      "unsafe",
+			probability: 0.95,
 			wantExit:    exec.ExitNeedsInput,
 			wantDeleted: false,
 		},
@@ -897,8 +897,8 @@ func TestExecAutoModePermissionReviewJSONLApproveAndDefer(t *testing.T) {
 								Content: []message.Block{
 									&message.ToolCall{
 										ID:   "call-rm-1",
-										Name: "remove",
-										Args: map[string]any{"path": "obsolete.txt", "force": true},
+										Name: "bash",
+										Args: map[string]any{"command": "rm -f obsolete.txt"},
 									},
 								},
 								Done: true,
@@ -917,15 +917,35 @@ func TestExecAutoModePermissionReviewJSONLApproveAndDefer(t *testing.T) {
 					return &decision.Response{
 						Model: req.Model,
 						Answers: map[string]decision.Answer{
-							"verdict": {
-								Name:   "verdict",
+							"action": {
+								Name:   "action",
+								Type:   decision.QuestionChoice,
+								Choice: "delete",
+								ChoiceProbabilities: []decision.OptionProbability{
+									{Value: "delete", Probability: 0.96},
+									{Value: "exec", Probability: 0.04},
+								},
+								Confidence: 0.92,
+							},
+							"safety": {
+								Name:   "safety",
 								Type:   decision.QuestionChoice,
 								Choice: tc.choice,
 								ChoiceProbabilities: []decision.OptionProbability{
-									{Value: "approve_once", Probability: tc.probability},
-									{Value: "defer_to_user", Probability: 1 - tc.probability},
+									{Value: tc.choice, Probability: tc.probability},
+									{Value: "safe", Probability: 1 - tc.probability},
 								},
-								Confidence: 0.85,
+								Confidence: 0.90,
+							},
+							"requested": {
+								Name:   "requested",
+								Type:   decision.QuestionChoice,
+								Choice: "yes",
+								ChoiceProbabilities: []decision.OptionProbability{
+									{Value: "yes", Probability: 0.96},
+									{Value: "no", Probability: 0.04},
+								},
+								Confidence: 0.92,
 							},
 						},
 					}, nil

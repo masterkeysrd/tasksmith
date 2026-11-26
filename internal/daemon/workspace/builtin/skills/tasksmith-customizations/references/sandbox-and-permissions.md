@@ -130,7 +130,7 @@ Three controlled routes run a command without the kernel wrapper. All require `a
 | `plan` | Denied unless read-only (mode rule wins). |
 | `ask` | Still prompts (mode rule wins). |
 | `default` / `accept_edits` | Auto-approved (native backend only; unsafe, outside, unsandboxed, denied, or rule-asked plans still prompt). |
-| `auto` | Workspace-safe non-destructive operations run immediately; `SafetyUnsafe`, unmatched `SafetyOutside`, unmatched `ActionDelete`, `bypass_sandbox`, and unlisted `net(host)` plans undergo calibrated `permission-reviewer` review before prompting. |
+| `auto` | Workspace-safe non-destructive operations and safe reversible deletions (`Plan.Reversible`) run immediately; `SafetyUnsafe`, unmatched `SafetyOutside`, unmatched non-reversible `ActionDelete`, `bypass_sandbox`, and unlisted `net(host)` plans undergo calibrated `permission-reviewer` review before prompting. |
 
 Network plans are never widened by `autoAllowBash`. Under a network allowlist, no permission mode — including `auto` — silently opens an unlisted host: only `sandbox.json` `network.allowedDomains` or an explicit `net(host)` allow rule permits it without prompting or review (persistent project/global host approvals append to `sandbox.json` `network.allowedDomains`, while human one-shot/session approvals record in-memory `net(host)` rules; `permission-reviewer` `approve_once` verdicts in `auto` mode apply once without persisting rules or domains, and unattached sessions refuse unlisted hosts on deferral).
 

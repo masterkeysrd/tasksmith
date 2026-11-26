@@ -581,8 +581,10 @@ func TestBuiltinPermissionReviewerDecisionSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("synced decision missing: %v", err)
 	}
-	if !strings.Contains(string(synced), "approve_once") || !strings.Contains(string(synced), "defer_to_user") {
-		t.Fatal("synced decision missing verdict options")
+	for _, token := range []string{"name: action", "name: safety", "name: requested"} {
+		if !strings.Contains(string(synced), token) {
+			t.Fatalf("synced decision missing %q", token)
+		}
 	}
 	text, err := snap.Def.Render(&warp.DecisionRenderOptions{
 		Workspace: ws.Catalog().WorkspaceSpec(),
@@ -591,8 +593,11 @@ func TestBuiltinPermissionReviewerDecisionSync(t *testing.T) {
 	if err != nil || !strings.Contains(text, "untrusted") {
 		t.Fatalf("decision render: %v", err)
 	}
-	if len(snap.Def.Spec.Questions) != 1 || snap.Def.Spec.Questions[0].Name != "verdict" {
-		t.Fatalf("decision questions = %+v, want single verdict question", snap.Def.Spec.Questions)
+	if len(snap.Def.Spec.Questions) != 3 ||
+		snap.Def.Spec.Questions[0].Name != "action" ||
+		snap.Def.Spec.Questions[1].Name != "safety" ||
+		snap.Def.Spec.Questions[2].Name != "requested" {
+		t.Fatalf("decision questions = %+v, want action/safety/requested", snap.Def.Spec.Questions)
 	}
 
 	// A workspace override must win over the system built-in.
@@ -601,7 +606,49 @@ func TestBuiltinPermissionReviewerDecisionSync(t *testing.T) {
 	if err := os.MkdirAll(overrideDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	override := "---\napiVersion: warp/v1alpha1\nkind: Decision\nmetadata:\n  name: permission-reviewer\nspec:\n  models: [\"@default\"]\n  questions:\n    - name: verdict\n      type: choice\n      threshold: 0.98\n      options:\n        - value: approve_once\n          description: allow one execution\n        - value: defer_to_user\n          description: ask the human\n---\nstricter repo rubric\n"
+	override := `---
+apiVersion: warp/v1alpha1
+kind: Decision
+metadata:
+  name: permission-reviewer
+spec:
+  models: ["@default"]
+  questions:
+    - name: action
+      type: choice
+      threshold: 0.98
+      options:
+        - value: read
+          description: read
+        - value: write
+          description: write
+        - value: delete
+          description: delete
+        - value: exec
+          description: exec
+        - value: net
+          description: net
+    - name: safety
+      type: choice
+      threshold: 0.98
+      options:
+        - value: safe
+          description: safe
+        - value: outside
+          description: outside
+        - value: unsafe
+          description: unsafe
+    - name: requested
+      type: choice
+      threshold: 0.98
+      options:
+        - value: "yes"
+          description: yes
+        - value: "no"
+          description: no
+---
+stricter repo rubric
+`
 	if err := os.WriteFile(filepath.Join(overrideDir, "permission-reviewer.decision.md"), []byte(override), 0o644); err != nil {
 		t.Fatal(err)
 	}

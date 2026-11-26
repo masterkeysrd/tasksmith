@@ -24,6 +24,13 @@ func resolveReadTarget(sb sandbox.Sandbox, g *shellguard.Guard, rawPath string) 
 	return filepath.ToSlash(resolved), safety, nil
 }
 
+func withPathPosture(g *shellguard.Guard, p *tools.Plan, target string) *tools.Plan {
+	inside, protected := g.PathPosture(target)
+	p.InsideWorkspace = &inside
+	p.ProtectedPath = protected
+	return p
+}
+
 type viewTool struct {
 	std              *std.Std
 	sandbox          sandbox.Sandbox
@@ -40,7 +47,7 @@ func (t *viewTool) Prepare(_ context.Context, in api.ViewInput) (*tools.Plan, er
 	if err != nil {
 		return nil, err
 	}
-	return &tools.Plan{
+	return withPathPosture(t.guard, &tools.Plan{
 		ToolName: ToolView,
 		Action:   api.ActionRead,
 		Safety:   safety,
@@ -48,7 +55,7 @@ func (t *viewTool) Prepare(_ context.Context, in api.ViewInput) (*tools.Plan, er
 		Paths:    []string{target},
 		Summary:  fmt.Sprintf("Read file: %s", target),
 		ReadOnly: true,
-	}, nil
+	}, in.Path), nil
 }
 
 func (t *viewTool) Execute(ctx context.Context, in api.ViewInput) (api.ViewOutput, error) {
@@ -122,7 +129,7 @@ func (t *lsTool) Prepare(_ context.Context, in api.LsInput) (*tools.Plan, error)
 	if err != nil {
 		return nil, err
 	}
-	return &tools.Plan{
+	return withPathPosture(t.guard, &tools.Plan{
 		ToolName: ToolLS,
 		Action:   api.ActionRead,
 		Safety:   safety,
@@ -130,7 +137,7 @@ func (t *lsTool) Prepare(_ context.Context, in api.LsInput) (*tools.Plan, error)
 		Paths:    []string{target},
 		Summary:  fmt.Sprintf("List directory: %s", target),
 		ReadOnly: true,
-	}, nil
+	}, rawPath), nil
 }
 
 func (t *lsTool) Execute(ctx context.Context, in api.LsInput) (api.LsOutput, error) {
@@ -179,7 +186,7 @@ func (t *globTool) Prepare(_ context.Context, in api.GlobInput) (*tools.Plan, er
 	if err != nil {
 		return nil, err
 	}
-	return &tools.Plan{
+	return withPathPosture(t.guard, &tools.Plan{
 		ToolName: ToolGlob,
 		Action:   api.ActionRead,
 		Safety:   safety,
@@ -187,7 +194,7 @@ func (t *globTool) Prepare(_ context.Context, in api.GlobInput) (*tools.Plan, er
 		Paths:    []string{target},
 		Summary:  fmt.Sprintf("Glob pattern %q in %s", in.Pattern, target),
 		ReadOnly: true,
-	}, nil
+	}, rawPath), nil
 }
 
 func (t *globTool) Execute(ctx context.Context, in api.GlobInput) (api.GlobOutput, error) {
@@ -227,7 +234,7 @@ func (t *grepTool) Prepare(_ context.Context, in api.GrepInput) (*tools.Plan, er
 	if err != nil {
 		return nil, err
 	}
-	return &tools.Plan{
+	return withPathPosture(t.guard, &tools.Plan{
 		ToolName: ToolGrep,
 		Action:   api.ActionRead,
 		Safety:   safety,
@@ -235,7 +242,7 @@ func (t *grepTool) Prepare(_ context.Context, in api.GrepInput) (*tools.Plan, er
 		Paths:    []string{target},
 		Summary:  fmt.Sprintf("Search pattern %q in %s", in.Pattern, target),
 		ReadOnly: true,
-	}, nil
+	}, rawPath), nil
 }
 
 func (t *grepTool) Execute(ctx context.Context, in api.GrepInput) (api.GrepOutput, error) {
@@ -285,7 +292,7 @@ func (t *writeTool) Prepare(ctx context.Context, in api.WriteInput) (*tools.Plan
 		return nil, err
 	}
 	_, safety := t.guard.EvaluatePath(res.Path, api.ActionWrite)
-	return &tools.Plan{
+	return withPathPosture(t.guard, &tools.Plan{
 		ToolName: ToolWrite,
 		Action:   api.ActionWrite,
 		Safety:   safety,
@@ -294,7 +301,7 @@ func (t *writeTool) Prepare(ctx context.Context, in api.WriteInput) (*tools.Plan
 		Summary:  fmt.Sprintf("Write file: %s", res.Path),
 		Diff:     res.Diff,
 		ReadOnly: false,
-	}, nil
+	}, res.Path), nil
 }
 
 const (
@@ -353,7 +360,7 @@ func (t *editTool) Prepare(ctx context.Context, in api.EditInput) (*tools.Plan, 
 		return nil, err
 	}
 	_, safety := t.guard.EvaluatePath(res.Path, api.ActionWrite)
-	return &tools.Plan{
+	return withPathPosture(t.guard, &tools.Plan{
 		ToolName: ToolEdit,
 		Action:   api.ActionWrite,
 		Safety:   safety,
@@ -362,7 +369,7 @@ func (t *editTool) Prepare(ctx context.Context, in api.EditInput) (*tools.Plan, 
 		Summary:  fmt.Sprintf("Edit file: %s", res.Path),
 		Diff:     res.Diff,
 		ReadOnly: false,
-	}, nil
+	}, res.Path), nil
 }
 
 func (t *editTool) Execute(ctx context.Context, in api.EditInput) (api.EditOutput, error) {
@@ -402,22 +409,18 @@ func (t *removeTool) Prepare(ctx context.Context, in api.RemoveInput) (*tools.Pl
 	if err != nil {
 		return nil, err
 	}
-	safety := api.SafetyUnknown
-	if _, evalSafety := t.guard.EvaluatePath(res.Path, api.ActionDelete); evalSafety == api.SafetyUnsafe {
-		safety = api.SafetyUnsafe
-	} else if t.guard.IsInWriteDirs(res.Path) {
-		safety = api.SafetySafe
-	}
-	return &tools.Plan{
-		ToolName: ToolRemove,
-		Action:   api.ActionDelete,
-		Safety:   safety,
-		Target:   res.Path,
-		Paths:    []string{res.Path},
-		Summary:  fmt.Sprintf("Remove file: %s", res.Path),
-		Diff:     res.Diff,
-		ReadOnly: false,
-	}, nil
+	_, safety := t.guard.EvaluatePath(res.Path, api.ActionDelete)
+	return withPathPosture(t.guard, &tools.Plan{
+		ToolName:   ToolRemove,
+		Action:     api.ActionDelete,
+		Safety:     safety,
+		Target:     res.Path,
+		Paths:      []string{res.Path},
+		Summary:    fmt.Sprintf("Remove file: %s", res.Path),
+		Diff:       res.Diff,
+		ReadOnly:   false,
+		Reversible: true,
+	}, res.Path), nil
 }
 
 func (t *removeTool) Execute(ctx context.Context, in api.RemoveInput) (api.RemoveOutput, error) {

@@ -510,13 +510,13 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	} else {
 		switch mode {
 		case api.ModeAuto:
-			// Auto mode auto-allows only plans the deterministic engine can
-			// vouch for: workspace-safe non-destructive operations, or a
-			// non-unsafe plan covered by an explicit allow rule. Unsafe,
-			// unmatched outside-workspace, and unmatched delete plans mint an
-			// AccessAsk so the calibrated decision-model reviewer (or, when it
-			// defers, the human) evaluates them instead of a blind allow.
-			if (plan.Safety == api.SafetySafe && plan.Action != api.ActionDelete) ||
+			// Auto mode auto-allows plans the deterministic engine can vouch for:
+			// workspace-safe non-destructive operations, workspace-safe
+			// reversible deletions (e.g. journal-snapshotted remove), or
+			// non-unsafe plans covered by an explicit allow rule. Unsafe,
+			// unmatched outside-workspace, and non-reversible delete plans mint
+			// an AccessAsk for the calibrated reviewer.
+			if (plan.Safety == api.SafetySafe && (plan.Action != api.ActionDelete || plan.Reversible)) ||
 				(plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan)) {
 				return tools.AccessAllow, nil, nil
 			}

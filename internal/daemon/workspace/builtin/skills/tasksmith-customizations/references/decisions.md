@@ -7,9 +7,9 @@ A Decision describes a probabilistic evaluation using a shared rubric and struct
 Decision manifests are commonly stored in `.agents/decisions/<name>.decision.md` in a workspace or project, or under `$XDG_CONFIG_HOME/tasksmith/agents/decisions/` for a user. They follow the normal resource hierarchy (`local > workspace > user > system`) and can also be supplied by system resources or workspace plugins. Project `.agents/decisions/**` files participate in workspace trust fingerprinting (restricted workspaces ignore repo overrides, and edits re-prompt trust).
 
 TaskSmith evaluates the built-in `permission-reviewer` Decision at runtime when a session is in `auto` mode (`internal/daemon/permreview`):
-- It must expose a single `choice` question named `verdict` with options `approve_once` and `defer_to_user`.
+- It must expose three `choice` questions—`action` (`read`, `write`, `delete`, `exec`, `net`), `safety` (`safe`, `outside`, `unsafe`), and `requested` (`yes`, `no`)—emulating the static permission evaluator.
 - `spec.models` defaults to `["@permission-reviewer", "@default", "@fast"]` (`@default` resolves strictly against the `decision` role; non-`@default` entries try `decision` then `completion` adapted via `LLMAdapter`).
-- `permission-reviewer.decision.md` is the single source of truth for calibration: Go validates that `threshold` is in `(0, 1]` (inheriting the built-in manifest's `0.85` threshold when a higher-tier override omits `threshold`) and evaluates both native `decision.Provider` and adapted `LLMAdapter` models against that exact threshold without separate daemon floors.
+- `permission-reviewer.decision.md` is the single source of truth for calibration: Go validates that each question's `threshold` is in `(0, 1]` (inheriting the built-in manifest's `0.85` defaults when a higher-tier override omits a threshold) and maps `(action, safety, requested)` deterministically to `approve_once` or `defer_to_user` across both native `decision.Provider` and adapted `LLMAdapter` models.
 - General user-defined `Decision` triggers on `Rule` manifests are still not evaluated at runtime.
 
 ## Definition
@@ -32,13 +32,13 @@ The instruction body is rendered as a template when the workspace rendering API 
 | `name` | string | Question identifier, unique within the Decision. |
 | `type` | string | `predicate`, `choice`, or `score`. |
 | `instructions` | string | Question-specific condition or prompt. |
-| `threshold` | float | Minimum probability threshold in `(0, 1]` (used by `predicate` and as the single source of truth for `permission-reviewer`'s `verdict` choice). |
+| `threshold` | float | Minimum probability threshold in `(0, 1]` (used by `predicate` and as the single source of truth for `permission-reviewer`'s `action`, `safety`, and `requested` choices). |
 | `minConfidence` | float | Minimum answer confidence from `0.0` to `1.0`. |
 | `criteria` | object | Predicate criteria under `true` and `false`. |
 | `options` | object[] | At least two choices for `choice`; each has a `value` and optional `description`. |
 | `levels` | object[] | At least two ordered levels for `score`; each has a `label` and optional `description`. |
 
-The question `name` and `type`, each option's `value`, and each level's `label` identify the intended results. For `permission-reviewer`, the daemon enforces the `verdict` `threshold` declared in the manifest (default `0.85` in the built-in system manifest) and optional `minConfidence`. Custom `Decision` manifests outside `permission-reviewer` remain declarative only.
+The question `name` and `type`, each option's `value`, and each level's `label` identify the intended results. For `permission-reviewer`, the daemon enforces each question's `threshold` declared in the manifest (default `0.85` in the built-in system manifest) and optional `minConfidence`. Custom `Decision` manifests outside `permission-reviewer` remain declarative only.
 
 ## Example
 

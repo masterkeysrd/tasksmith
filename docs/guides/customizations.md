@@ -38,8 +38,9 @@ removed public field from an additive change. Declaring that rubric does not
 make TaskSmith run it on every PR or activate a Rule trigger.
 
 The shipped `permission-reviewer` is a specific runtime consumer: in auto
-mode it uses a `verdict` choice and a confidence threshold. See the
-[Decision reference](../reference/manifests/decision.md) before overriding it.
+mode it classifies `action`, `safety`, and `requested` against calibrated
+thresholds. See the [Decision reference](../reference/manifests/decision.md)
+before overriding it.
 
 ## Where customizations live
 

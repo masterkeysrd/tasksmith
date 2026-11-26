@@ -7,9 +7,11 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/media"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -355,38 +357,104 @@ func (s State) LastUserMessageID() string {
 	return ""
 }
 
-// LastUserIntentText returns the plain text of the most recent genuine user
-// prompt: synthetic system messages (reminders, !cmd outputs, tasks,
-// compactions, subagent traffic) are skipped, and injected <system_reminders>
-// blocks inside real user messages are stripped. It backs the permission
-// reviewer's user_intent field.
+const (
+	latestUserIntentMaxRunes     = 600
+	shortUserIntentRuneThreshold = 200
+	priorShortUserIntentMaxRunes = 250
+	priorLongUserIntentMaxRunes  = 200
+	maxPriorShortUserIntentTurns = 2
+	maxPriorLongUserIntentTurns  = 1
+)
+
+// LastUserIntentText returns a compact, token-budgeted projection of the most
+// recent genuine user prompt (plus up to 1–2 cropped prior genuine user turns
+// for follow-up context). Synthetic system messages (reminders, !cmd outputs,
+// tasks, compactions, subagent traffic), assistant messages, tool results, and
+// injected <system_reminders> blocks are excluded.
 func (s State) LastUserIntentText() string {
+	var turns []string
+	var latestHasOverride bool
+
 	for _, m := range slices.Backward(s.Messages) {
 		u, ok := m.(*message.User)
 		if !ok || u == nil || SystemKindOf(u) != "" {
 			continue
 		}
-		if intent := UserIntentOf(u); intent != "" {
-			return intent
-		}
-		var parts []string
-		for _, b := range u.Content {
-			tb, ok := b.(*message.TextBlock)
-			if !ok {
-				continue
-			}
-			text := strings.TrimSpace(tb.Text)
-			if text == "" || strings.HasPrefix(text, "<system_reminders>") {
-				continue
-			}
-			parts = append(parts, text)
-		}
-		if len(parts) == 0 {
+
+		text, hasOverride := extractUserIntentMessage(u)
+		if text == "" {
 			continue
 		}
-		return strings.Join(parts, "\n")
+
+		if len(turns) == 0 {
+			latestHasOverride = hasOverride
+			turns = append(turns, text)
+			if hasOverride {
+				break
+			}
+			continue
+		}
+
+		maxPrior := maxPriorLongUserIntentTurns
+		if utf8.RuneCountInString(turns[0]) < shortUserIntentRuneThreshold {
+			maxPrior = maxPriorShortUserIntentTurns
+		}
+		if len(turns)-1 >= maxPrior {
+			break
+		}
+		turns = append(turns, text)
 	}
-	return ""
+
+	if len(turns) == 0 {
+		return ""
+	}
+
+	if latestHasOverride {
+		return strings.TrimSpace(turns[0])
+	}
+
+	latest := cropIntentRunes(turns[0], latestUserIntentMaxRunes)
+	if len(turns) == 1 {
+		return latest
+	}
+
+	priorMax := priorLongUserIntentMaxRunes
+	if utf8.RuneCountInString(turns[0]) < shortUserIntentRuneThreshold {
+		priorMax = priorShortUserIntentMaxRunes
+	}
+
+	lines := make([]string, 0, len(turns))
+	for i := len(turns) - 1; i >= 1; i-- {
+		lines = append(lines, "[prev] "+cropIntentRunes(turns[i], priorMax))
+	}
+	lines = append(lines, "[latest] "+latest)
+	return strings.Join(lines, "\n")
+}
+
+func extractUserIntentMessage(u *message.User) (string, bool) {
+	if intent := UserIntentOf(u); intent != "" {
+		return intent, true
+	}
+
+	var parts []string
+	for _, b := range u.Content {
+		tb, ok := b.(*message.TextBlock)
+		if !ok {
+			continue
+		}
+		text := strings.TrimSpace(tb.Text)
+		if text == "" || strings.HasPrefix(text, "<system_reminders>") {
+			continue
+		}
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "\n"), false
+}
+
+func cropIntentRunes(s string, maxBytes int) string {
+	s = strings.TrimSpace(s)
+	out, _ := strutils.TruncateLine(s, maxBytes, "…")
+	return out
 }
 
 type MessageUpdateOptions struct {

@@ -117,6 +117,18 @@ type Plan struct {
 	Summary  string   `json:"summary"`
 	Diff     string   `json:"diff,omitempty"`
 	ReadOnly bool     `json:"read_only,omitempty"`
+	// Reversible marks a mutating or deleting plan whose prior state is
+	// snapshotted by the daemon so /revert can restore it cleanly.
+	Reversible bool `json:"reversible,omitempty"`
+	// InsideWorkspace reports whether a file-targeted plan resolves inside the
+	// workspace root. Nil when the plan does not target a single file path.
+	InsideWorkspace *bool `json:"inside_workspace,omitempty"`
+	// ProtectedPath reports whether the plan targets or references a protected
+	// control-plane, secret, XDG policy, or sensitive host path.
+	ProtectedPath bool `json:"protected_path,omitempty"`
+	// ScriptPaths holds local script paths referenced by a shell plan for
+	// bounded review inspection.
+	ScriptPaths []string `json:"script_paths,omitempty"`
 	// Unsandboxed marks a plan whose child process runs directly on the host
 	// instead of inside the kernel sandbox (bash bypass_sandbox or an
 	// excludedCommands match). The harness tags their execution context

@@ -188,24 +188,35 @@ func DefaultPolicy() Policy {
 			"-b", "-B", "--orphan",
 		},
 		SubcommandModes: map[string]TargetMode{
-			"clone":       TargetsSkipFirst,
-			"branch":      TargetsAfterDashDash,
-			"tag":         TargetsAfterDashDash,
-			"switch":      TargetsAfterDashDash,
-			"checkout":    TargetsAfterDashDash,
-			"merge":       TargetsAfterDashDash,
-			"rebase":      TargetsAfterDashDash,
-			"cherry-pick": TargetsAfterDashDash,
-			"revert":      TargetsAfterDashDash,
-			"stash":       TargetsAfterDashDash,
-			"fetch":       TargetsAfterDashDash,
-			"pull":        TargetsAfterDashDash,
-			"push":        TargetsAfterDashDash,
-			"remote":      TargetsAfterDashDash,
-			"config":      TargetsAfterDashDash,
-			"rev-parse":   TargetsAfterDashDash,
-			"log":         TargetsAfterDashDash,
-			"show":        TargetsAfterDashDash,
+			"clone":        TargetsSkipFirst,
+			"branch":       TargetsAfterDashDash,
+			"tag":          TargetsAfterDashDash,
+			"switch":       TargetsAfterDashDash,
+			"checkout":     TargetsAfterDashDash,
+			"merge":        TargetsAfterDashDash,
+			"rebase":       TargetsAfterDashDash,
+			"cherry-pick":  TargetsAfterDashDash,
+			"revert":       TargetsAfterDashDash,
+			"stash":        TargetsAfterDashDash,
+			"fetch":        TargetsAfterDashDash,
+			"pull":         TargetsAfterDashDash,
+			"push":         TargetsAfterDashDash,
+			"remote":       TargetsAfterDashDash,
+			"config":       TargetsAfterDashDash,
+			"rev-parse":    TargetsAfterDashDash,
+			"log":          TargetsAfterDashDash,
+			"show":         TargetsAfterDashDash,
+			"ls-tree":      TargetsAfterDashDash,
+			"cat-file":     TargetsAfterDashDash,
+			"blame":        TargetsAfterDashDash,
+			"shortlog":     TargetsAfterDashDash,
+			"describe":     TargetsAfterDashDash,
+			"merge-base":   TargetsAfterDashDash,
+			"rev-list":     TargetsAfterDashDash,
+			"show-ref":     TargetsAfterDashDash,
+			"for-each-ref": TargetsAfterDashDash,
+			"name-rev":     TargetsAfterDashDash,
+			"check-ignore": TargetsAfterDashDash,
 		},
 		ArgRules: []ArgRule{
 			{
@@ -242,8 +253,42 @@ func DefaultPolicy() Policy {
 				Subcommands: []string{"clone", "fetch", "pull", "push"},
 			},
 			{
+				Category: api.ActionRead,
+				Subcommands: []string{
+					"status", "diff", "log", "show", "branch", "rev-parse", "ls-files",
+					"remote", "tag", "ls-tree", "cat-file", "blame", "shortlog",
+					"describe", "merge-base", "rev-list", "show-ref", "for-each-ref",
+					"name-rev", "check-ignore",
+				},
+			},
+		},
+	}
+
+	p.Rules["go"] = CommandRule{
+		DefaultCategory: api.ActionExec,
+		TargetMode:      TargetsNone,
+		ArgRules: []ArgRule{
+			{
+				Category:    api.ActionExec,
+				Subcommands: []string{"env"},
+				ContainsAny: []string{"-w", "--w", "-u", "--u"},
+			},
+			{
 				Category:    api.ActionRead,
-				Subcommands: []string{"status", "diff", "log", "show", "branch", "rev-parse", "ls-files", "remote", "tag"},
+				Subcommands: []string{"doc", "list", "env", "version"},
+			},
+		},
+	}
+
+	p.Rules["gofmt"] = CommandRule{
+		DefaultCategory: api.ActionRead,
+		TargetMode:      TargetsAll,
+		PathFlags:       []string{"-cpuprofile", "--cpuprofile"},
+		ValueFlags:      []string{"-r", "--r"},
+		ArgRules: []ArgRule{
+			{
+				Category:    api.ActionWrite,
+				ContainsAny: []string{"-w", "--w", "-cpuprofile", "--cpuprofile"},
 			},
 		},
 	}
@@ -840,6 +885,25 @@ func (g *Guard) EvaluatePath(targetPath string, action api.ActionType) (string, 
 	})
 }
 
+// PathPosture reports whether targetPath is confined inside the Guard's
+// workspace directory and whether it (or its symlink target) points to a
+// protected control-plane, secret, XDG policy, or sensitive host path.
+func (g *Guard) PathPosture(targetPath string) (insideWorkspace bool, protected bool) {
+	resolved := fsutils.ExpandAndCleanPath(targetPath, g.workspaceDir, g.homeDir)
+	if g.workspaceDir != "" {
+		insideWorkspace = fsutils.IsConfinedInsideDir(resolved, filepath.Clean(g.workspaceDir))
+	}
+	protected = guard.IsProtectedTarget(resolved, g.workspaceDir, g.homeDir)
+	return insideWorkspace, protected
+}
+
+// TouchesProtectedPath parses cmdStr and reports whether any command
+// executable, argument, redirection, or command substitution references a
+// protected control-plane, secret, XDG policy, or sensitive host path.
+func (g *Guard) TouchesProtectedPath(cmdStr string) bool {
+	return TouchesProtectedPath(cmdStr, g.workspaceDir, g.homeDir)
+}
+
 // evaluatePath classifies resolvedPath using g.EvaluatePath.
 func (g *Guard) evaluatePath(resolvedPath string, action api.ActionType) api.SafetyLevel {
 	_, safety := g.EvaluatePath(resolvedPath, action)
@@ -919,10 +983,18 @@ func containsAny(args []string, targets []string) bool {
 		if slices.Contains(args, target) {
 			return true
 		}
-		// Support attached short/long flags such as sed -i.bak / --in-place=.bak
-		if target == "-i" || target == "--in-place" {
+		if strings.HasPrefix(target, "-") {
+			prefix := target + "="
 			for _, arg := range args {
-				if strings.HasPrefix(arg, "-i") || strings.HasPrefix(arg, "--in-place=") {
+				if strings.HasPrefix(arg, prefix) {
+					return true
+				}
+			}
+		}
+		// Support attached short flags such as sed -i.bak
+		if target == "-i" {
+			for _, arg := range args {
+				if strings.HasPrefix(arg, "-i") {
 					return true
 				}
 			}
@@ -938,6 +1010,171 @@ func containsAll(args []string, targets []string) bool {
 		}
 	}
 	return true
+}
+
+// TouchesProtectedPath parses cmdStr and reports whether any command
+// executable, argument, redirection, or command substitution references a
+// protected control-plane, secret, XDG policy, or sensitive host path.
+func TouchesProtectedPath(cmdStr, wsRoot, homeDir string) bool {
+	if strings.TrimSpace(cmdStr) == "" || strings.TrimSpace(wsRoot) == "" {
+		return false
+	}
+	chain, err := Parse(cmdStr)
+	if err != nil {
+		return false
+	}
+
+	wsClean := filepath.Clean(wsRoot)
+	var checkChain func(ch CommandChain) bool
+	checkChain = func(ch CommandChain) bool {
+		for _, p := range ch.Pipelines {
+			for _, cmd := range p.Commands {
+				if cmd.Subshell != nil && checkChain(*cmd.Subshell) {
+					return true
+				}
+				if cmd.SubChain != nil && checkChain(*cmd.SubChain) {
+					return true
+				}
+				if commandTouchesProtectedPath(cmd, wsClean, homeDir) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return checkChain(chain)
+}
+
+func commandTouchesProtectedPath(cmd ParsedCommand, wsClean, homeDir string) bool {
+	for curr := &cmd; curr != nil; curr = curr.SubCommand {
+		if curr.Executable != "" && tokenTouchesProtectedPath(curr.Executable, wsClean, homeDir) {
+			return true
+		}
+		for _, r := range curr.Redirects {
+			if r.Target != "" && tokenTouchesProtectedPath(r.Target, wsClean, homeDir) {
+				return true
+			}
+		}
+		for _, subst := range curr.SubstCommands {
+			if commandTouchesProtectedPath(subst, wsClean, homeDir) {
+				return true
+			}
+		}
+		for _, arg := range curr.Args {
+			if tokenTouchesProtectedPath(arg, wsClean, homeDir) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func tokenTouchesProtectedPath(token, wsClean, homeDir string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+
+	if _, val, hasEq := strings.Cut(token, "="); hasEq {
+		token = strings.TrimSpace(val)
+	}
+	token = strings.TrimPrefix(token, "@")
+	if token == "" || strings.HasPrefix(token, "-") {
+		return false
+	}
+
+	isBareProtected := token == ".env" ||
+		strings.HasPrefix(token, ".env.") ||
+		token == "WORKSPACE.md" ||
+		slices.Contains(guard.DefaultProtectedDirs, token) ||
+		slices.Contains(guard.ProtectedWorkspaceWriteFiles, token)
+
+	if !strings.ContainsAny(token, "/~") && !isBareProtected {
+		return false
+	}
+	resolved := fsutils.ExpandAndCleanPath(token, wsClean, homeDir)
+	return guard.IsProtectedTarget(resolved, wsClean, homeDir)
+}
+
+var scriptInterpreters = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
+	"python": true, "python2": true, "python3": true,
+	"node": true, "nodejs": true, "bun": true, "deno": true,
+	"ruby": true, "perl": true, "awk": true,
+}
+
+// ExtractScriptPaths parses cmdStr and returns deduplicated local script paths
+// invoked directly (./scripts/foo.sh) or via common script interpreters
+// (python3 tools/gen.py, sh build.sh, awk -f script.awk).
+func ExtractScriptPaths(cmdStr string) []string {
+	cmdStr = strings.TrimSpace(cmdStr)
+	if cmdStr == "" {
+		return nil
+	}
+	chain, err := Parse(cmdStr)
+	if err != nil {
+		return nil
+	}
+
+	var candidates []string
+	var collect func(ch CommandChain)
+	collect = func(ch CommandChain) {
+		for _, p := range ch.Pipelines {
+			for _, cmd := range p.Commands {
+				if cmd.Subshell != nil {
+					collect(*cmd.Subshell)
+					continue
+				}
+				if cmd.SubChain != nil {
+					collect(*cmd.SubChain)
+				}
+				if cand := scriptCandidateFromCommand(cmd); cand != "" && !slices.Contains(candidates, cand) {
+					candidates = append(candidates, cand)
+				}
+			}
+		}
+	}
+	collect(chain)
+	return candidates
+}
+
+func scriptCandidateFromCommand(cmd ParsedCommand) string {
+	curr := &cmd
+	for curr.SubCommand != nil {
+		curr = curr.SubCommand
+	}
+	execName := strings.TrimSpace(curr.Executable)
+	if execName == "" || curr.HasCmdSubst {
+		return ""
+	}
+	if strings.Contains(execName, "/") || strings.HasPrefix(execName, ".") {
+		return execName
+	}
+	base := filepath.Base(execName)
+	if !scriptInterpreters[base] {
+		return ""
+	}
+	for i := 0; i < len(curr.Args); i++ {
+		arg := curr.Args[i]
+		dyn := i < len(curr.ArgsIsDynamic) && curr.ArgsIsDynamic[i]
+		if arg == "-c" || arg == "-e" || arg == "--eval" {
+			return ""
+		}
+		if base == "awk" && arg == "-f" && i+1 < len(curr.Args) {
+			if i+1 < len(curr.ArgsIsDynamic) && curr.ArgsIsDynamic[i+1] {
+				return ""
+			}
+			return curr.Args[i+1]
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if dyn {
+			return ""
+		}
+		return arg
+	}
+	return ""
 }
 
 // Match checks if a parsed command matches a user's permission grant target.

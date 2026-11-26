@@ -575,7 +575,7 @@ func NewToolsNode(cfg ToolsNodeConfig) *ToolsNode {
 
 // permissionReviewTimeout bounds one auto-mode permission review so slow or
 // cold-stalled inference falls back promptly to the human approval flow.
-const permissionReviewTimeout = 3 * time.Second
+const permissionReviewTimeout = 5 * time.Second
 
 type cachedAutoReview struct {
 	res      permreview.Result
@@ -618,7 +618,13 @@ func (n *ToolsNode) reviewAutoAsk(ctx context.Context, req *api.PermissionReques
 	}
 	reviewCtx, cancel := context.WithTimeout(ctx, permissionReviewTimeout)
 	defer cancel()
-	res := n.reviewer.Review(reviewCtx, permreview.ReviewRequest{Request: *req, UserIntent: userIntent})
+	res := n.reviewer.Review(reviewCtx, permreview.ReviewRequest{
+		Request:         *req,
+		InsideWorkspace: plan.InsideWorkspace,
+		ProtectedPath:   plan.ProtectedPath,
+		ScriptPaths:     plan.ScriptPaths,
+		UserIntent:      userIntent,
+	})
 	if res.WarnOnce != "" {
 		n.logger.Warn(res.WarnOnce)
 	}
