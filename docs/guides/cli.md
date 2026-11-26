@@ -208,7 +208,7 @@ Some built-in commands:
 | `/context` | `/context` | Show visual token usage grid and context window breakdown by category. |
 | `/usage` | `/usage [session\|workspace\|global\|quotas]` | Open the usage browser for the session, the workspace, all workspaces, or quota windows. |
 | `/stats` | `/stats [session\|workspace\|global]` | Open the inference speed browser: prompt processing and token generation rates per model. |
-| `/workspace` | `/workspace [reload]` | Reload the active workspace resources from disk. |
+| `/workspace`, `/ws` | `/workspace [reload] [--force\|-y]` | Reload workspace resources after editing them on disk. If the session has history, confirm **Reload workspace** or press Esc to cancel: a change to the system prompt or tools can make previously cached input billable at the uncached rate next turn. Empty sessions reload immediately; use `/ws -y` to skip the prompt deliberately. |
 | `/exit` | `/exit` (or `/quit`, `/q`) | Exit the REPL. |
 
 Resolve any pending permission request or question before using `/compact`. Commands and background task notifications remain queued until the interaction is resolved.

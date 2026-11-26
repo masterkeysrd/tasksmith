@@ -41,7 +41,11 @@ editable tabs; an in-flight write shows `· saving…`.
 knobs, and `excludedCommands`. The `filesystem.{allowWrite,denyWrite,denyRead,allowRead}` and
 `network.{mode,allowedDomains,deniedDomains}` lists are edited in the JSON file (hand the user the
 exact snippet; see the `tasksmith-customizations` skill's `sandbox-and-permissions.md` for the
-full schema and merge semantics). After a hand-edit, run `/workspace reload`.
+full schema and merge semantics). After a hand-edit, run `/workspace reload` (or `/ws`). With
+conversation history, a change to the system prompt or tool definitions can invalidate the provider
+prompt cache and cause cached input tokens to be billed at the uncached rate next turn. Use ↑/↓ and
+Enter to choose **Reload workspace** or **Cancel**, or press Esc to cancel. Drafts and zero-turn
+sessions reload immediately. Use `--force` or `-y` (e.g. `/ws -y`) to skip confirmation.
 
 ## `--sandbox native|local` startup flag
 

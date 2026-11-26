@@ -117,7 +117,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/init`** | | *(none)* | Invokes the built-in `system:init` command to inspect codebase conventions and interactively generate or update `AGENTS.md`. |
 | **`/review`** | | `[pr, branch, commit, or diff scope]` | Starts a clean, read-only `code-reviewer` session. See [Code reviews](../guides/cli.md#code-reviews). |
 | **`/grill-me`** | | `[idea, plan, or problem]` | Runs a design interview in the current session without writing files or switching modes. Use it before `/plan` to settle design decisions. See [Design Interviews](../guides/cli.md#design-interviews-grill-me). |
-| **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
+| **`/workspace`** | `/ws` | `[reload] [--force\|-y]` | Reloads workspace resources (`refresh` is an alias for `reload`). With conversation history, warns that changes can invalidate the provider prompt cache and cause cached input tokens to be billed at the uncached rate next turn. Use ↑/↓ to select **Reload workspace** or **Cancel** (default), Enter to confirm, or Esc to cancel. Zero-turn sessions reload immediately; `--force` or `-y` skips confirmation. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
 
 ### Headless Slash Commands (`exec`)
@@ -248,7 +248,7 @@ Disabled servers stay in the list so `e` can enable them again. Disabling a serv
 
 With nothing configured, the view offers `R` / `Ctrl+R` to reload, which is what you need right after adding a manifest.
 
-`/mcp auth <name>` and `/mcp restart <name>` run the same actions as `a` and `r` with no confirmation step: naming the server in the composer is already the decision. `/mcp auth <name>` opens the browser directly on that server's [authorization screen](#mcp-authentication); `/mcp restart <name>` opens nothing and reports in the conversation timeline, like `/daemon restart` and `/workspace reload`. A server that authenticates with static credentials instead of an authorization redirect gets a message naming the credential to provide — the environment variable, header, or credential file — because there is no browser flow to open; set it and run `/mcp restart <name>`.
+`/mcp auth <name>` and `/mcp restart <name>` run the same actions as `a` and `r` with no confirmation step: naming the server in the composer is already the decision. `/mcp auth <name>` opens the browser directly on that server's [authorization screen](#mcp-authentication); `/mcp restart <name>` opens nothing and reports in the conversation timeline, like `/daemon restart` and `/workspace reload --force`. A server that authenticates with static credentials instead of an authorization redirect gets a message naming the credential to provide — the environment variable, header, or credential file — because there is no browser flow to open; set it and run `/mcp restart <name>`.
 
 ### MCP Server Overview
 

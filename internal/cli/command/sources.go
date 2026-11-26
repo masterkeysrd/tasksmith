@@ -92,6 +92,14 @@ func (r *Registry) Sources() []autocomplete.Source {
 	// The /mcp subcommands take a server name as their second argument, which the
 	// command's own "/mcp " trigger cannot reach, so they register their own.
 	sources = append(sources, mcpServerNameSources()...)
+	for _, name := range []string{"workspace", "ws"} {
+		for _, sub := range []string{"reload", "refresh"} {
+			sources = append(sources, autocomplete.Source{
+				Name: "commands:" + name + "-" + sub, Trigger: "/" + name + " " + sub + " ",
+				StartOnly: true, Complete: autocomplete.Static(workspaceForceFlags...),
+			})
+		}
+	}
 
 	candidates := make([]autocomplete.Candidate, 0, len(commands))
 	for i := 0; i < len(commandCandidates) || i < len(skillCandidates); i++ {
