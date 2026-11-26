@@ -30,7 +30,7 @@ git diff | tasksmith -p "review this diff"
 | **`daemon status`** | `tasksmith daemon status` | Checks daemon process health, build version, IPC socket connectivity, and active workspace runtimes. |
 | **`version`** | `tasksmith version` | Prints the client build version and, when reachable without spawning, the running daemon's version. |
 | **`auth login`** | `tasksmith auth login [provider] [--no-browser] [--paste]` | Starts the provider's browser sign-in and waits for it to settle. Antigravity prints the URL and supports `--no-browser` and `--paste`. Codex, Claude Code, and GitHub Copilot require browser sign-in on the daemon host and do not support those flags. Name the provider when multiple OAuth presets are available. |
-| **`auth status`** | `tasksmith auth status [provider]` | With a provider name, prints `<provider>: <status> (<account>)`; with none, prints a `PROVIDER / AUTH / STATUS` table over all configured providers. |
+| **`auth status`** | `tasksmith auth status [provider] [--json]` | With a name, shows provider, auth type, status and available account, scope, default model, model count and error details. Without a name, lists `PROVIDER / AUTH / STATUS / ACCOUNT / SCOPE`. `--json` writes an indented object for one provider or an array for the full list. |
 | **`auth logout`** | `tasksmith auth logout [provider]` | Removes the daemon-stored OAuth credentials for one provider and reports `Signed out of <provider>` or `<provider> was not signed in`. |
 
 All `auth` subcommands require a running daemon (`tasksmith daemon start`) and never spawn one.

@@ -42,6 +42,13 @@ tasksmith auth login codex
 tasksmith auth status codex
 ```
 
+Check the `Status:` and `Account:` rows to confirm which account signed in.
+The summary also shows the auth type and, when available, the provider scope,
+default model, model count, and error. Omit the provider from `auth status`
+to compare accounts and scopes across presets. For scripts, use
+`tasksmith auth status codex --json` for one object (including model IDs when
+available), or `tasksmith auth status --json` for the full array.
+
 Omit the provider on login only if exactly one OAuth provider is configured.
 For Antigravity over SSH, print the URL and submit the final redirect:
 

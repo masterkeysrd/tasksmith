@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,16 +41,24 @@ func TestAuthStatusAndLogoutCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth status: %v (out=%q)", err, out)
 	}
-	if !strings.Contains(out, "PROVIDER") || !strings.Contains(out, "antigravity") || !strings.Contains(out, "oauth2") {
-		t.Fatalf("auth status table = %q, want a provider table listing antigravity/oauth2", out)
+	header, _, _ := strings.Cut(out, "\n")
+	if strings.Join(strings.Fields(header), " ") != "PROVIDER AUTH STATUS ACCOUNT SCOPE" ||
+		!strings.Contains(strings.Join(strings.Fields(out), " "), "antigravity oauth2 needs credentials - system") {
+		t.Fatalf("unexpected auth status table: %q", out)
 	}
 
-	out, _, err = execCLI(t, "", append(base, "auth", "status", "antigravity")...)
-	if err != nil {
-		t.Fatalf("auth status antigravity: %v", err)
+	out, stderr, err := execCLI(t, "", append(base, "auth", "status", "antigravity")...)
+	if err != nil || stderr != "" || !strings.HasPrefix(out, "Provider:") || strings.Contains(out, "\n\n") {
+		t.Fatalf("auth status antigravity: stdout=%q stderr=%q err=%v", out, stderr, err)
 	}
-	if !strings.Contains(out, "antigravity: idle") {
-		t.Fatalf("signed-out status = %q, want 'antigravity: idle'", out)
+	fields := strings.Join(strings.Fields(out), " ")
+	for _, want := range []string{
+		"Provider: antigravity", "Auth: oauth2", "Status: idle",
+		"Scope: system", "Default model:", "Models:",
+	} {
+		if !strings.Contains(fields, want) {
+			t.Errorf("missing %q in status: %q", want, out)
+		}
 	}
 
 	tok := &oauth2.Token{
@@ -65,7 +74,8 @@ func TestAuthStatusAndLogoutCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth status after sign-in: %v", err)
 	}
-	if !strings.Contains(out, "authenticated") || !strings.Contains(out, "dev@example.com") {
+	fields = strings.Join(strings.Fields(out), " ")
+	if !strings.Contains(fields, "Status: authenticated") || !strings.Contains(fields, "Account: dev@example.com") {
 		t.Fatalf("signed-in status = %q, want authenticated with the account", out)
 	}
 
@@ -86,6 +96,39 @@ func TestAuthStatusAndLogoutCommands(t *testing.T) {
 	}
 	if !strings.Contains(out, "was not signed in") {
 		t.Fatalf("repeat logout output = %q, want the not-signed-in notice", out)
+	}
+}
+
+func TestAuthStatusJSON(t *testing.T) {
+	_, sockPath, _ := setupCLITestDaemon(t, nil)
+	base := []string{"--socket", sockPath, "auth", "status", "--json"}
+
+	out, stderr, err := execCLI(t, "", base...)
+	var providers []struct {
+		Name string `json:"name"`
+	}
+	if err != nil || stderr != "" || !strings.HasPrefix(out, "[\n  {") ||
+		json.Unmarshal([]byte(out), &providers) != nil || len(providers) == 0 || providers[0].Name == "" {
+		t.Fatalf("provider list: stdout=%q stderr=%q err=%v", out, stderr, err)
+	}
+
+	for _, tc := range []struct{ provider, status string }{
+		{"antigravity", "idle"},
+		{"ollama", "local"},
+	} {
+		out, stderr, err := execCLI(t, "", append(base, tc.provider)...)
+		var details authStatusDetails
+		if err != nil || stderr != "" || !strings.HasPrefix(out, "{\n  ") || json.Unmarshal([]byte(out), &details) != nil {
+			t.Fatalf("provider details: stdout=%q stderr=%q err=%v", out, stderr, err)
+		}
+		if details.Provider != tc.provider || details.Status != tc.status || details.Scope != "system" {
+			t.Errorf("unexpected details for %s: %s", tc.provider, out)
+		}
+	}
+
+	out, _, err = execCLI(t, "", append(base, "unknown-provider")...)
+	if err == nil || out != "" {
+		t.Fatalf("unknown provider: stdout=%q err=%v", out, err)
 	}
 }
 

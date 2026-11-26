@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"bufio"
+	"cmp"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -46,14 +49,16 @@ func newAuthCmd(rootOpts *rootOptions) *cobra.Command {
 	login.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the authorization URL instead of opening a browser")
 	login.Flags().BoolVar(&paste, "paste", false, "Finish by pasting the redirect URL (for remote or headless hosts)")
 
+	var jsonStatus bool
 	status := &cobra.Command{
 		Use:   "status [provider]",
 		Short: "Show provider sign-in status",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuthStatus(cmd, rootOpts, args)
+			return runAuthStatus(cmd, rootOpts, args, jsonStatus)
 		},
 	}
+	status.Flags().BoolVar(&jsonStatus, "json", false, "Print provider status as JSON")
 
 	logout := &cobra.Command{
 		Use:   "logout [provider]",
@@ -239,7 +244,7 @@ func reportAuthLoginResult(out io.Writer, provider string, resp *api.ProviderAut
 	}
 }
 
-func runAuthStatus(cmd *cobra.Command, rootOpts *rootOptions, args []string) error {
+func runAuthStatus(cmd *cobra.Command, rootOpts *rootOptions, args []string, asJSON bool) error {
 	ctx := cmd.Context()
 	c, err := authClient(ctx, rootOpts)
 	if err != nil {
@@ -249,49 +254,130 @@ func runAuthStatus(cmd *cobra.Command, rootOpts *rootOptions, args []string) err
 	defer cancel()
 
 	out := cmd.OutOrStdout()
-
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
 		provider := strings.ToLower(strings.TrimSpace(args[0]))
-		resp, err := c.GetProviderAuthStatus(sctx, provider)
+		status, err := singleAuthStatus(sctx, c, provider)
 		if err != nil {
 			return err
 		}
-		if resp.Account != "" {
-			_, _ = fmt.Fprintf(out, "%s: %s (%s)\n", provider, resp.Status, resp.Account)
-		} else {
-			_, _ = fmt.Fprintf(out, "%s: %s\n", provider, resp.Status)
+		if asJSON {
+			return encoder.Encode(status)
 		}
-		return nil
+		return status.writeDetails(out)
 	}
 
 	providers, err := c.ListProviders(sctx)
 	if err != nil {
 		return err
 	}
+	if asJSON {
+		if providers == nil {
+			providers = []api.ProviderSummary{}
+		}
+		return encoder.Encode(providers)
+	}
 	if len(providers) == 0 {
-		_, _ = fmt.Fprintln(out, "No providers are configured.")
-		return nil
+		_, err := fmt.Fprintln(out, "No providers are configured.")
+		return err
 	}
 
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	defer func() { _ = w.Flush() }()
-	_, _ = fmt.Fprintln(w, "PROVIDER\tAUTH\tSTATUS")
+	_, _ = fmt.Fprintln(w, "PROVIDER\tAUTH\tSTATUS\tACCOUNT\tSCOPE")
 	for _, p := range providers {
-		authType := p.AuthType
-		if authType == "" {
-			authType = "bearer"
-		}
-		status := p.Status
-		if status == "" {
-			if p.HasKey {
-				status = "ready"
-			} else {
-				status = "needs credentials"
-			}
-		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", p.Name, authType, status)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", p.Name, cmp.Or(p.AuthType, "bearer"),
+			providerReadiness(p), cmp.Or(p.Account, "-"), cmp.Or(p.Scope, "-"))
 	}
-	return nil
+	return w.Flush()
+}
+
+func providerReadiness(p api.ProviderSummary) string {
+	if p.Status != "" {
+		return p.Status
+	}
+	if p.HasKey {
+		return "ready"
+	}
+	return "needs credentials"
+}
+
+type authStatusDetails struct {
+	Provider     string   `json:"provider"`
+	DisplayName  string   `json:"display_name,omitempty"`
+	AuthType     string   `json:"auth_type"`
+	AuthEnv      string   `json:"auth_env,omitempty"`
+	Status       string   `json:"status"`
+	Account      string   `json:"account,omitempty"`
+	Scope        string   `json:"scope,omitempty"`
+	DefaultModel string   `json:"default_model,omitempty"`
+	Models       []string `json:"models,omitempty"`
+	Error        string   `json:"error,omitempty"`
+}
+
+func singleAuthStatus(ctx context.Context, c *client.Client, provider string) (authStatusDetails, error) {
+	flow, flowErr := c.GetProviderAuthStatus(ctx, provider)
+	var details authStatusDetails
+	apiErr, badRequest := errors.AsType[*api.APIError](flowErr)
+	if flowErr != nil && (!badRequest || apiErr.Code != "bad_request") {
+		return details, flowErr
+	}
+
+	details.Provider = provider
+	providers, listErr := c.ListProviders(ctx)
+	if listErr != nil && flowErr != nil {
+		return details, listErr
+	}
+	for _, p := range providers {
+		if !strings.EqualFold(p.Name, provider) {
+			continue
+		}
+		details.DisplayName = p.DisplayName
+		details.AuthType = cmp.Or(p.AuthType, "bearer")
+		details.AuthEnv = p.AuthEnv
+		details.Account = p.Account
+		details.Status = providerReadiness(p)
+		details.Scope = p.Scope
+		details.DefaultModel = p.DefaultModel
+		details.Models = p.Models
+		if flowErr != nil && details.AuthType != "oauth2" {
+			return details, nil
+		}
+		break
+	}
+	if flowErr != nil {
+		return details, flowErr
+	}
+
+	details.AuthType = cmp.Or(details.AuthType, "oauth2")
+	details.Status = cmp.Or(flow.Status, details.Status)
+	details.Account = cmp.Or(flow.Account, details.Account)
+	details.Error = flow.Error
+	return details, nil
+}
+
+func (d authStatusDetails) writeDetails(out io.Writer) error {
+	name := d.Provider
+	if d.DisplayName != "" && d.DisplayName != name {
+		name = fmt.Sprintf("%s (%s)", d.DisplayName, name)
+	}
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	row := func(label, value string) {
+		if value != "" {
+			_, _ = fmt.Fprintf(w, "%s:\t%s\n", label, value)
+		}
+	}
+	row("Provider", name)
+	row("Auth", d.AuthType)
+	row("Status", d.Status)
+	row("Account", d.Account)
+	row("Scope", d.Scope)
+	row("Default model", d.DefaultModel)
+	if len(d.Models) > 0 {
+		row("Models", fmt.Sprint(len(d.Models)))
+	}
+	row("Error", d.Error)
+	return w.Flush()
 }
 
 func runAuthLogout(cmd *cobra.Command, rootOpts *rootOptions, provider string) error {
