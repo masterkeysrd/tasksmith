@@ -46,7 +46,7 @@ homebrew_casks:
       - tasksmith
     directory: Casks
     homepage: "https://github.com/masterkeysrd/tasksmith"
-    description: "Extensible, daemon-backed AI coding agent for the terminal with OS-level sandboxing"
+    description: "Provider-agnostic coding agents. Deterministic environments. Kernel-sandboxed AI coding CLI and daemon."
     license: "Apache-2.0"
     skip_upload: auto
     commit_msg_template: "chore(brew): update {{ .ProjectName }} cask for {{ .Tag }}"
