@@ -15,7 +15,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	loomantigravity "github.com/masterkeysrd/loom/providers/antigravity"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
@@ -538,8 +538,7 @@ func (d testOAuthDriver) ExtractAccount(*oauth2.Token) string {
 }
 
 func TestAntigravityOAuthRefreshOutlivesInitContext(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-test")
 
 	var (
 		refreshHits int

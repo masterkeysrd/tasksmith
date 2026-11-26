@@ -119,7 +119,7 @@ Requests requiring tools, tool history, media, or a response schema fail when th
 
 ### Authentication Schemes
 
-For HTTP providers, `spec.auth.type` selects how the resolved credential is put on the wire. Matching is case-insensitive.
+For HTTP providers, `spec.auth.type` selects how the resolved credential is put on the wire. Matching is case-insensitive. The provider HTTP client follows redirects only within the same scheme, hostname, and effective port. Creating a preset-backed provider at a different origin requires an explicit credential or `none`; changing just the URL path preserves the preset binding.
 
 [Claude Code](./providers/claudecode.md) and [GitHub Copilot](./providers/github-copilot.md) instead use vendor CLI sign-in. Set `metadata.name` and `spec.type` to the same canonical identifier (`claudecode` or `github-copilot`) and use only `spec.auth.type: oauth2`. Do not set `spec.endpoint`, `spec.headers`, `spec.config`, or additional auth fields. The installed vendor CLI handles sign-in in the browser on the daemon host. These providers use subscription quota rather than per-token pricing; TaskSmith reports quota windows only when the vendor exposes them.
 

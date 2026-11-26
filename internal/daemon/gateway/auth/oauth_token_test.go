@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"golang.org/x/oauth2"
 )
 
 func TestProviderTokenLifecycleAndMultiAccount(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+	testutils.SetupXDG(t, "tasksmith-test")
 	prov := "testoauth"
 
 	// 1. Initial state: not exists
@@ -83,6 +83,20 @@ func TestProviderTokenLifecycleAndMultiAccount(t *testing.T) {
 	}
 }
 
+func TestProviderTokenDoesNotCrossAccounts(t *testing.T) {
+	testutils.SetupXDG(t, "account-test")
+	if err := SaveProviderToken("test", &oauth2.Token{AccessToken: "a", RefreshToken: "refresh-a"}, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveProviderToken("test", &oauth2.Token{AccessToken: "b"}, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	tok, account, err := LoadProviderToken("test")
+	if err != nil || account != "bob" || tok.RefreshToken != "" {
+		t.Fatal("new account inherited old credentials", err)
+	}
+}
+
 func TestExtractEmailFromToken(t *testing.T) {
 	// 1. Nil token
 	if got := ExtractEmailFromToken(nil); got != "" {
@@ -131,7 +145,7 @@ func TestOAuthDriverRegistry(t *testing.T) {
 
 func TestDeleteProviderToken(t *testing.T) {
 	t.Run("MissingFileReportsNothingDeleted", func(t *testing.T) {
-		xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+		testutils.SetupXDG(t, "tasksmith-test")
 		deleted, err := DeleteProviderToken("ghost", "")
 		if err != nil {
 			t.Fatalf("DeleteProviderToken on a missing file: %v", err)
@@ -142,7 +156,7 @@ func TestDeleteProviderToken(t *testing.T) {
 	})
 
 	t.Run("FullLogoutRemovesCredentials", func(t *testing.T) {
-		xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+		testutils.SetupXDG(t, "tasksmith-test")
 		tok := &oauth2.Token{AccessToken: "a1", RefreshToken: "r1", Expiry: time.Now().Add(time.Hour).UTC()}
 		if err := SaveProviderToken("twoprov", tok, "alice@example.com"); err != nil {
 			t.Fatalf("SaveProviderToken: %v", err)
@@ -170,7 +184,7 @@ func TestDeleteProviderToken(t *testing.T) {
 	})
 
 	t.Run("AccountLogoutReassignsActiveAccount", func(t *testing.T) {
-		xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+		testutils.SetupXDG(t, "tasksmith-test")
 		alice := &oauth2.Token{AccessToken: "a1", RefreshToken: "r1", Expiry: time.Now().Add(time.Hour).UTC()}
 		bob := &oauth2.Token{AccessToken: "b1", RefreshToken: "r2", Expiry: time.Now().Add(2 * time.Hour).UTC()}
 		if err := SaveProviderToken("multiprov", alice, "alice@example.com"); err != nil {
@@ -205,7 +219,7 @@ func TestDeleteProviderToken(t *testing.T) {
 	})
 
 	t.Run("LastAccountLogoutRemovesFile", func(t *testing.T) {
-		xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+		testutils.SetupXDG(t, "tasksmith-test")
 		tok := &oauth2.Token{AccessToken: "a1", RefreshToken: "r1", Expiry: time.Now().Add(time.Hour).UTC()}
 		if err := SaveProviderToken("lastprov", tok, "alice@example.com"); err != nil {
 			t.Fatalf("SaveProviderToken: %v", err)

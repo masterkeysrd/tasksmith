@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"golang.org/x/oauth2"
 )
@@ -79,16 +80,13 @@ func SaveProviderToken(provider string, tok *oauth2.Token, account string) error
 	if account == "" {
 		account = ExtractEmailFromToken(tok)
 	}
-	if account == "" && existing.Email != "" {
-		account = existing.Email
-	}
 
 	now := time.Now().UTC()
 	refreshToken := tok.RefreshToken
 	if refreshToken == "" && account != "" {
 		if prevAcc, ok := existing.Accounts[account]; ok && prevAcc.RefreshToken != "" {
 			refreshToken = prevAcc.RefreshToken
-		} else if existing.RefreshToken != "" {
+		} else if existing.Email == account {
 			refreshToken = existing.RefreshToken
 		}
 	}
@@ -114,12 +112,7 @@ func SaveProviderToken(provider string, tok *oauth2.Token, account string) error
 		return fmt.Errorf("gateway: create token directory: %w", err)
 	}
 
-	data, err := json.MarshalIndent(existing, "", "  ")
-	if err != nil {
-		return fmt.Errorf("gateway: marshal token: %w", err)
-	}
-
-	if err := os.WriteFile(tokenPath, data, 0o600); err != nil {
+	if err := fsutils.WriteJSONAtomic(tokenPath, existing, 0o600); err != nil {
 		return fmt.Errorf("gateway: write token: %w", err)
 	}
 
@@ -219,12 +212,7 @@ func SwitchProviderAccount(provider string, account string) error {
 	stored.RefreshToken = acc.RefreshToken
 	stored.Expiry = acc.Expiry
 
-	out, err := json.MarshalIndent(stored, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(tokenPath, out, 0o600)
+	return fsutils.WriteJSONAtomic(tokenPath, stored, 0o600)
 }
 
 // HasProviderToken reports whether an on-disk OAuth token exists for provider.
@@ -300,11 +288,7 @@ func DeleteProviderToken(provider string, account string) (bool, error) {
 		return true, nil
 	}
 
-	out, err := json.MarshalIndent(stored, "", "  ")
-	if err != nil {
-		return false, fmt.Errorf("gateway: marshal token: %w", err)
-	}
-	if err := os.WriteFile(tokenPath, out, 0o600); err != nil {
+	if err := fsutils.WriteJSONAtomic(tokenPath, stored, 0o600); err != nil {
 		return false, fmt.Errorf("gateway: write token: %w", err)
 	}
 	return true, nil

@@ -20,6 +20,7 @@ import (
 	loomclaudecode "github.com/masterkeysrd/loom/providers/claudecode"
 	loomcodex "github.com/masterkeysrd/loom/providers/codex"
 	loomcopilot "github.com/masterkeysrd/loom/providers/copilot"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/providers"
@@ -28,8 +29,7 @@ import (
 )
 
 func TestSubscriptionGatewayProviders(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-subscription-gateway-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-subscription-gateway-test")
 	binDir := t.TempDir()
 	t.Setenv("PATH", binDir)
 	t.Setenv("COPILOT_DISABLE_KEYTAR", "0")
@@ -310,8 +310,7 @@ func (c *subscriptionGatewayLiveCatalog) GetModel(_ context.Context, id string) 
 }
 
 func TestGatewayQuotaAccountSources(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-quota-account-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-quota-account-test")
 	const browserAccount = "browser@example.test"
 	const tokenAccount = "token@example.test"
 	for _, tc := range []struct {

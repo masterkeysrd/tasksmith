@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"github.com/masterkeysrd/tasksmith/internal/core/netutils"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,6 +37,41 @@ func captureTransport(t *testing.T, auth *Config, token string, custom map[strin
 	defer func() { _ = resp.Body.Close() }()
 
 	return got
+}
+
+func TestProviderRedirectOrigins(t *testing.T) {
+	foreign := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("foreign origin contacted") }))
+	defer foreign.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/same":
+			http.Redirect(w, r, "/target", http.StatusFound)
+		case "/cross":
+			http.Redirect(w, r, foreign.URL, http.StatusFound)
+		case "/target":
+			if r.Header.Get("Authorization") != "Bearer test" {
+				t.Error("missing same-origin credential")
+			}
+		}
+	}))
+	defer origin.Close()
+	client := &http.Client{
+		Transport:     BuildHTTPTransport(nil, &Config{Type: TypeBearer}, "test", nil, "openai"),
+		CheckRedirect: netutils.CheckSameOriginRedirect,
+	}
+	for _, path := range []string{"/same", "/cross"} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, origin.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := client.Do(req)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		if (err != nil) != (path == "/cross") {
+			t.Fatalf("%s: %v", path, err)
+		}
+	}
 }
 
 func TestResolveCredentialNoneSkipsSources(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"golang.org/x/oauth2"
 )
 
@@ -93,8 +93,7 @@ func assertBrowserWriteLocked(t *testing.T, m *Manager, provider string) {
 }
 
 func TestManagerPKCELifecycleAndQueries(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-auth-manager-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-auth-manager-test")
 
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -180,8 +179,7 @@ func TestManagerPKCELifecycleAndQueries(t *testing.T) {
 }
 
 func TestManagerFlowCancellationKeepsOutcome(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-auth-keepoutcome-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-auth-keepoutcome-test")
 
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

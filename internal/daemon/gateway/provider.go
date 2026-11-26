@@ -25,6 +25,7 @@ import (
 	openaiopt "github.com/openai/openai-go/v3/option"
 	"google.golang.org/genai"
 
+	"github.com/masterkeysrd/tasksmith/internal/core/netutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/providers"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
@@ -152,7 +153,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 	inst.credRevision = auth.SecretRevision(token)
 
 	transport := auth.BuildHTTPTransport(nil, cfg.Auth, token, cfg.Headers, pType)
-	httpClient := &http.Client{Transport: transport}
+	httpClient := &http.Client{Transport: transport, CheckRedirect: netutils.CheckSameOriginRedirect}
 
 	switch pType {
 	case "ollama":

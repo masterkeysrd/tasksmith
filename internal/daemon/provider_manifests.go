@@ -17,6 +17,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/hash"
+	"github.com/masterkeysrd/tasksmith/internal/core/netutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	providerauth "github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
@@ -464,7 +466,7 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 	endpoint := strings.TrimSpace(req.Endpoint)
 	authEnv := strings.TrimSpace(req.AuthEnv)
 	apiKey := strings.TrimSpace(req.APIKey)
-	authType := strings.TrimSpace(req.AuthType)
+	authType := strings.ToLower(strings.TrimSpace(req.AuthType))
 	for _, kind := range []string{name, provType} {
 		if !d.auth.IsCanonicalBrowserOnly(kind) {
 			continue
@@ -501,6 +503,30 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 		spec = *preset.Spec.DeepCopy()
 		spec.Enabled = nil
 		if endpoint != "" {
+			if !netutils.SameOrigin(spec.Endpoint, endpoint) {
+				if authType == warp.AuthTypeOAuth2 {
+					return nil, &api.APIError{
+						StatusCode: http.StatusBadRequest, Code: "bad_request",
+						Message: "oauth2 authentication cannot be used with a different endpoint origin",
+					}
+				}
+				hasCredentialedAuth := spec.Auth != nil && spec.Auth.Type != "" && spec.Auth.Type != warp.AuthTypeNone
+				if hasCredentialedAuth {
+					if spec.Auth.Type == warp.AuthTypeOAuth2 {
+						spec.Auth = nil
+					}
+					switch {
+					case apiKey != "" && authEnv == "":
+						prefix := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+						authEnv = prefix + "_ENDPOINT_" + hash.SHA256String(endpoint)[:32] + "_API_KEY"
+					case apiKey == "" && authEnv == "" && authType != warp.AuthTypeNone:
+						return nil, &api.APIError{
+							StatusCode: http.StatusBadRequest, Code: "bad_request",
+							Message: "a new endpoint origin requires an explicit credential or auth type none",
+						}
+					}
+				}
+			}
 			spec.Endpoint = endpoint
 		}
 	} else if preset != nil && spec.Endpoint == "" {

@@ -21,6 +21,7 @@ import (
 	loomcodex "github.com/masterkeysrd/loom/providers/codex"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/providers"
@@ -183,8 +184,7 @@ func (f codexTestTransport) RoundTrip(req *http.Request) (*http.Response, error)
 }
 
 func TestCodexCatalogInferenceAndLogout(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-codex-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-codex-test")
 	ctx := t.Context()
 	cfg := Config{Providers: []ProviderConfig{{
 		Name: providers.CodexName, Type: providers.CodexName, Auth: &auth.Config{Type: auth.TypeOAuth2},

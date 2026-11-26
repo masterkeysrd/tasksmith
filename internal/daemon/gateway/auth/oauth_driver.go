@@ -154,13 +154,20 @@ func newRefreshableOAuthTokenSource(ctx context.Context, provider string, driver
 }
 
 func (s *refreshableOAuthTokenSource) buildInner() oauth2.TokenSource {
+	var loadedAccount string
 	return loomauth.NewPersistentTokenSource(s.ctx, s.driver.OAuthConfig(), loomauth.PersistentConfig{
 		Load: func() (*oauth2.Token, error) {
-			tok, _, err := LoadProviderToken(s.provider)
+			tok, account, err := LoadProviderToken(s.provider)
+			if err == nil {
+				loadedAccount = account
+			}
 			return tok, err
 		},
 		Save: func(tok *oauth2.Token) error {
 			account := s.driver.ExtractAccount(tok)
+			if account == "" {
+				account = loadedAccount
+			}
 			return SaveProviderToken(s.provider, tok, account)
 		},
 	})

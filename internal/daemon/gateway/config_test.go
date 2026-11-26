@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/loom/llm"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"golang.org/x/oauth2"
@@ -109,7 +109,7 @@ func TestUnknownAuthSchemeIsolatedPerProvider(t *testing.T) {
 }
 
 func TestOAuthConfigFingerprintTracksAccountIdentity(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+	testutils.SetupXDG(t, "tasksmith-test")
 
 	gwCfg := Config{
 		Providers: []ProviderConfig{{

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	loomauth "github.com/masterkeysrd/loom/auth"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"golang.org/x/oauth2"
 )
 
@@ -161,8 +161,7 @@ type testBrowserCreds struct {
 }
 
 func TestBrowserSessionStoreForceRefreshConcurrentDedupAndExpiry(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-browser-force-refresh-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-browser-force-refresh-test")
 
 	var exchanges atomic.Int32
 	store := NewBrowserSessionStore(
@@ -279,8 +278,7 @@ func TestBrowserSessionStoreForceRefreshConcurrentDedupAndExpiry(t *testing.T) {
 }
 
 func TestManagerAuthHealthLifecycle(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-auth-health-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-auth-health-test")
 
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

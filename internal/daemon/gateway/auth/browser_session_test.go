@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"golang.org/x/oauth2"
 )
 
@@ -14,8 +14,7 @@ type browserTestTokenSource func() (*oauth2.Token, error)
 func (f browserTestTokenSource) Token() (*oauth2.Token, error) { return f() }
 
 func TestBrowserSessionSharesRefreshAndRevokesOldSources(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-browser-session-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-browser-session-test")
 	store := NewBrowserSessionStore(
 		"test-provider",
 		func(account string) string { return account },

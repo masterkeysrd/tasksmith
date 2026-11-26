@@ -17,7 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/providers"
@@ -361,8 +361,7 @@ func (g *authFailingGateway) LLM(_ context.Context, m models.Model, cfg llm.Mode
 }
 
 func TestDaemonLiveAuthHealthTurnFailureAndReloginRecovery(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-daemon-auth-health-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-daemon-auth-health-test")
 
 	origCodex, hadCodex := auth.GetBrowserOAuthDriver(providers.CodexName)
 	driver := &healthTestBrowserDriver{
@@ -397,7 +396,7 @@ func TestDaemonLiveAuthHealthTurnFailureAndReloginRecovery(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close(context.Background()) })
 
 	wsDir := shortTempDir(t)
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(wsDir, ".agents", "providers"), 0o755); err != nil {
@@ -533,8 +532,7 @@ spec:
 }
 
 func TestDaemonInvalidAPIKeyReportedInProvidersAndWarnings(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-daemon-invalid-key-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-daemon-invalid-key-test")
 
 	// Fake upstream OpenAI server returning 401 Unauthorized.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -569,7 +567,7 @@ func TestDaemonInvalidAPIKeyReportedInProvidersAndWarnings(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close(context.Background()) })
 
 	wsDir := shortTempDir(t)
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(wsDir, ".agents", "providers"), 0o755); err != nil {

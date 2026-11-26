@@ -186,6 +186,15 @@ func TestCreateProviderAPIWritesSecretToEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProvider: %v", err)
 	}
+	if created.HasKey || created.Status != "missing_auth" {
+		t.Fatal("new .env was loaded before reapproval")
+	}
+	approveTestWorkspace(t, cli)
+	providers, err := cli.ListWorkspaceProviders(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, _ = findWorkspaceProvider(providers, "newprov")
 	if created.Name != "newprov" || created.Status != "active" || !created.HasKey {
 		t.Fatalf("created = %+v, want active newprov with key", created)
 	}
@@ -417,6 +426,27 @@ func TestCreateProviderCopiesOAuthPresetModels(t *testing.T) {
 	}
 }
 
+func TestCreatePresetRejectsImplicitAuthAtDifferentOrigin(t *testing.T) {
+	_, cli, _ := setupDaemonTest(t, nil)
+	_, err := cli.CreateProvider(t.Context(), api.CreateProviderRequest{
+		Scope: "workspace", Name: "openai", Type: "openai", Endpoint: "https://api.example.test/v1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "explicit credential") {
+		t.Fatalf("expected credential requirement, got %v", err)
+	}
+	t.Setenv("OPENAI_API_KEY", "vendor-only")
+	created, err := cli.CreateProvider(t.Context(), api.CreateProviderRequest{
+		Scope: "workspace", Name: "openai", Type: "openai", Endpoint: "https://api.example.test/v1",
+		APIKey: "endpoint-only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.AuthEnv == "OPENAI_API_KEY" || created.AuthEnv == "" || created.HasKey {
+		t.Fatalf("custom endpoint did not isolate its credential: %+v", created)
+	}
+}
+
 // TestCreateProviderCustomTypeDoesNotInheritPreset guards the secret-leak and
 // dangling-default path: a custom provider named differently from its type may
 // borrow the preset endpoint but must never copy the preset's auth (which
@@ -543,6 +573,57 @@ func TestCreateProviderCustomModelsDropPresetDefaults(t *testing.T) {
 	}
 	if !strings.Contains(got, "my-model") || strings.Contains(got, "gpt-6") {
 		t.Errorf("model list not replaced as requested:\n%s", got)
+	}
+}
+
+func TestCreateProviderForeignOriginOAuthAndCredentialLessPresets(t *testing.T) {
+	_, cli, wsDir := setupDaemonTest(t, nil)
+	ctx := context.Background()
+
+	// Credential-less preset (ollama) at a different origin succeeds without explicit authType.
+	if _, err := cli.CreateProvider(ctx, api.CreateProviderRequest{
+		Scope:    "workspace",
+		Name:     "ollama",
+		Type:     "ollama",
+		Endpoint: "http://127.0.0.1:11434",
+	}); err != nil {
+		t.Fatalf("CreateProvider(ollama foreign origin): %v", err)
+	}
+
+	// OAuth2 preset (antigravity) at a foreign origin must reject oauth2 auth.
+	for _, authType := range []string{"oauth2", "OAuth2"} {
+		_, err := cli.CreateProvider(ctx, api.CreateProviderRequest{
+			Scope:    "workspace",
+			Name:     "antigravity",
+			Type:     "antigravity",
+			Endpoint: "https://foreign.example/v1",
+			AuthType: authType,
+		})
+		if err == nil || !strings.Contains(err.Error(), "oauth2 authentication cannot be used with a different endpoint origin") {
+			t.Fatalf("foreign-origin antigravity with %q: expected OAuth2 origin error, got %v", authType, err)
+		}
+	}
+
+	// OAuth2 preset at a foreign origin with an explicit API key must write bearer, not oauth2.
+	if _, err := cli.CreateProvider(ctx, api.CreateProviderRequest{
+		Scope:    "workspace",
+		Name:     "antigravity",
+		Type:     "antigravity",
+		Endpoint: "https://foreign.example/v1",
+		APIKey:   "endpoint-only-secret",
+	}); err != nil {
+		t.Fatalf("CreateProvider(antigravity foreign origin with APIKey): %v", err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(wsDir, ".agents", "providers", "antigravity.provider.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(manifest)
+	if strings.Contains(got, "type: oauth2") {
+		t.Errorf("foreign-origin antigravity inherited oauth2 auth:\n%s", got)
+	}
+	if !strings.Contains(got, "type: bearer") || !strings.Contains(got, "ANTIGRAVITY_ENDPOINT_") {
+		t.Errorf("expected bearer auth with endpoint-scoped env var:\n%s", got)
 	}
 }
 

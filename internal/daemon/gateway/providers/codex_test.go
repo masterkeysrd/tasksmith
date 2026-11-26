@@ -17,14 +17,14 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	loomcodex "github.com/masterkeysrd/loom/providers/codex"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway/auth"
 	"golang.org/x/oauth2"
 )
 
 func TestCodexRegistrationAndHostID(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-codex-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-codex-test")
 	driver := newCodexDriver()
 	hostID, err := driver.hostID()
 	if err != nil {
@@ -61,8 +61,7 @@ type codexRoundTripFunc func(*http.Request) (*http.Response, error)
 func (f codexRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestCodex401RefreshesOnceAndReplaysStream(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-codex-401-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-codex-401-test")
 	t.Cleanup(func() { _, _ = codexOAuth.Logout() })
 
 	var rejectRefresh atomic.Bool
