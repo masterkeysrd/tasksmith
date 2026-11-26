@@ -30,12 +30,11 @@ and tests on Linux and macOS, so anything below that fails locally fails CI.
 | Apply standard fixes | `go fix ./...` |
 | Format check | `gofmt -l .` (must print nothing; fix with `gofmt -w`) |
 | Vet | `go vet ./...` |
-| Lint (new findings only) | `golangci-lint run --new-from-rev=HEAD~ ./...` |
+| Lint all packages | `golangci-lint run ./...` |
 | Regenerate code | `go generate ./...` |
 
 - `-count=1` is required so results are never served from the test cache.
-- There is **no** `.golangci.yml`: the repo carries a large pre-existing lint baseline, so gate on
-  **new** findings. Never widen lint config or add `nolint` comments to silence a finding you caused.
+- Full-repository lint must report zero issues. Do not weaken lint configuration or add `nolint` comments.
 - `go generate ./...` runs `tools/toolgen` (see the `//go:generate` directive in
   `internal/daemon/tools/builtin/builtin.go`), which rewrites `generated.go` and the public tool
   schemas in `api/tools.go`. Regenerate whenever built-in tool definitions change, and commit the

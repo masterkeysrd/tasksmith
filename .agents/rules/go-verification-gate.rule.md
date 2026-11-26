@@ -30,10 +30,9 @@ read Go files during the task. For Go changes, run all checks from the repositor
    re-check. Never leave a listed file unformatted.
 3. **Vet** — `go vet ./...`
    Must exit `0` with no diagnostics.
-4. **Lint** — `golangci-lint run --new-from-rev=HEAD~ ./...`
-   Must report no issues attributable to your change. This repository carries a large
-   pre-existing lint baseline, so gate on **new** findings rather than a globally clean run;
-   never widen or edit lint config, or add `nolint` comments, to silence a finding you caused.
+4. **Lint** — `golangci-lint run ./...`
+   Must report zero issues across all packages. Do not weaken lint configuration or add
+   `nolint` comments to silence findings.
 5. **Tests** — `go test -count=1 ./...`
    Must pass. Scope to affected packages while iterating (for example
    `go test -count=1 ./internal/daemon/harness/...`), but always finish with the full suite.

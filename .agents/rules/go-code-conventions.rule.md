@@ -4,7 +4,7 @@ kind: Rule
 metadata:
   name: go-code-conventions
   displayName: Go Code Conventions & Readability
-  description: Enforces invariant hygiene (no redundant nil/zero guards) and readable Go vertical formatting (blank lines between declarations and multi-line composite literals)
+  description: Enforces invariant hygiene (no redundant nil/zero guards), readable Go vertical formatting, and cohesive file/test layout
   labels:
     category: quality
 spec:
@@ -31,3 +31,6 @@ Validate invariants once at construction boundaries (`New`, `Open`, `Validate`, 
    - Always separate top-level declarations (`func`, methods, `type`, `var`/`const` blocks) with a blank line, and separate distinct logical phases inside functions with blank lines.
    - Break nested or multi-field struct/slice/map literals, long function calls, table-driven test cases, and long boolean conditions across multiple lines (aim for ~100–120 characters max per line; never pack nested structs or 150+ character expressions onto one line).
    - Prefer clear multi-line blocks over dense one-liners, and keep `gofmt` clean.
+5. **Cohesive file layout and paired tests**:
+   - Keep related types and helpers together in cohesive, domain-owning `.go` files rather than splitting every small helper or feature into its own tiny detached file.
+   - Pair test files with the code files they cover (e.g., `foo.go` ↔ `foo_test.go`, or the existing package `<pkg>_test.go`). Add new regression tests to the existing paired `*_test.go` file instead of creating standalone one-off `*_test.go` files.

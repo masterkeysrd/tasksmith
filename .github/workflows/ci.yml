@@ -40,6 +40,13 @@ jobs:
     - name: Vet
       run: go vet ./...
 
+    - name: Lint
+      if: runner.os == 'Linux'
+      uses: golangci/golangci-lint-action@v9
+      with:
+        version: v2.15
+        args: ./...
+
     - name: Install bubblewrap (Linux)
       if: runner.os == 'Linux'
       run: |
