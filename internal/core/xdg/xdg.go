@@ -270,7 +270,6 @@ func RunWithTestEnv(m *testing.M, appName string) {
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(tmpDir)
 
 	origConfig := os.Getenv("XDG_CONFIG_HOME")
 	origData := os.Getenv("XDG_DATA_HOME")
@@ -291,5 +290,8 @@ func RunWithTestEnv(m *testing.M, appName string) {
 	_ = os.Setenv("TASKSMITH_APPNAME", origAppName)
 	ClearCache()
 
+	if err := os.RemoveAll(tmpDir); err != nil {
+		panic(err)
+	}
 	os.Exit(code)
 }

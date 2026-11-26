@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -40,5 +42,28 @@ func (s *Server) CreateMux(ctx context.Context, routers ...Router) http.Handler 
 		})
 	})
 
-	return mux
+	return validateWorkspace(mux)
+}
+
+func cleanWorkspacePath(raw string) (string, bool) {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		return "", true
+	}
+	if !filepath.IsAbs(path) || strings.ContainsRune(path, '\x00') {
+		return "", false
+	}
+	return filepath.Clean(path), true
+}
+
+func validateWorkspace(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cwd, ok := cleanWorkspacePath(RequestWorkspace(r)); !ok {
+			WriteBadRequest(w, "workspace must be an absolute path without NUL bytes")
+			return
+		} else if cwd != "" {
+			r.Header.Set(api.HeaderCWD, cwd)
+		}
+		next.ServeHTTP(w, r)
+	})
 }

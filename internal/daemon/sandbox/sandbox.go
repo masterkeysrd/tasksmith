@@ -464,7 +464,7 @@ func (s *session) Upload(ctx context.Context, hostSrc, sandboxDst string) error 
 	})
 }
 
-func (s *session) uploadFile(ctx context.Context, hostFile, relDst string, perm fs.FileMode) error {
+func (s *session) uploadFile(ctx context.Context, hostFile, relDst string, perm fs.FileMode) (retErr error) {
 	if relDst == "." {
 		return fmt.Errorf("%w: upload file destination cannot be root directory", ErrInvalidConfig)
 	}
@@ -479,7 +479,11 @@ func (s *session) uploadFile(ctx context.Context, hostFile, relDst string, perm 
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() {
+		if err := srcFile.Close(); retErr == nil {
+			retErr = err
+		}
+	}()
 
 	if perm == 0 {
 		perm = 0o644
@@ -571,7 +575,7 @@ func (s *session) downloadDir(ctx context.Context, relSrc, hostDst string, perm 
 	return nil
 }
 
-func (s *session) downloadFile(ctx context.Context, relSrc, hostDst string, perm fs.FileMode) error {
+func (s *session) downloadFile(ctx context.Context, relSrc, hostDst string, perm fs.FileMode) (retErr error) {
 	if err := os.MkdirAll(filepath.Dir(hostDst), 0o755); err != nil {
 		return err
 	}
@@ -580,7 +584,11 @@ func (s *session) downloadFile(ctx context.Context, relSrc, hostDst string, perm
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() {
+		if err := srcFile.Close(); retErr == nil {
+			retErr = err
+		}
+	}()
 
 	if perm == 0 {
 		perm = 0o644

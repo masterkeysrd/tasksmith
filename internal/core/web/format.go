@@ -857,7 +857,13 @@ func resolveURL(baseURL, rawRef string) string {
 	if refStr == "" {
 		return ""
 	}
-	if strings.HasPrefix(strings.ToLower(refStr), "javascript:") {
+	ref, err := url.Parse(refStr)
+	if err != nil {
+		return ""
+	}
+	switch ref.Scheme {
+	case "", "http", "https", "mailto":
+	default:
 		return ""
 	}
 	if baseURL == "" {
@@ -867,8 +873,7 @@ func resolveURL(baseURL, rawRef string) string {
 	if err != nil || base.Scheme == "" {
 		return refStr
 	}
-	ref, err := url.Parse(refStr)
-	if err != nil {
+	if base.Scheme != "http" && base.Scheme != "https" {
 		return refStr
 	}
 	return base.ResolveReference(ref).String()

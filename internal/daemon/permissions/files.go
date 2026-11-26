@@ -3,8 +3,6 @@ package permissions
 import (
 	"cmp"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -102,8 +100,8 @@ func (c *FileAccessChecker) Check(path, displayPath string, isDir bool) error {
 		targetAbs := filepath.Join(c.workDir, filepath.FromSlash(clean))
 		realTarget, err := filepath.EvalSymlinks(targetAbs)
 		if err != nil {
-			if linfo, lerr := os.Lstat(targetAbs); lerr == nil && linfo.Mode()&fs.ModeSymlink != 0 {
-				return fmt.Errorf("file mention %q points to an inaccessible symlink target: %w", label, err)
+			if !fsutils.IsConfinedInsideDir(targetAbs, c.workDir) {
+				return fmt.Errorf("file mention %q escapes workspace root or points to an inaccessible symlink target: %w", label, err)
 			}
 			return nil
 		}

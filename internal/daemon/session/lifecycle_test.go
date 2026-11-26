@@ -86,7 +86,7 @@ func TestManagerStartTurnAndCancel(t *testing.T) {
 	ctx := context.Background()
 	prov := &fakeProvider{}
 	_, _, _, pub, mgr := setupTestEnv(t, prov)
-	defer mgr.Close()
+	defer closeTestResource(t, mgr)
 
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Async Turn Test"})
 	if err != nil {
@@ -145,7 +145,7 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 		},
 	}
 	_, _, _, _, mgr := setupTestEnv(t, prov)
-	defer mgr.Close()
+	defer closeTestResource(t, mgr)
 
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Concurrency Test"})
 	if err != nil {
@@ -205,7 +205,7 @@ func TestManagerTurnErrorPublishing(t *testing.T) {
 		},
 	}
 	_, _, _, pub, mgr := setupTestEnv(t, prov)
-	defer mgr.Close()
+	defer closeTestResource(t, mgr)
 
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Error Turn Test"})
 	if err != nil {
@@ -268,7 +268,7 @@ func TestManagerTurnErrorLogging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
-	defer db.Close()
+	defer closeTestResource(t, db)
 
 	ws, err := workspace.Open(ctx, t.TempDir(), workspace.WithBuiltinFS(builtin.FS()))
 	if err != nil {
@@ -294,7 +294,7 @@ func TestManagerTurnErrorLogging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newTestCoordinator: %v", err)
 	}
-	defer mgr.Close()
+	defer closeTestResource(t, mgr)
 
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Turn Error Log Test", Config: api.SessionConfig{Model: "fake/fake-default-model"}})
 	if err != nil {
@@ -332,7 +332,7 @@ func TestManagerCancelTurn(t *testing.T) {
 		},
 	}
 	_, _, _, _, mgr := setupTestEnv(t, prov)
-	defer mgr.Close()
+	defer closeTestResource(t, mgr)
 
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Cancel Test"})
 	if err != nil {
@@ -368,7 +368,7 @@ func TestManagerUpdateInvalidatesHarness(t *testing.T) {
 	ctx := context.Background()
 	prov := &fakeProvider{}
 	_, _, _, _, mgr := setupTestEnv(t, prov)
-	defer mgr.Close()
+	defer closeTestResource(t, mgr)
 
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Harness Invalidation"})
 	if err != nil {
@@ -435,7 +435,7 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 		},
 	}
 	_, _, _, pub, mgr := setupTestEnv(t, prov)
-	defer mgr.Close()
+	defer closeTestResource(t, mgr)
 
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Async Perm Test"})
 	if err != nil {

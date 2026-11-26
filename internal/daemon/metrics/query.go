@@ -53,24 +53,31 @@ var (
 	identPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	metricRe     = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`)
 
-	columnDims = map[string]bool{
-		"workspace_root": true, "session_id": true, "parent_session_id": true,
-		"turn_id": true, "message_id": true, "agent": true, "status": true, "kind": true,
+	columnDims = map[string]string{
+		"workspace_root":    "r.workspace_root",
+		"session_id":        "r.session_id",
+		"parent_session_id": "r.parent_session_id",
+		"turn_id":           "r.turn_id",
+		"message_id":        "r.message_id",
+		"agent":             "r.agent",
+		"status":            "r.status",
+		"kind":              "r.kind",
 	}
 )
 
-func dimensionExpr(d Dimension) (string, error) {
+func dimensionExpr(d Dimension) (string, []any, error) {
 	name := string(d)
-	if columnDims[name] {
-		return "r." + name, nil
+	if expr, ok := columnDims[name]; ok {
+		return expr, nil, nil
 	}
+
 	if key, ok := strings.CutPrefix(name, AttrPrefix); ok {
 		if !identPattern.MatchString(key) {
-			return "", fmt.Errorf("%w: invalid attr key %q", ErrInvalidQuery, key)
+			return "", nil, fmt.Errorf("%w: invalid attr key %q", ErrInvalidQuery, key)
 		}
-		return fmt.Sprintf("COALESCE(json_extract(r.attrs, '$.%s'), '')", key), nil
+		return "COALESCE(json_extract(r.attrs, ?), '')", []any{"$." + key}, nil
 	}
-	return "", fmt.Errorf("%w: unknown dimension %q", ErrInvalidQuery, name)
+	return "", nil, fmt.Errorf("%w: unknown dimension %q", ErrInvalidQuery, name)
 }
 
 func bucketExpr(b Bucket) (string, error) {
@@ -104,10 +111,11 @@ func BuildSQL(q api.MetricsQuery) (string, []any, error) {
 		groups = append(groups, "bucket")
 	}
 	for i, d := range q.GroupBy {
-		expr, err := dimensionExpr(Dimension(d))
+		expr, exprArgs, err := dimensionExpr(Dimension(d))
 		if err != nil {
 			return "", nil, err
 		}
+		args = append(args, exprArgs...)
 		selects = append(selects, fmt.Sprintf("%s AS g%d", expr, i))
 		groups = append(groups, fmt.Sprintf("g%d", i))
 	}
@@ -184,8 +192,8 @@ func BuildSQL(q api.MetricsQuery) (string, []any, error) {
 		if !identPattern.MatchString(kv[0]) {
 			return "", nil, fmt.Errorf("%w: invalid attr key %q", ErrInvalidQuery, kv[0])
 		}
-		where = append(where, fmt.Sprintf("json_extract(r.attrs, '$.%s') = ?", kv[0]))
-		args = append(args, kv[1])
+		where = append(where, "json_extract(r.attrs, ?) = ?")
+		args = append(args, "$."+kv[0], kv[1])
 	}
 	if !q.Since.IsZero() {
 		where = append(where, "r.created_at >= ?")
@@ -228,7 +236,7 @@ func RunQuery(ctx context.Context, db *sql.DB, q api.MetricsQuery) (api.MetricsR
 	if err != nil {
 		return api.MetricsResult{}, fmt.Errorf("metrics: query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var res api.MetricsResult
 	for rows.Next() {

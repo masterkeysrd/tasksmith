@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"path/filepath"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
-	defer db.Close()
+	defer checkClose(t, db)
 
 	for _, emptyID := range []string{"", "   ", "\t\n"} {
 		_, err := New(ctx, db, emptyID)
@@ -435,7 +436,7 @@ func TestChronologicalUUIDv7Ordering(t *testing.T) {
 
 	// Verify that appended IDs were strictly ascending
 	for i := 1; i < len(appendedIDs); i++ {
-		if !(appendedIDs[i-1] < appendedIDs[i]) {
+		if appendedIDs[i-1] >= appendedIDs[i] {
 			t.Errorf("expected appendedIDs[%d] (%q) < appendedIDs[%d] (%q)", i-1, appendedIDs[i-1], i, appendedIDs[i])
 		}
 	}
@@ -476,7 +477,7 @@ func TestList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
-	defer db.Close()
+	defer checkClose(t, db)
 
 	sessA := "session-A"
 	sessB := "session-B"
@@ -579,7 +580,7 @@ func TestDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
-	defer db.Close()
+	defer checkClose(t, db)
 
 	sess1 := "session-del-1"
 	sess2 := "session-del-2"
@@ -947,5 +948,12 @@ func TestEntryClone(t *testing.T) {
 	emptyCloned := emptyEntry.Clone()
 	if emptyCloned.Compacted != nil || emptyCloned.CacheBroken != nil {
 		t.Errorf("empty cloned has non-nil records: %+v", emptyCloned)
+	}
+}
+
+func checkClose(t *testing.T, closer io.Closer) {
+	t.Helper()
+	if err := closer.Close(); err != nil {
+		t.Errorf("close %T: %v", closer, err)
 	}
 }

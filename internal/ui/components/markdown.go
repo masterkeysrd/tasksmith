@@ -154,9 +154,6 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 					}
 				}
 				spanText := b.String()
-				if spanText == "" {
-					spanText = string(node.Text(src))
-				}
 				spanStyle := style.S().
 					Display(style.DisplayInlineBlock).
 					WhiteSpace(style.WhiteSpacePreWrap).
@@ -188,14 +185,19 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				linkStyle := style.S().Underline(true).Foreground(t.Color.Text.Accent)
 				return kitex.Span(kitex.SpanProps{Style: linkStyle}, children...)
 
+			case *ast.AutoLink:
+				return kitex.Text(string(node.Label(src)))
+
+			case *ast.RawHTML:
+				return kitex.Text(strings.TrimSpace(string(node.Segments.Value(src))))
+
+			case *ast.String:
+				return kitex.Text(strings.TrimSpace(string(node.Value)))
+
 			default:
-				// Fallback: try inline children, otherwise plain text.
 				children := renderInlineChildren(node)
 				if len(children) > 0 {
 					return kitex.Fragment(children...)
-				}
-				if txt := strings.TrimSpace(string(n.Text(src))); txt != "" {
-					return kitex.Text(txt)
 				}
 				return nil
 			}

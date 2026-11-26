@@ -35,7 +35,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 				return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: uuid.NewString()}, Model: req.Model, Content: blocks, Done: true}}, nil
 			}}
 			_, _, _, _, mgr := setupTestEnv(t, provider)
-			defer mgr.Close()
+			defer closeTestResource(t, mgr)
 			sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Pending"})
 			if err != nil {
 				t.Fatal(err)

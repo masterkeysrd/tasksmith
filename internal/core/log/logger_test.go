@@ -222,7 +222,11 @@ func TestRotatingWriterRotationAndMaxBackups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotating failed: %v", err)
 	}
-	defer rw.Close()
+	t.Cleanup(func() {
+		if err := rw.Close(); err != nil {
+			t.Errorf("close rotating writer: %v", err)
+		}
+	})
 
 	logsDir, err := xdg.LogsDir()
 	if err != nil {
@@ -308,7 +312,11 @@ func TestRotatingWriterMaxAgePruning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRotatingWriter failed: %v", err)
 	}
-	defer rw.Close()
+	t.Cleanup(func() {
+		if err := rw.Close(); err != nil {
+			t.Errorf("close rotating writer: %v", err)
+		}
+	})
 
 	// First write populates active file (< 64 bytes); second write exceeds 64 bytes and triggers rotation + pruning.
 	payload := []byte(strings.Repeat("x", 45) + "\n")

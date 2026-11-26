@@ -208,12 +208,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
-	defer recStmt.Close()
 	mStmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO metrics_measurements (record_id, metric, value) VALUES (?, ?, ?)`)
 	if err != nil {
 		return err
 	}
-	defer mStmt.Close()
 
 	for _, e := range batch {
 		attrs := make(map[string]string, len(e.Attrs))

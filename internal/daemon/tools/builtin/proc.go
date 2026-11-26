@@ -181,7 +181,6 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 	}
 
 	w := tools.NewSpillWriter(ctx)
-	defer w.Close()
 
 	sw := tools.NewSafeWriter(w)
 	defer sw.Close()

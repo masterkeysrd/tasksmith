@@ -36,7 +36,12 @@ func TestPendingInteractionBlocksCompactionAndQueue(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
+			if err := h.Configure(NodeOptions{
+				Model: newTestModel(t, provider),
+				Tools: registry,
+			}); err != nil {
+				t.Fatal(err)
+			}
 			for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 				if err != nil {
 					t.Fatal(err)

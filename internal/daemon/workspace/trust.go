@@ -121,15 +121,7 @@ func SaveTrustStore(store *TrustStore) error {
 	}
 	data = append(data, '\n')
 
-	tmpPath := fmt.Sprintf("%s.tmp.%d", p, time.Now().UnixNano())
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
-		return fmt.Errorf("trust: write temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, p); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("trust: rename: %w", err)
-	}
-	return nil
+	return fsutils.WriteFileAtomic(p, data, 0o600)
 }
 
 // IsTrusted reports whether dir is trusted by any entry in the trust store.
@@ -239,7 +231,7 @@ func TrustFolder(dir string, scope TrustScope) error {
 	if err != nil {
 		return fmt.Errorf("trust: marshal: %w", err)
 	}
-	return os.WriteFile(p, append(data, '\n'), 0o600)
+	return fsutils.WriteFileAtomic(p, append(data, '\n'), 0o600)
 }
 
 // RevokeTrust removes dir from the trust store.
@@ -275,7 +267,7 @@ func RevokeTrust(dir string) error {
 	if err != nil {
 		return fmt.Errorf("trust: marshal: %w", err)
 	}
-	return os.WriteFile(p, append(data, '\n'), 0o600)
+	return fsutils.WriteFileAtomic(p, append(data, '\n'), 0o600)
 }
 
 // ScanExecutableConfig checks what MCP servers, custom tools, and .env files exist in dir.

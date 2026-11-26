@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -818,7 +819,9 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 
 	// Disconnect the client HTTP request mid-turn!
 	cancelShort()
-	<-sendDone
+	if err := <-sendDone; err != nil && !errors.Is(err, context.Canceled) {
+		t.Errorf("send during disconnect: %v", err)
+	}
 
 	// Release the LLM turn and verify it completes and persists to SQLite even after client disconnect!
 	close(releaseTurn)
@@ -1913,7 +1916,7 @@ func TestHeaderCWDFallbackToQueryParam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("httpClient.Do with header: %v", err)
 	}
-	defer resp.Body.Close()
+	defer checkClose(t, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("response status with header = %d, want 200", resp.StatusCode)
 	}
@@ -1929,7 +1932,7 @@ func TestHeaderCWDFallbackToQueryParam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("httpClient.Do with query: %v", err)
 	}
-	defer qResp.Body.Close()
+	defer checkClose(t, qResp.Body)
 	if qResp.StatusCode != http.StatusOK {
 		t.Fatalf("response status with query = %d, want 200", qResp.StatusCode)
 	}
@@ -1945,7 +1948,7 @@ func TestHeaderCWDFallbackToQueryParam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("httpClient.Do empty: %v", err)
 	}
-	defer eResp.Body.Close()
+	defer checkClose(t, eResp.Body)
 	if eResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("response status with empty workspace = %d, want 400", eResp.StatusCode)
 	}
@@ -4381,5 +4384,12 @@ spec:
 	}
 	if _, err := rt.Gateway().LLM(ctx, models.Model{ID: "broken-anthropic/claude-sonnet-5-5", ProviderType: "anthropic"}, llm.ModelConfig{}); !errors.Is(err, gateway.ErrInvalidConfig) {
 		t.Errorf("gateway.LLM(broken-anthropic) = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func checkClose(t *testing.T, closer io.Closer) {
+	t.Helper()
+	if err := closer.Close(); err != nil {
+		t.Errorf("close %T: %v", closer, err)
 	}
 }

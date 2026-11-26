@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -471,5 +472,17 @@ func TestPermissionReviewUsageSummary(t *testing.T) {
 	}
 	if loaded.Review == nil || !reflect.DeepEqual(*loaded.Review, *u.Review) {
 		t.Fatalf("loaded review %+v != live %+v", loaded.Review, u.Review)
+	}
+}
+
+func TestAttrPathsAreBoundInQueryOrder(t *testing.T) {
+	query, args, err := metrics.BuildSQL(api.MetricsQuery{
+		GroupBy:    []string{"attr.model"},
+		Aggregates: []api.MetricsAggregate{{Metric: "cost"}},
+		Filter:     api.MetricsFilter{Attrs: map[string]string{"provider": "local"}},
+	})
+	want := []any{"$.model", "cost", "$.provider", "local"}
+	if err != nil || strings.Contains(query, "$.") || !reflect.DeepEqual(args, want) {
+		t.Fatalf("query=%s args=%v err=%v", query, args, err)
 	}
 }

@@ -114,7 +114,9 @@ func (e *eventRouter) getEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	connData, err := json.Marshal(connEv)
 	if err == nil {
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", connEv.Type, connData)
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", connEv.Type, connData); err != nil {
+			return
+		}
 		flusher.Flush()
 	}
 
@@ -130,7 +132,9 @@ func (e *eventRouter) getEvents(w http.ResponseWriter, r *http.Request) {
 		case <-sub.Done():
 			return
 		case <-ticker.C:
-			fmt.Fprint(w, ": ping\n\n")
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		case msg, open := <-sub.Ch():
 			if !open {
@@ -145,9 +149,12 @@ func (e *eventRouter) getEvents(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if ev.ID != "" {
-				fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data)
+				_, err = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data)
 			} else {
-				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
+				_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
+			}
+			if err != nil {
+				return
 			}
 			flusher.Flush()
 		}
@@ -402,6 +409,11 @@ func (w *workspaceRouter) postWorkspaceInit(rw http.ResponseWriter, r *http.Requ
 	}
 	if strings.TrimSpace(req.CWD) == "" {
 		req.CWD = RequestWorkspace(r)
+	} else if cwd, ok := cleanWorkspacePath(req.CWD); ok {
+		req.CWD = cwd
+	} else {
+		WriteBadRequest(rw, "invalid workspace directory")
+		return
 	}
 	resp, err := w.b.InitWorkspace(r.Context(), req)
 	if err != nil {
@@ -443,6 +455,11 @@ func (w *workspaceRouter) postTrustFolder(rw http.ResponseWriter, r *http.Reques
 	}
 	if strings.TrimSpace(req.Path) == "" {
 		req.Path = RequestWorkspace(r)
+	} else if path, ok := cleanWorkspacePath(req.Path); ok {
+		req.Path = path
+	} else {
+		WriteBadRequest(rw, "invalid workspace directory")
+		return
 	}
 	if err := w.b.TrustWorkspace(r.Context(), req); err != nil {
 		WriteError(rw, err)

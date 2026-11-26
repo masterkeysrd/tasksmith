@@ -71,7 +71,12 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
+			if err := h.Configure(NodeOptions{
+				Model: newTestModel(t, provider),
+				Tools: registry,
+			}); err != nil {
+				t.Fatal(err)
+			}
 			var permission api.PermissionRequest
 			var result *message.Tool
 			for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
@@ -150,7 +155,12 @@ func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
+	if err := h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: registry,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	decisions := map[string]api.PermissionDecision{}
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
@@ -217,7 +227,12 @@ func TestQuestionInterruptResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
+	if err := h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: registry,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var req api.QuestionRequest
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
@@ -269,7 +284,12 @@ func TestMixedQuestionAndPermission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
+	if err := h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: registry,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var q api.QuestionRequest
 	var p api.PermissionRequest
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
@@ -322,7 +342,12 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
+	if err := h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: registry,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var req api.QuestionRequest
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {

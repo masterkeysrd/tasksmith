@@ -84,7 +84,7 @@ func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string, opts ...Op
 	if err != nil {
 		return nil, fmt.Errorf("journal: load files for session %q: %w", sessionID, err)
 	}
-	defer fileRows.Close()
+	defer func() { _ = fileRows.Close() }()
 
 	for fileRows.Next() {
 		var p, baseline string
@@ -106,7 +106,7 @@ func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string, opts ...Op
 	if err != nil {
 		return nil, fmt.Errorf("journal: load entries for session %q: %w", sessionID, err)
 	}
-	defer entryRows.Close()
+	defer func() { _ = entryRows.Close() }()
 
 	var recent []string
 	for entryRows.Next() {
@@ -231,7 +231,12 @@ func updateJournalMRU(recent []string, path string) []string {
 	if path == "" || path == "." {
 		return recent
 	}
-	out := make([]string, 0, min(len(recent)+1, maxRecentPaths))
+	capHint := maxRecentPaths
+	if len(recent) < maxRecentPaths {
+		capHint = len(recent) + 1
+	}
+
+	out := make([]string, 0, capHint)
 	out = append(out, path)
 	for _, p := range recent {
 		if p != path {
@@ -407,7 +412,7 @@ ORDER BY e.id ASC;
 	if err != nil {
 		return nil, fmt.Errorf("journal: query changes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make([]api.FileChange, 0)
 	for rows.Next() {
@@ -596,7 +601,7 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 	if err != nil {
 		return fmt.Errorf("journal: query agent entries: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var ah string

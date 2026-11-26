@@ -2787,3 +2787,12 @@ func TestUndeclaredSubprojectAutoDiscovery(t *testing.T) {
 		t.Errorf("expected undeclared subproject agent in NamespaceLocal, got %+v (ok=%v)", localOnly, ok)
 	}
 }
+
+func TestInitializeRejectsUnsafeProviderNames(t *testing.T) {
+	for _, name := range []string{"foo/bar", `foo\bar`, "a..b", "foo\x00bar"} {
+		_, err := Initialize(t.Context(), t.TempDir(), InitOptions{Provider: name})
+		if err == nil {
+			t.Errorf("accepted provider name %q", name)
+		}
+	}
+}

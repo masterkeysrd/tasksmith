@@ -14,7 +14,8 @@ func TestScopeProgressiveMerging(t *testing.T) {
 	if s, ok := scope.From(ctx); ok || s != (scope.Scope{}) {
 		t.Fatalf("expected empty scope from background ctx, got ok=%v s=%+v", ok, s)
 	}
-	if s, ok := scope.From(nil); ok || s != (scope.Scope{}) {
+	var nilCtx context.Context
+	if s, ok := scope.From(nilCtx); ok || s != (scope.Scope{}) {
 		t.Fatalf("expected empty scope from nil ctx, got ok=%v s=%+v", ok, s)
 	}
 
@@ -83,7 +84,7 @@ func TestScopeProgressiveMerging(t *testing.T) {
 	}
 
 	// 5. With with nil context behaves safely
-	ctxNil := scope.With(nil, scope.Scope{SessionID: "sess-nil"})
+	ctxNil := scope.With(nilCtx, scope.Scope{SessionID: "sess-nil"})
 	sNil, ok := scope.From(ctxNil)
 	if !ok || sNil.SessionID != "sess-nil" {
 		t.Errorf("sNil = %+v, want SessionID=%q", sNil, "sess-nil")

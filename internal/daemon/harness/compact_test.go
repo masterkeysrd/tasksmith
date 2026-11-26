@@ -340,10 +340,12 @@ func TestCompactionRequestsSurviveCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, nil),
 		Tools: registry,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	run := func(input Input) {
 		t.Helper()
 		for _, err := range h.Stream(ctx, input) {
@@ -361,10 +363,12 @@ func TestCompactionRequestsSurviveCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, nil),
 		Tools: registry,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	state, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatal(err)

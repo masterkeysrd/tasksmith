@@ -71,7 +71,16 @@ func TestCompactionFailurePreservesCheckpointAndResumes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: reg, Limits: models.Limits{Context: 10000, Output: 1000}})
+			if err := h.Configure(NodeOptions{
+				Model: newTestModel(t, provider),
+				Tools: reg,
+				Limits: models.Limits{
+					Context: 10000,
+					Output:  1000,
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
 			for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("first request")}) {
 				if err != nil {
 					t.Fatal(err)

@@ -188,7 +188,7 @@ func (s *sqliteStore) List(ctx context.Context, filter ListFilter) ([]*Session, 
 	if err != nil {
 		return nil, fmt.Errorf("session: list sessions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	sessions := make([]*Session, 0)
 	for rows.Next() {

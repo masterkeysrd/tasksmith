@@ -684,14 +684,18 @@ func TestSharedSSEMultiplexer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	defer os.RemoveAll(dir)
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove socket directory: %v", err)
+		}
+	})
+
 	sockPath := filepath.Join(dir, "test.sock")
 
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
 	}
-	defer ln.Close()
 
 	var (
 		mu           sync.Mutex
@@ -726,17 +730,27 @@ func TestSharedSSEMultiplexer(t *testing.T) {
 				Topics:       r.URL.Query()["topic"],
 			},
 		}
-		data, _ := json.Marshal(connEv)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", connEv.Type, data)
+		defer close(streamClosed)
+		data, err := json.Marshal(connEv)
+		if err != nil {
+			t.Errorf("marshal connected event: %v", err)
+			return
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", connEv.Type, data); err != nil {
+			t.Errorf("write connected event: %v", err)
+			return
+		}
 		flusher.Flush()
 
 		for {
 			select {
 			case <-r.Context().Done():
-				close(streamClosed)
 				return
 			case msg := <-eventCh:
-				fmt.Fprint(w, msg)
+				if _, err := fmt.Fprint(w, msg); err != nil {
+					t.Errorf("write event: %v", err)
+					return
+				}
 				flusher.Flush()
 			}
 		}
@@ -762,7 +776,11 @@ func TestSharedSSEMultiplexer(t *testing.T) {
 
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
-	defer srv.Close()
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Errorf("close SSE server: %v", err)
+		}
+	})
 
 	cli, err := New(sockPath, WithCWD("/test"))
 	if err != nil {

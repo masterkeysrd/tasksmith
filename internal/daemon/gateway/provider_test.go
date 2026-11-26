@@ -151,7 +151,10 @@ func TestProviderAuthHeadersEndToEnd(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Stream: %v", err)
 			}
-			for range stream {
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			if got := seen(); got != tc.want {
@@ -192,7 +195,10 @@ func TestProviderAuthNoneSendsNoCredential(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stream: %v", err)
 		}
-		for range stream {
+		for _, err := range stream {
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 
 		if got := seen(); got != "" {

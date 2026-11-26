@@ -242,22 +242,16 @@ func persistHistory(entries []HistoryEntry) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+
+	var data bytes.Buffer
+	encoder := json.NewEncoder(&data)
 	for _, entry := range entries {
-		b, err := json.Marshal(entry)
-		if err != nil {
-			return err
-		}
-		b = append(b, '\n')
-		if _, err := f.Write(b); err != nil {
+		if err := encoder.Encode(entry); err != nil {
 			return err
 		}
 	}
-	return nil
+
+	return os.WriteFile(path, data.Bytes(), 0o600)
 }
 
 // Composer is a trail functional component managing multi-line user prompt drafting,

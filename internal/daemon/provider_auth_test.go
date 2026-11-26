@@ -695,3 +695,15 @@ func sendAndAwaitErrorEvent(t *testing.T, cli *client.Client, sessionID, content
 	}
 	return api.ErrorEvent{}
 }
+
+func TestVerifyOllamaRejectsInvalidEndpoints(t *testing.T) {
+	for _, endpoint := range []string{"file:///test", "gopher://example.org", "http://user@example.org", "http://:80"} {
+		res, err := new(Daemon).VerifyProvider(t.Context(), api.VerifyProviderRequest{
+			Provider: "ollama",
+			Endpoint: endpoint,
+		})
+		if err != nil || res.Valid || res.ErrorMessage != "invalid Ollama endpoint" {
+			t.Errorf("endpoint %q: response %+v, error %v", endpoint, res, err)
+		}
+	}
+}

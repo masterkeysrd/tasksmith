@@ -216,7 +216,7 @@ func TestToAPISessionSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New parent failed: %v", err)
 	}
-	defer parent.Close()
+	defer closeTestResource(t, parent)
 
 	child, err := New(ctx, Config{
 		ID:          uuid.NewString(),
@@ -374,7 +374,7 @@ func TestInvokeSubagentAndManageSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New parent failed: %v", err)
 	}
-	defer parent.Close()
+	defer closeTestResource(t, parent)
 
 	// InvokeSubagent with validation errors
 	_, err = parent.InvokeSubagent(ctx, api.InvokeAgentInput{Title: "Title", Prompt: "Prompt"})
@@ -479,7 +479,7 @@ func TestChildTurnCompletionNotification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New parent failed: %v", err)
 	}
-	defer parent.Close()
+	defer closeTestResource(t, parent)
 
 	// Spawn subagent
 	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
@@ -670,7 +670,7 @@ func TestChildTurnErrorNotification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New parent failed: %v", err)
 	}
-	defer parent.Close()
+	defer closeTestResource(t, parent)
 
 	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
 		Agent:  "explore",
@@ -763,7 +763,7 @@ func TestInvokeSubagentWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New parent failed: %v", err)
 	}
-	defer parent.Close()
+	defer closeTestResource(t, parent)
 
 	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
 		Agent:     "explore",
@@ -824,7 +824,7 @@ func TestUpdateActivityFromThoughtAndGenerating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New root failed: %v", err)
 	}
-	defer root.Close()
+	defer closeTestResource(t, root)
 
 	// Root session should immediately return without setting Activity
 	root.updateActivityFromThought("Thinking about steps...")
@@ -847,7 +847,7 @@ func TestUpdateActivityFromThoughtAndGenerating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New child failed: %v", err)
 	}
-	defer child.Close()
+	defer closeTestResource(t, child)
 
 	// Only the first line (with ... if multiline) is kept for thought activity
 	child.updateActivityFromThought("Inspecting store schema.\nSecond line of thought")

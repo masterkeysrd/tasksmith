@@ -1577,3 +1577,14 @@ func TestSessionManagerAutoModeReversibleDelete(t *testing.T) {
 		t.Fatalf("ModeDefault safe reversible delete = %s, want ask", dec)
 	}
 }
+
+func TestMissingMentionThroughOutsideDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	checker := permissions.NewFileAccessChecker(permissions.FileAccessConfig{WorkDir: root})
+	if err := checker.Check("link/missing", "", false); err == nil {
+		t.Fatal("accepted missing path below external directory")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -107,7 +108,7 @@ func TestStrictAuthValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected New() to succeed lazily with missing provider credentials, got: %v", err)
 	}
-	defer gw.Close()
+	defer checkClose(t, gw)
 
 	// Verify ListProviders includes warning on unauthenticated provider
 	providers := gw.ListProviders()
@@ -168,7 +169,7 @@ func TestStrictAuthValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected New() to succeed with host env fallback, got: %v", err)
 	}
-	defer gwWithHostEnv.Close()
+	defer checkClose(t, gwWithHostEnv)
 
 	hostProviders := gwWithHostEnv.ListProviders()
 	if len(hostProviders) != 1 || hostProviders[0].Warning != "" {
@@ -193,7 +194,7 @@ func TestStrictAuthValidation(t *testing.T) {
 func TestPoolContentAddressable(t *testing.T) {
 	ctx := context.Background()
 	pool := NewPool()
-	defer pool.Close()
+	defer checkClose(t, pool)
 
 	cfg := Config{
 		Providers: []ProviderConfig{
@@ -256,7 +257,7 @@ func TestModelResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create gateway: %v", err)
 	}
-	defer gw.Close()
+	defer checkClose(t, gw)
 
 	completion := models.Model{ID: "ollama/llama3.2", Capabilities: models.Capabilities{Completion: new(true)}}
 	native := models.Model{ID: "ollama/nimble-v3", Capabilities: models.Capabilities{Completion: new(false), Decision: new(true)}, Pricing: &api.ModelPricing{Input: 2}}
@@ -619,7 +620,7 @@ func TestOpenAIConfig_ParsingAndOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New(cfgCamel) failed: %v", err)
 	}
-	defer gw.Close()
+	defer checkClose(t, gw)
 
 	impl := gw.(*gatewayImpl)
 	inst := impl.providers["openai"]
@@ -676,7 +677,7 @@ func TestOpenAIConfig_ParsingAndOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New(cfgSnake) failed: %v", err)
 	}
-	defer gwSnake.Close()
+	defer checkClose(t, gwSnake)
 
 	implSnake := gwSnake.(*gatewayImpl)
 	instSnake := implSnake.providers["openai-snake"]
@@ -753,7 +754,7 @@ func TestGoogleGenAIAndGeminiProviderTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to initialize gateway with google-genai and gemini types: %v", err)
 	}
-	defer gw.Close()
+	defer checkClose(t, gw)
 }
 
 func TestGatewayModelProfile(t *testing.T) {
@@ -775,7 +776,7 @@ func TestGatewayModelProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to initialize gateway: %v", err)
 	}
-	defer gw.Close()
+	defer checkClose(t, gw)
 
 	merged := models.Merge("test-openai/custom-spec-model", "openai", &warp.ProviderModel{ID: "custom-spec-model", Name: "Custom Spec Model", Limits: warp.ProviderModelLimits{Context: 256000, Output: 32000}}, nil)
 	if merged.Limits.Context != 256000 || merged.Limits.Output != 32000 {
@@ -794,7 +795,7 @@ func TestCatalogLLMUsesIsolatedProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer gw.Close()
+	defer checkClose(t, gw)
 	factory := gw.(*gatewayImpl)
 	model := models.Model{ID: "openai/gpt-4o", ProviderType: "openai", Limits: models.Limits{Context: 1234, Output: 123}, Pricing: &api.ModelPricing{Input: 7}}
 	first, err := factory.LLM(ctx, model, llm.ModelConfig{})
@@ -827,7 +828,7 @@ func TestGatewayBaseProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to initialize gateway: %v", err)
 	}
-	defer gw.Close()
+	defer checkClose(t, gw)
 
 	prof, ok := gw.GetProfile("test-openai/gpt-4o")
 	if !ok {
@@ -869,7 +870,7 @@ func TestGatewayModelProfile_MergedOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to initialize gateway: %v", err)
 	}
-	defer gw.Close()
+	defer checkClose(t, gw)
 
 	base, ok := gw.GetProfile("test-openai/gpt-4o")
 	if !ok {
@@ -904,7 +905,7 @@ func TestModelResolutionWithSlashInModelID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to initialize gateway: %v", err)
 	}
-	defer gw.Close()
+	defer checkClose(t, gw)
 
 	effective := models.Merge("mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit", "ollama", &warp.ProviderModel{ID: "ddalcu/Qwen3.8-27B-MLX-Serve-4bit", Limits: warp.ProviderModelLimits{Context: 262144, Output: 32768}}, nil)
 	m, err := gw.LLM(ctx, effective, llm.ModelConfig{})
@@ -1333,5 +1334,12 @@ func TestInvalidProviderFaultIsolation(t *testing.T) {
 	}
 	if _, err := gw.LLM(ctx, models.Model{ID: "healthy/gpt-4o", ProviderType: "openai"}, llm.ModelConfig{}); err != nil {
 		t.Fatalf("LLM targeting healthy provider failed: %v", err)
+	}
+}
+
+func checkClose(t *testing.T, closer io.Closer) {
+	t.Helper()
+	if err := closer.Close(); err != nil {
+		t.Errorf("close %T: %v", closer, err)
 	}
 }

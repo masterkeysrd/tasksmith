@@ -139,7 +139,10 @@ func TestMetricsMiddlewareConsumerStopsEarly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range resp {
+	for _, err := range resp {
+		if err != nil {
+			t.Fatal(err)
+		}
 		break
 	}
 	if len(rec.records) != 1 || rec.records[0].Status != metrics.StatusOK {

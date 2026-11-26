@@ -238,7 +238,7 @@ func testHeaderThemeSwitching(t *testing.T) {
 		t.Fatal("expected rendered surface")
 	}
 
-	var textX, textY int = -1, -1
+	textX, textY := -1, -1
 	var initialFg any
 	for y := 0; y < frame.Height; y++ {
 		for x := 0; x < frame.Width; x++ {

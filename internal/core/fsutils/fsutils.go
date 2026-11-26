@@ -1,6 +1,7 @@
 package fsutils
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -186,16 +187,26 @@ func ResolveDeepestExisting(p string) string {
 // WriteFileAtomic writes data to dstPath atomically via a sibling temporary file
 // and rename, setting file permissions to perm. The parent directory must exist.
 func WriteFileAtomic(dstPath string, data []byte, perm fs.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dstPath), ".tmp-write-*")
+	root, err := os.OpenRoot(filepath.Dir(dstPath))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
+	return WriteFileAtomicInRoot(root, filepath.Base(dstPath), data, perm)
+}
+
+func WriteFileAtomicInRoot(root *os.Root, name string, data []byte, perm fs.FileMode) error {
+	tmpName := ".tmp-write-" + rand.Text()
+	tmp, err := root.OpenFile(tmpName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("fsutils: create temp file: %w", err)
 	}
-	tmpName := tmp.Name()
 	cleanup := true
 	defer func() {
 		if cleanup {
 			_ = tmp.Close()
-			_ = os.Remove(tmpName)
+			_ = root.Remove(tmpName)
 		}
 	}()
 	if _, err := tmp.Write(data); err != nil {
@@ -207,7 +218,7 @@ func WriteFileAtomic(dstPath string, data []byte, perm fs.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("fsutils: close temp file: %w", err)
 	}
-	if err := os.Rename(tmpName, dstPath); err != nil {
+	if err := root.Rename(tmpName, name); err != nil {
 		return fmt.Errorf("fsutils: rename temp file: %w", err)
 	}
 	cleanup = false

@@ -31,13 +31,6 @@ func (s *Store) Dir() string {
 	return s.dir
 }
 
-func (s *Store) pathFor(sha string) (string, error) {
-	if !hash.IsValidSHA256(sha) {
-		return "", fmt.Errorf("media: invalid sha256 %q", sha)
-	}
-	return filepath.Join(s.dir, sha), nil
-}
-
 // Put writes data into <dir>/<sha256> atomically if not already present,
 // returning the lowercase hex SHA-256 digest and byte size.
 func (s *Store) Put(ctx context.Context, data []byte) (string, int64, error) {
@@ -45,21 +38,19 @@ func (s *Store) Put(ctx context.Context, data []byte) (string, int64, error) {
 		return "", 0, err
 	}
 	hexSum := hash.SHA256Hex(data)
-	dst, err := s.pathFor(hexSum)
-	if err != nil {
-		return "", 0, err
-	}
-	if info, err := os.Stat(dst); err == nil && info.Mode().IsRegular() && info.Size() == int64(len(data)) {
-		return hexSum, info.Size(), nil
-	}
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return "", 0, fmt.Errorf("media: create store dir: %w", err)
 	}
-	if err := fsutils.WriteFileAtomic(dst, data, 0o644); err != nil {
-		// Another concurrent writer may have won the race for the same SHA-256.
-		if info, serr := os.Stat(dst); serr == nil && info.Size() == int64(len(data)) {
-			return hexSum, info.Size(), nil
-		}
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return "", 0, err
+	}
+	defer func() { _ = root.Close() }()
+
+	if info, err := root.Lstat(hexSum); err == nil && info.Mode().IsRegular() && info.Size() == int64(len(data)) {
+		return hexSum, info.Size(), nil
+	}
+	if err := fsutils.WriteFileAtomicInRoot(root, hexSum, data, 0o644); err != nil {
 		return "", 0, fmt.Errorf("media: write blob: %w", err)
 	}
 	return hexSum, int64(len(data)), nil
@@ -67,11 +58,15 @@ func (s *Store) Put(ctx context.Context, data []byte) (string, int64, error) {
 
 // Read retrieves the bytes stored for sha256Hex.
 func (s *Store) Read(sha256Hex string) ([]byte, error) {
-	p, err := s.pathFor(sha256Hex)
+	if !hash.IsValidSHA256(sha256Hex) {
+		return nil, fmt.Errorf("media: invalid sha256 %q", sha256Hex)
+	}
+	root, err := os.OpenRoot(s.dir)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile(sha256Hex)
 	if err != nil {
 		return nil, fmt.Errorf("media: read blob %s: %w", sha256Hex, err)
 	}
@@ -80,11 +75,15 @@ func (s *Store) Read(sha256Hex string) ([]byte, error) {
 
 // Exists reports whether sha256Hex is present in the store.
 func (s *Store) Exists(sha256Hex string) bool {
-	p, err := s.pathFor(sha256Hex)
+	if !hash.IsValidSHA256(sha256Hex) {
+		return false
+	}
+	root, err := os.OpenRoot(s.dir)
 	if err != nil {
 		return false
 	}
-	info, err := os.Stat(p)
+	defer func() { _ = root.Close() }()
+	info, err := root.Stat(sha256Hex)
 	return err == nil && info.Mode().IsRegular()
 }
 
@@ -102,7 +101,7 @@ func (s *Store) LinkAllFrom(srcDir string) error {
 	var createdDir bool
 	for _, entry := range entries {
 		name := entry.Name()
-		if !hash.IsValidSHA256(name) || entry.IsDir() {
+		if !hash.IsValidSHA256(name) || !entry.Type().IsRegular() {
 			continue
 		}
 		if !createdDir {

@@ -74,7 +74,8 @@ func (w *Workspace) mcpRecords() []ResourceRecord {
 
 func (w *Workspace) resourceRecord(cat *Catalog, name string, kind warp.Kind, def warp.Resource, namespace, path string, available bool, disabledBy api.DisabledReason) ResourceRecord {
 	path = strings.TrimSpace(path)
-	writable := writableResourceNamespace(cat, namespace) && path != "" && filepath.IsAbs(path)
+	writable := writableResourceNamespace(cat, namespace) && filepath.IsAbs(path) &&
+		fsutils.IsConfinedInsideDir(path, w.RootDir())
 	if writable {
 		if info, err := os.Stat(path); err != nil || info.IsDir() || info.Mode().Perm()&0o200 == 0 {
 			writable = false
@@ -111,6 +112,9 @@ func writableResourceNamespace(cat *Catalog, ns string) bool {
 // ToolRecord resolves one tool across the workspace listing.
 func (w *Workspace) ToolRecord(name string) (ResourceRecord, bool) {
 	name = strings.TrimSpace(name)
+	if !validManifestName(name) {
+		return ResourceRecord{}, false
+	}
 	for _, rec := range w.toolRecords() {
 		if rec.Name == name {
 			return rec, true
@@ -122,6 +126,9 @@ func (w *Workspace) ToolRecord(name string) (ResourceRecord, bool) {
 // MCPRecord resolves one MCP server across the workspace listing.
 func (w *Workspace) MCPRecord(name string) (ResourceRecord, bool) {
 	name = strings.TrimSpace(name)
+	if !validManifestName(name) {
+		return ResourceRecord{}, false
+	}
 	for _, rec := range w.mcpRecords() {
 		if rec.Name == name {
 			return rec, true

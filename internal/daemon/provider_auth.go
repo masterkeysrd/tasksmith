@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,8 +133,21 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 		if endpoint == "" {
 			endpoint = "http://localhost:11434"
 		}
-		client := &http.Client{Timeout: 3 * time.Second}
-		resp, err := client.Get(endpoint + "/api/tags")
+		u, err := url.Parse(endpoint)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+			return &api.VerifyProviderResponse{ErrorMessage: "invalid Ollama endpoint"}, nil
+		}
+		u.RawQuery, u.Fragment, u.ForceQuery = "", "", false
+		probe, err := http.NewRequestWithContext(ctx, http.MethodGet, u.JoinPath("/api/tags").String(), nil)
+		if err != nil {
+			return &api.VerifyProviderResponse{ErrorMessage: "invalid Ollama request"}, nil
+		}
+
+		client := &http.Client{
+			Timeout:       3 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+		resp, err := client.Do(probe)
 		if err != nil {
 			return &api.VerifyProviderResponse{
 				Valid:        false,
@@ -141,6 +155,9 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 			}, nil
 		}
 		_ = resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return &api.VerifyProviderResponse{ErrorMessage: "Ollama probe returned " + resp.Status}, nil
+		}
 		return &api.VerifyProviderResponse{
 			Valid:       true,
 			ModelsCount: 1,

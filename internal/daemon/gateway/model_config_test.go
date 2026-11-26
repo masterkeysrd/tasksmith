@@ -57,7 +57,10 @@ func TestEffectiveTemperatureConfig(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for range stream {
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			if (p.request.Temperature != nil) != tc.wantTemp || p.request.MaxTokens != 1000 || p.request.ContextWindow != 4000 {
 				t.Fatalf("request: %+v", p.request)

@@ -305,10 +305,12 @@ func (n *CommandNode) Execute(ctx context.Context, state State) (graph.Command[S
 
 	cmdCtx := scope.With(ctx, scope.Scope{ToolCallID: cmdID, ToolName: "command"})
 	w := n.spiller.NewWriter(cmdCtx)
-	defer w.Close()
 
 	res, err := n.bash.Bash(cmdCtx, std.BashRequest{Command: command, Output: w})
-	w.Close()
+	closeErr := w.Close()
+	if closeErr != nil {
+		return nil, errors.Join(err, fmt.Errorf("close command output: %w", closeErr))
+	}
 	if err != nil {
 		return nil, err
 	}

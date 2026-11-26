@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -448,5 +449,23 @@ func TestJournalReloadAndSessionDeletion(t *testing.T) {
 	}
 	if err := j3.RevertToBaseline(ctx, fsys, "main.go", false); !errors.Is(err, journal.ErrNotFound) {
 		t.Errorf("RevertToBaseline after DeleteSession error = %v, want %v", err, journal.ErrNotFound)
+	}
+}
+
+func TestJournalMRUCap(t *testing.T) {
+	db, blobs, _ := setupTestJournal(t)
+	j, err := journal.New(t.Context(), db, "mru", blobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 102 {
+		path := strconv.Itoa(i)
+		if err := j.RecordRead(t.Context(), path, "digest"); err != nil {
+			t.Fatal(err)
+		}
+		got := j.RecentPaths()
+		if len(got) != min(i+1, 100) || got[0] != path {
+			t.Fatalf("after read %d: recent paths %v", i, got)
+		}
 	}
 }

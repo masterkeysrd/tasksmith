@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 )
 
 // Parse reads .env formatted content from r and returns an isolated map of
@@ -62,9 +64,8 @@ func LoadFile(path string) (map[string]string, error) {
 		}
 		return nil, fmt.Errorf("env: open %s: %w", path, err)
 	}
-	defer f.Close()
-
-	return Parse(f)
+	values, parseErr := Parse(f)
+	return values, errors.Join(parseErr, f.Close())
 }
 
 // Merge combines the provided environment maps in order and returns a new
@@ -95,10 +96,21 @@ func SetInFile(path, key, value string) error {
 	perm := os.FileMode(0o600)
 	var existingContent []byte
 
-	info, err := os.Stat(path)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("env: create directory %s: %w", dir, err)
+	}
+
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(path)
+	info, err := root.Stat(name)
 	if err == nil {
 		perm = info.Mode().Perm()
-		existingContent, err = os.ReadFile(path)
+		existingContent, err = root.ReadFile(name)
 		if err != nil {
 			return fmt.Errorf("env: read %s: %w", path, err)
 		}
@@ -138,12 +150,7 @@ func SetInFile(path, key, value string) error {
 
 	output := strings.Join(outLines, "\n") + "\n"
 
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("env: create directory %s: %w", dir, err)
-	}
-
-	return writeFileAtomic(path, []byte(output), perm)
+	return fsutils.WriteFileAtomicInRoot(root, name, []byte(output), perm)
 }
 
 // parseLineKeyValue splits a non-empty, non-comment line into its trimmed key
@@ -278,39 +285,4 @@ func formatValue(value string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
-}
-
-// writeFileAtomic writes data to a temporary file in the same directory as path,
-// applies perm, and atomically renames it over path.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".env.tmp-*")
-	if err != nil {
-		return fmt.Errorf("env: create temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpName)
-		}
-	}()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("env: write temp file: %w", err)
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("env: chmod temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("env: close temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("env: rename temp file to %s: %w", path, err)
-	}
-
-	cleanup = false
-	return nil
 }

@@ -84,9 +84,11 @@ func (s *Std) Fetch(ctx context.Context, req FetchRequest) (*FetchResult, error)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if closeErr := resp.Body.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -222,13 +224,16 @@ func (s *Std) Download(ctx context.Context, req DownloadRequest) (*DownloadResul
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("std: download %s failed with status %s", parsedURL.String(), resp.Status)
 	}
 
 	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if closeErr := resp.Body.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		return nil, err
 	}

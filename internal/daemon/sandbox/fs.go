@@ -278,9 +278,11 @@ func (f *sandboxFS) ReadDir(ctx context.Context, path string) ([]fs.DirEntry, er
 		if err != nil {
 			return nil, wrapRootError(err)
 		}
-		defer dir.Close()
 
 		entries, err = dir.ReadDir(-1)
+		if closeErr := dir.Close(); err == nil {
+			err = closeErr
+		}
 		if err != nil {
 			return nil, wrapRootError(err)
 		}

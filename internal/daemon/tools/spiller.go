@@ -227,7 +227,6 @@ func (w *nopSpillWriter) Path() string {
 
 func (s *spiller) Spill(ctx context.Context, text string) string {
 	w := s.NewWriter(ctx)
-	defer w.Close()
 	_, _ = w.Write([]byte(text))
 	return w.String()
 }

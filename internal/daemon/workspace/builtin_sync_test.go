@@ -81,7 +81,11 @@ func TestBuiltinSyncRejectsStaleTraversal(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("safe"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Remove(outside) })
+	t.Cleanup(func() {
+		if err := os.Remove(outside); err != nil {
+			t.Errorf("remove marker: %v", err)
+		}
+	})
 	previous := builtinManifest{Version: 1, Files: map[string]builtinFile{"../outside-marker": {}}}
 	data, err := json.Marshal(previous)
 	if err != nil {

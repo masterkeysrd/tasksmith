@@ -171,6 +171,11 @@ func CopyConfig(srcDir, dstDir string) error {
 // any provided APIKey into <dir>/.env (ensuring .env is listed in .gitignore),
 // and—unless opts.TrustOnly is true—writes WORKSPACE.md and .agents/providers/<provider>.yaml.
 func Initialize(ctx context.Context, dir string, opts InitOptions) ([]api.SkippedPresetAlias, error) {
+	provName := opts.providerName()
+	if provName != "" && !validManifestName(provName) {
+		return nil, fmt.Errorf("workspace: invalid provider name %q", provName)
+	}
+
 	var skipped []api.SkippedPresetAlias
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -196,7 +201,6 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) ([]api.Skippe
 		return nil, fmt.Errorf("workspace: write %s: %w", WorkspaceMetadataFile, err)
 	}
 
-	provName := opts.providerName()
 	baseProvider := findWarpPreset(provName)
 	var destination *Workspace
 	modelAliases := maps.Clone(opts.ModelAliases)
@@ -242,7 +246,7 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) ([]api.Skippe
 				return nil, fmt.Errorf("workspace: create user providers dir: %w", err)
 			}
 			targetFile := filepath.Join(userProvidersDir, provName+".provider.yaml")
-			if _, err := os.Stat(targetFile); os.IsNotExist(err) {
+			if _, err := os.Lstat(targetFile); os.IsNotExist(err) {
 				var providerSpec warp.ModelProviderSpec
 				providerSpec.Type = provName
 				if baseProvider != nil {
@@ -363,15 +367,19 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) ([]api.Skippe
 	if err != nil {
 		return nil, fmt.Errorf("workspace: format WORKSPACE.md: %w", err)
 	}
-	wsPath := filepath.Join(absDir, warp.WorkspaceFileName)
-	if err := os.WriteFile(wsPath, wsData, 0o644); err != nil {
+	root, err := os.OpenRoot(absDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.WriteFile(warp.WorkspaceFileName, wsData, 0o644); err != nil {
 		return nil, fmt.Errorf("workspace: write WORKSPACE.md: %w", err)
 	}
 
 	// 5. Write .agents/providers/<provider>.yaml when a provider is specified
 	if provName != "" {
-		providersDir := filepath.Join(absDir, warp.DefaultAgentsDir, "providers")
-		if err := os.MkdirAll(providersDir, 0o755); err != nil {
+		providersDir := filepath.Join(warp.DefaultAgentsDir, "providers")
+		if err := root.MkdirAll(providersDir, 0o755); err != nil {
 			return nil, fmt.Errorf("workspace: create providers directory: %w", err)
 		}
 
@@ -443,7 +451,7 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) ([]api.Skippe
 			return nil, fmt.Errorf("workspace: format provider manifest: %w", err)
 		}
 		providerPath := filepath.Join(providersDir, provName+".provider.yaml")
-		if err := os.WriteFile(providerPath, providerData, 0o644); err != nil {
+		if err := root.WriteFile(providerPath, providerData, 0o644); err != nil {
 			return nil, fmt.Errorf("workspace: write provider manifest: %w", err)
 		}
 	}
@@ -454,8 +462,13 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) ([]api.Skippe
 // EnsureGitignoreEntry appends entry to <dir>/.gitignore under a secrets
 // heading when it is not already listed, creating the file when missing.
 func EnsureGitignoreEntry(dir, entry string) error {
-	gitignorePath := filepath.Join(dir, ".gitignore")
-	existing, err := os.ReadFile(gitignorePath)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+
+	existing, err := root.ReadFile(".gitignore")
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -478,7 +491,7 @@ func EnsureGitignoreEntry(dir, entry string) error {
 	b.WriteString(entry)
 	b.WriteByte('\n')
 
-	return os.WriteFile(gitignorePath, []byte(b.String()), 0o644)
+	return root.WriteFile(".gitignore", []byte(b.String()), 0o644)
 }
 
 func copyFile(src, dst string, perm os.FileMode) error {

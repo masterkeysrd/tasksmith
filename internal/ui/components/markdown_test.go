@@ -49,6 +49,16 @@ func TestMarkdownRenderMath(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderInlineLeaves(t *testing.T) {
+	out := testutils.Render(t, Markdown(MarkdownProps{
+		Source: "Email <user@example.org> and `literal` <i>tag</i>.",
+	}), 80, 4)
+
+	if want := "Email user@example.org and literal <i>tag</i>."; out != want {
+		t.Errorf("inline text = %q, want %q", out, want)
+	}
+}
+
 func TestMarkdown(t *testing.T) {
 	t.Run("BasicParagraph", func(t *testing.T) {
 		node := Markdown(MarkdownProps{

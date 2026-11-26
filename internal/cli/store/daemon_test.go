@@ -97,8 +97,8 @@ func TestStartStopRestartDaemonWithMockStarter(t *testing.T) {
 
 	rt := &mockSessionRoundTripper{
 		handler: func(req *http.Request) (*http.Response, error) {
-			switch {
-			case req.URL.Path == "/v1/health":
+			switch req.URL.Path {
+			case "/v1/health":
 				if !healthy.Load() {
 					return nil, errors.New("connection refused")
 				}
@@ -108,7 +108,7 @@ func TestStartStopRestartDaemonWithMockStarter(t *testing.T) {
 					Body:       io.NopCloser(strings.NewReader(resp)),
 					Header:     make(http.Header),
 				}, nil
-			case req.URL.Path == "/v1/shutdown":
+			case "/v1/shutdown":
 				shutdownCalls.Add(1)
 				healthy.Store(false)
 				return &http.Response{
@@ -116,25 +116,25 @@ func TestStartStopRestartDaemonWithMockStarter(t *testing.T) {
 					Body:       io.NopCloser(strings.NewReader(`{}`)),
 					Header:     make(http.Header),
 				}, nil
-			case req.URL.Path == "/v1/workspace":
+			case "/v1/workspace":
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(`{"workspace":{"root":"/workspace"}}`)),
 					Header:     make(http.Header),
 				}, nil
-			case req.URL.Path == "/v1/commands":
+			case "/v1/commands":
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(`[]`)),
 					Header:     make(http.Header),
 				}, nil
-			case req.URL.Path == "/v1/skills":
+			case "/v1/skills":
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(`[]`)),
 					Header:     make(http.Header),
 				}, nil
-			case req.URL.Path == "/v1/agents":
+			case "/v1/agents":
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(`[]`)),
@@ -236,8 +236,8 @@ func TestDisconnectDetectionInSessionsWatcher(t *testing.T) {
 
 	rt := &mockSessionRoundTripper{
 		handler: func(req *http.Request) (*http.Response, error) {
-			switch {
-			case req.URL.Path == "/v1/events":
+			switch req.URL.Path {
+			case "/v1/events":
 				if !healthy.Load() {
 					return nil, errors.New("connection broken")
 				}
@@ -247,7 +247,7 @@ func TestDisconnectDetectionInSessionsWatcher(t *testing.T) {
 					Body:       io.NopCloser(strings.NewReader("")),
 					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 				}, nil
-			case req.URL.Path == "/v1/health":
+			case "/v1/health":
 				if !healthy.Load() {
 					return nil, errors.New("connection refused")
 				}

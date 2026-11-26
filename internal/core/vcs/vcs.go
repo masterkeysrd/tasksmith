@@ -212,6 +212,9 @@ func AddWorktree(ctx context.Context, dir, worktreePath, branch string, createBr
 	if strings.TrimSpace(branch) == "" {
 		return errors.New("vcs: branch name must not be empty")
 	}
+	if strings.HasPrefix(branch, "-") {
+		return errors.New("vcs: branch name must not start with a dash")
+	}
 
 	execDir, _, err := gitExecDir(ctx, dir)
 	if err != nil {
@@ -223,23 +226,18 @@ func AddWorktree(ctx context.Context, dir, worktreePath, branch string, createBr
 		return fmt.Errorf("vcs: resolve worktree path: %w", err)
 	}
 
-	var args []string
-	if createBranch {
-		// Check whether HEAD resolves to a valid commit. If not (e.g. unborn HEAD
-		// or a bare hub whose HEAD points to an unborn ref), check if another
-		// local branch exists as a base, or fall back to --orphan.
-		if _, headErr := runGit(ctx, execDir, "rev-parse", "--verify", "--quiet", "HEAD"); headErr != nil {
-			branches, _ := ListBranches(ctx, dir)
-			if len(branches) > 0 {
-				args = []string{"worktree", "add", "-b", branch, absWorktreePath, branches[0]}
-			} else {
-				args = []string{"worktree", "add", "--orphan", "-b", branch, absWorktreePath}
-			}
+	args := []string{"worktree", "add"}
+	switch {
+	case !createBranch:
+		args = append(args, "--", absWorktreePath, branch)
+	case headExists(ctx, execDir):
+		args = append(args, "-b", branch, "--", absWorktreePath)
+	default:
+		if branches, _ := ListBranches(ctx, dir); len(branches) > 0 {
+			args = append(args, "-b", branch, "--", absWorktreePath, branches[0])
 		} else {
-			args = []string{"worktree", "add", "-b", branch, absWorktreePath}
+			args = append(args, "--orphan", "-b", branch, "--", absWorktreePath)
 		}
-	} else {
-		args = []string{"worktree", "add", absWorktreePath, branch}
 	}
 
 	_, err = runGit(ctx, execDir, args...)
@@ -269,7 +267,7 @@ func RemoveWorktree(ctx context.Context, dir, worktreePath string, force bool) e
 	if force {
 		args = append(args, "--force")
 	}
-	args = append(args, absWorktreePath)
+	args = append(args, "--", absWorktreePath)
 
 	_, err = runGit(ctx, execDir, args...)
 	return err
@@ -279,6 +277,9 @@ func RemoveWorktree(ctx context.Context, dir, worktreePath string, force bool) e
 func SwitchBranch(ctx context.Context, dir, branch string, create bool) error {
 	if strings.TrimSpace(branch) == "" {
 		return errors.New("vcs: branch name must not be empty")
+	}
+	if strings.HasPrefix(branch, "-") {
+		return errors.New("vcs: branch name must not start with a dash")
 	}
 
 	info, err := Inspect(ctx, dir)
@@ -294,9 +295,9 @@ func SwitchBranch(ctx context.Context, dir, branch string, create bool) error {
 
 	var args []string
 	if create {
-		args = []string{"checkout", "-b", branch}
+		args = []string{"switch", "-c", branch}
 	} else {
-		args = []string{"checkout", branch}
+		args = []string{"switch", "--", branch}
 	}
 
 	_, err = runGit(ctx, info.RootDir, args...)
@@ -468,14 +469,14 @@ func parseWorktreePorcelain(out string) []Worktree {
 	return worktrees
 }
 
-func runGit(ctx context.Context, dir string, args ...string) (string, error) {
-	cmdArgs := make([]string, 0, len(args)+2)
-	if dir != "" {
-		cmdArgs = append(cmdArgs, "-C", dir)
-	}
-	cmdArgs = append(cmdArgs, args...)
+func headExists(ctx context.Context, dir string) bool {
+	_, err := runGit(ctx, dir, "rev-parse", "--verify", "--quiet", "HEAD")
+	return err == nil
+}
 
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+func runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = filepath.Clean(dir)
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_SSH_COMMAND=ssh -o BatchMode=yes",

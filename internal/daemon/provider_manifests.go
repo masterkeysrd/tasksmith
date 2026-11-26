@@ -603,6 +603,8 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 			return nil, fmt.Errorf("daemon: resolve user providers dir: %w", dirErr)
 		}
 		dir = userDir
+	} else if !fsutils.IsConfinedInsideDir(dir, ws.RootDir()) {
+		return nil, fmt.Errorf("daemon: providers directory escapes workspace")
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("daemon: create providers directory: %w", err)
@@ -624,7 +626,7 @@ func (d *Daemon) CreateProvider(ctx context.Context, rawWS string, req api.Creat
 		return nil, fmt.Errorf("daemon: new provider manifest is invalid: %w", err)
 	}
 	path := filepath.Join(dir, name+".provider.yaml")
-	if _, err := os.Stat(path); err == nil {
+	if _, err := os.Lstat(path); err == nil {
 		return nil, &api.APIError{
 			StatusCode: http.StatusConflict,
 			Code:       "already_exists",

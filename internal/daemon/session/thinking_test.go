@@ -89,7 +89,7 @@ func TestThinkingDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer gw.Close()
+	defer closeTestResource(t, gw)
 	perms, err := permissions.New(permissions.Config{Workspace: ws})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestThinkingDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mgr.Close()
+	defer closeTestResource(t, mgr)
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "test",
 		Config: api.SessionConfig{
@@ -145,7 +145,7 @@ func TestThinkingDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer changed.Close()
+	defer closeTestResource(t, changed)
 	changedCatalog := testCatalog(t, ws, warp.ProviderModel{
 		ID:           "supported",
 		Capabilities: &warp.ProviderModelCapabilities{},
@@ -162,7 +162,7 @@ func TestThinkingDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer closeTestResource(t, reopened)
 	loaded, err := reopened.Get(ctx, sess.ID)
 	if err != nil || loaded.Config.Thinking == nil || len(loaded.Diagnostics) != 1 ||
 		loaded.Diagnostics[0].Code != "thinking_override_unsupported" {
@@ -306,7 +306,7 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer gw.Close()
+	defer closeTestResource(t, gw)
 	perms, err := permissions.New(permissions.Config{Workspace: ws})
 	if err != nil {
 		t.Fatal(err)

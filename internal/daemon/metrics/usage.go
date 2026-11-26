@@ -244,7 +244,7 @@ ORDER BY r.created_at, r.id`, sessionID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("metrics: load entries: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var (
 		out []Entry

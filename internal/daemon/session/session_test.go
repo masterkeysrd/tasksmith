@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,6 +47,13 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
+
+func closeTestResource(t *testing.T, closer io.Closer) {
+	t.Helper()
+	if err := closer.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func testAppendMessage(ctx context.Context, sess *Session, msg message.Message) error {
 	if msg == nil {
@@ -112,7 +120,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer gw.Close()
+	defer closeTestResource(t, gw)
 	perms, err := permissions.New(permissions.Config{Workspace: ws})
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +135,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mgr.Close()
+	defer closeTestResource(t, mgr)
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "test", Config: api.SessionConfig{Agent: "cold", Model: "local/unsupported"}})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +184,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer closeTestResource(t, reopened)
 	loaded, err := reopened.Get(ctx, sess.ID)
 	if err != nil || len(loaded.Diagnostics) != 1 || loaded.Diagnostics[0].Code != "temperature_unsupported" {
 		t.Fatalf("reopened diagnostics: %+v, %v", loaded, err)
@@ -4692,19 +4700,15 @@ Custom tool.
 	defs := sessDef.Tools.Definitions()
 	checkTool := func(name string, wantDefer bool) {
 		t.Helper()
-		var found bool
 		for _, d := range defs {
 			if d.Name == name {
-				found = true
 				if d.DeferLoading != wantDefer {
 					t.Errorf("tool %q: DeferLoading = %v, want %v", name, d.DeferLoading, wantDefer)
 				}
 				return
 			}
 		}
-		if !found {
-			t.Errorf("expected tool %q in definitions, got %v", name, defs)
-		}
+		t.Errorf("expected tool %q in definitions, got %v", name, defs)
 	}
 	checkTool("view", false)
 	checkTool("tool_search", false)
@@ -6141,7 +6145,7 @@ func TestDirectSessionPackageAPIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}
-	defer sess.Close()
+	defer closeTestResource(t, sess)
 
 	if sess.ID == "" {
 		t.Fatal("expected non-empty session ID")
@@ -6197,7 +6201,7 @@ func TestDirectSessionPackageAPIs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer opened.Close()
+	defer closeTestResource(t, opened)
 
 	if opened.ID != sess.ID {
 		t.Errorf("opened.ID = %s, want %s", opened.ID, sess.ID)
@@ -6539,8 +6543,8 @@ func TestHumanAgentTriggerEnforcement(t *testing.T) {
 	// The built-in "explore" agent must be loaded and restricted to the
 	// "agent" trigger so the enforcement below is meaningful.
 	if snap, ok := ws.Catalog().GetAgent("explore"); ok {
-		if snap.Agent.CanHumanTrigger() {
-			t.Fatalf("expected built-in explore agent to exclude the human trigger, got triggers %v", snap.Agent.Triggers)
+		if snap.CanHumanTrigger() {
+			t.Fatalf("expected built-in explore agent to exclude the human trigger, got triggers %v", snap.Triggers)
 		}
 	} else {
 		t.Fatalf("expected built-in explore agent to be present in the catalog")
@@ -6594,7 +6598,7 @@ func TestHumanAgentTriggerEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New subagent with restricted agent err = %v, want nil", err)
 	}
-	defer child.Close()
+	defer closeTestResource(t, child)
 	if child.Config.Agent != "explore" {
 		t.Errorf("expected subagent agent %q, got %q", "explore", child.Config.Agent)
 	}
@@ -6750,7 +6754,7 @@ All-eager agent.
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer sess.Close()
+	defer closeTestResource(t, sess)
 
 	// 1. The deferred agent renders the tool_search section and the
 	//    <deferred_tools> directory listing linter and the github MCP server.

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -158,7 +159,7 @@ func TestGlob(t *testing.T) {
 		t.Fatalf("Glob() error: %v", err)
 	}
 	for _, m := range allFiles {
-		if filepath.HasPrefix(m, ".git") {
+		if strings.HasPrefix(m, ".git") {
 			t.Errorf("expected .git files to be ignored, got %q", m)
 		}
 	}

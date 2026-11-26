@@ -922,7 +922,10 @@ func TestWebFetchStreamingSpill(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		for i := 1; i <= 600; i++ {
-			fmt.Fprintf(w, "web line %03d\n", i)
+			if _, err := fmt.Fprintf(w, "web line %03d\n", i); err != nil {
+				t.Errorf("write response: %v", err)
+				return
+			}
 		}
 	}))
 	defer ts.Close()

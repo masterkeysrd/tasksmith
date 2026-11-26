@@ -60,7 +60,12 @@ func TestStreamStoppedAtInputEventDoesNotStartGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
+	if err := h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: registry,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	input := message.NewUserText("hello")
 	input.SetID("")
 	for event, err := range h.Stream(ctx, Input{Message: input}) {

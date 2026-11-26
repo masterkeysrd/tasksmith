@@ -87,7 +87,10 @@ func TestThinkingProfileAndRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range stream {
+	for _, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	if provider.request == nil || provider.request.Thinking == nil || provider.request.Thinking.Effort != "minimal" {
 		t.Fatalf("thinking did not reach provider: %+v", provider.request)

@@ -41,7 +41,7 @@ func TestRuntimeSharesGatewayAcrossModelOverrides(t *testing.T) {
 	xdg.SetTestEnv(t.TempDir(), "tasksmith-catalog-pool-test")
 	t.Cleanup(xdg.ClearCache)
 	pool := gateway.NewPool()
-	defer pool.Close()
+	defer checkClose(t, pool)
 	d := newTestDaemon(t, pool)
 
 	var runtimes []*workspaceRuntime
@@ -94,7 +94,7 @@ func TestRuntimeBuildsAndSwapsCatalog(t *testing.T) {
 	writeProvider(8000)
 
 	pool := gateway.NewPool()
-	defer pool.Close()
+	defer checkClose(t, pool)
 	d := newTestDaemon(t, pool)
 
 	rt, err := d.workspace(ctx, root)
@@ -185,7 +185,7 @@ func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	writeAgent(true)
 	writeProvider(false)
 	pool := &failingReloadPool{Pool: gateway.NewPool()}
-	defer pool.Close()
+	defer checkClose(t, pool)
 	d := newTestDaemon(t, pool)
 
 	rt, err := d.workspace(ctx, root)

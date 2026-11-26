@@ -242,3 +242,31 @@ func TestDescriptorRoundTripThroughJSON(t *testing.T) {
 		t.Fatalf("got descriptor %+v, want %+v", got, desc)
 	}
 }
+
+func TestBlobOperationsStayInStore(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("blob")
+	digest := hash.SHA256Hex(data)
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(s.Dir(), digest)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Read(digest); err == nil || s.Exists(digest) {
+		t.Fatal("external symlink treated as a blob")
+	}
+	if _, _, err := s.Put(t.Context(), data); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Read(digest); err != nil || string(got) != "blob" {
+		t.Fatalf("read blob: %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "keep" {
+		t.Fatalf("external file changed: %q, %v", got, err)
+	}
+}

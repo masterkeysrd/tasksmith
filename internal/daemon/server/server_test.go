@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -1232,5 +1233,44 @@ func TestWorkspaceFilesEndpoint(t *testing.T) {
 	}
 	if len(files) != 1 || files[0].Path != "app.go" {
 		t.Errorf("files = %+v", files)
+	}
+}
+
+func TestBodyWorkspaceMustBeAbsolute(t *testing.T) {
+	handler := setupTestServer(&mockBackend{})
+	for _, tc := range []struct {
+		body string
+		path string
+	}{
+		{`{"cwd":"relative"}`, "/v1/workspace/init"},
+		{`{"path":"/a\u0000b"}`, "/v1/workspace/trust"},
+	} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body)))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("body %s: status %d", tc.body, w.Code)
+		}
+	}
+}
+
+func TestWorkspaceBoundary(t *testing.T) {
+	handler := setupTestServer(&mockBackend{})
+	for _, header := range []bool{false, true} {
+		for cwd, status := range map[string]int{"/a/../b": 200, "rel/path": 400, "/a\x00b": 400} {
+			r := httptest.NewRequest(http.MethodGet, "/v1/workspace", nil)
+			if header {
+				r.Header.Set(api.HeaderCWD, cwd)
+			} else {
+				r.URL.RawQuery = "workspace=" + url.QueryEscape(cwd)
+			}
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			if w.Code == http.StatusOK && server.RequestWorkspace(r) != "/b" {
+				t.Errorf("workspace not cleaned: %q", server.RequestWorkspace(r))
+			}
+			if w.Code != status {
+				t.Errorf("workspace %q: status %d, want %d", cwd, w.Code, status)
+			}
+		}
 	}
 }

@@ -310,7 +310,9 @@ func TestRunWithCWD(t *testing.T) {
 	}, 2*time.Second, "initial frame render")
 
 	cancel()
-	<-errCh
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run after cancellation: %v", err)
+	}
 }
 
 func TestRunStartupHeader(t *testing.T) {

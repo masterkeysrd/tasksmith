@@ -112,7 +112,12 @@ func updateMRU(recent []string, path string) []string {
 	if path == "" || path == "." {
 		return recent
 	}
-	out := make([]string, 0, min(len(recent)+1, maxRecentPaths))
+	capHint := maxRecentPaths
+	if len(recent) < maxRecentPaths {
+		capHint = len(recent) + 1
+	}
+
+	out := make([]string, 0, capHint)
 	out = append(out, path)
 	for _, p := range recent {
 		if p != path {

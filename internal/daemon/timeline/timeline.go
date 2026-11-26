@@ -232,7 +232,7 @@ func (s *sqliteTimeline) List(ctx context.Context) ([]Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("timeline: list entries for session %q: %w", s.sessionID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	entries := make([]Entry, 0)
 	for rows.Next() {
@@ -259,7 +259,7 @@ func (s *sqliteTimeline) Messages(ctx context.Context) (message.MessageList, err
 	if err != nil {
 		return nil, fmt.Errorf("timeline: query messages for session %q: %w", s.sessionID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	list := make(message.MessageList, 0)
 	for rows.Next() {

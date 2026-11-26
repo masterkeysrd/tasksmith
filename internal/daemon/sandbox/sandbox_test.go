@@ -134,7 +134,7 @@ func TestFSCapabilityAndConfinement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New sandbox: %v", err)
 	}
-	defer sbx.Close()
+	defer checkClose(t, sbx)
 
 	fsys := sbx.FS()
 
@@ -282,7 +282,7 @@ func TestFSReadOnlyEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New read-only sandbox: %v", err)
 	}
-	defer sbx.Close()
+	defer checkClose(t, sbx)
 
 	fsys := sbx.FS()
 
@@ -320,7 +320,7 @@ func TestFSReadOnlyEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFile(O_RDONLY) failed: %v", err)
 	}
-	defer f.Close()
+	defer checkClose(t, f)
 	if _, err := f.Write([]byte("mutate")); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("expected ErrReadOnly when writing to read-only File handle, got %v", err)
 	}
@@ -352,7 +352,7 @@ func TestUploadAndDownload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New sandbox: %v", err)
 	}
-	defer sbx.Close()
+	defer checkClose(t, sbx)
 
 	// 1. Upload single file into sandbox
 	if err := sbx.Upload(ctx, singleHostFile, "uploaded/single.txt"); err != nil {
@@ -408,7 +408,7 @@ func TestUploadAndDownload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New RO sandbox: %v", err)
 	}
-	defer roSbx.Close()
+	defer checkClose(t, roSbx)
 
 	if err := roSbx.Upload(ctx, singleHostFile, "blocked.txt"); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("expected ErrReadOnly on Upload to read-only sandbox, got %v", err)
@@ -436,7 +436,7 @@ func TestProcExecEnvIsolationAndConfinement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New sandbox: %v", err)
 	}
-	defer sbx.Close()
+	defer checkClose(t, sbx)
 
 	res, err := sbx.Proc().Exec(ctx, Command{
 		Name: "sh",
@@ -621,7 +621,7 @@ func TestModeNativeExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New ModeNative RW sandbox: %v", err)
 	}
-	defer sbxRW.Close()
+	defer checkClose(t, sbxRW)
 
 	// Writing inside WorkDir must succeed
 	resInside, err := sbxRW.Proc().Exec(ctx, Command{
@@ -675,7 +675,7 @@ func TestModeNativeExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New ModeNative RO sandbox: %v", err)
 	}
-	defer sbxRO.Close()
+	defer checkClose(t, sbxRO)
 
 	resRO, err := sbxRO.Proc().Exec(ctx, Command{
 		Name: "sh",
@@ -701,7 +701,7 @@ func TestNetPolicyEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New disabled-net sandbox: %v", err)
 	}
-	defer sbxDisabled.Close()
+	defer checkClose(t, sbxDisabled)
 
 	if _, err := sbxDisabled.Net().DialContext(ctx, "tcp", "example.com:80"); !errors.Is(err, ErrNetworkDisabled) {
 		t.Fatalf("expected ErrNetworkDisabled, got %v", err)
@@ -715,7 +715,7 @@ func TestNetPolicyEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New no-loopback sandbox: %v", err)
 	}
-	defer sbxNoLoop.Close()
+	defer checkClose(t, sbxNoLoop)
 
 	for _, addr := range []string{"127.0.0.1:8080", "[::1]:8080", "localhost:8080"} {
 		if _, err := sbxNoLoop.Net().DialContext(ctx, "tcp", addr); !errors.Is(err, ErrLoopbackBlocked) {
@@ -747,7 +747,7 @@ func TestNetPolicyEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New policy sandbox: %v", err)
 	}
-	defer sbxPolicy.Close()
+	defer checkClose(t, sbxPolicy)
 
 	// Blocked exact host inside allowed wildcard must be rejected (BlockedHosts takes precedence)
 	if _, err := sbxPolicy.Net().DialContext(ctx, "tcp", "blocked.trusted.example.com:443"); !errors.Is(err, ErrHostBlocked) {
@@ -767,7 +767,7 @@ func TestNetPolicyEnforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HTTPClient.Get(%q) failed: %v", srv.URL, err)
 	}
-	defer resp.Body.Close()
+	defer checkClose(t, resp.Body)
 	body, err := io.ReadAll(resp.Body)
 	if err != nil || string(body) != "sandbox-net-ok" {
 		t.Fatalf("unexpected response body %q (err=%v)", string(body), err)
@@ -1329,5 +1329,12 @@ func TestReadOnlyAllowsSessionWriteDirs(t *testing.T) {
 	data, err := sbx.FS().ReadFile(ctx, planFile)
 	if err != nil || string(data) != "# Plan\n" {
 		t.Fatalf("ReadFile in plansDir = %q, %v", data, err)
+	}
+}
+
+func checkClose(t *testing.T, closer io.Closer) {
+	t.Helper()
+	if err := closer.Close(); err != nil {
+		t.Errorf("close %T: %v", closer, err)
 	}
 }

@@ -476,3 +476,16 @@ func TestSwitchBranch_Diff_Status(t *testing.T) {
 		t.Fatalf("unexpected Status output:\n%s", statusOut)
 	}
 }
+
+func TestRejectFlagLikeBranches(t *testing.T) {
+	for _, create := range []bool{false, true} {
+		for _, err := range []error{
+			SwitchBranch(t.Context(), t.TempDir(), "--help", create),
+			AddWorktree(t.Context(), t.TempDir(), t.TempDir(), "--help", create),
+		} {
+			if err == nil || !strings.Contains(err.Error(), "start with a dash") {
+				t.Errorf("expected invalid branch error, got %v", err)
+			}
+		}
+	}
+}

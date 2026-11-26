@@ -401,3 +401,19 @@ func TestFormatContent(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveURLSchemes(t *testing.T) {
+	for ref, want := range map[string]string{
+		"javascript:void(0)":       "",
+		"data:text/plain,x":        "",
+		"vbscript:x":               "",
+		"DaTa:text/plain,x":        "",
+		"docs":                     "https://example.org/docs",
+		"https://example.org/page": "https://example.org/page",
+		"mailto:a@example.org":     "mailto:a@example.org",
+	} {
+		if got := resolveURL("https://example.org/", ref); got != want {
+			t.Errorf("resolveURL(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}

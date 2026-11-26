@@ -1246,3 +1246,13 @@ func TestViewGrepAndListLimitsAndDynamicGutter(t *testing.T) {
 		t.Fatalf("expected truncated grep match line, got len=%d", len(grepRes.Matches[0].Text))
 	}
 }
+
+func TestTrackerMRUCap(t *testing.T) {
+	for _, n := range []int{0, maxRecentPaths - 1, maxRecentPaths, maxRecentPaths + 1} {
+		got := updateMRU(make([]string, n), "latest")
+		want := min(n+1, maxRecentPaths)
+		if len(got) != want || cap(got) != want || got[0] != "latest" {
+			t.Errorf("input length %d: length %d, capacity %d", n, len(got), cap(got))
+		}
+	}
+}

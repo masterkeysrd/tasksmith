@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -71,7 +72,7 @@ func makeBuiltinManifest(source fs.FS) (builtinManifest, error) {
 	root := sha256.New()
 	for _, name := range paths {
 		entry := manifest.Files[name]
-		fmt.Fprintf(root, "%s\x00%04o\x00%d\x00%s\n", name, entry.Mode, entry.Size, entry.Hash)
+		_, _ = fmt.Fprintf(root, "%s\x00%04o\x00%d\x00%s\n", name, entry.Mode, entry.Size, entry.Hash)
 	}
 	manifest.TreeHash = "h1:" + hex.EncodeToString(root.Sum(nil))
 	return manifest, nil
@@ -105,7 +106,7 @@ func EnsureBuiltinDir() (string, error) {
 	return dir, nil
 }
 
-func syncBuiltinDir(dir string, source fs.FS, manifest builtinManifest) error {
+func syncBuiltinDir(dir string, source fs.FS, manifest builtinManifest) (retErr error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
@@ -113,7 +114,12 @@ func syncBuiltinDir(dir string, source fs.FS, manifest builtinManifest) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() {
+		if err := root.Close(); retErr == nil {
+			retErr = err
+		}
+	}()
+
 	var previous builtinManifest
 	if data, err := root.ReadFile(".manifest.json"); err == nil {
 		_ = json.Unmarshal(data, &previous)
@@ -178,15 +184,17 @@ func writeBuiltinAtomic(root *os.Root, name string, data []byte, mode os.FileMod
 	if err != nil {
 		return err
 	}
-	defer root.Remove(tmp)
 	if _, err = f.Write(data); err == nil {
 		err = f.Chmod(mode)
 	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
-	if err != nil {
-		return err
+	if err == nil {
+		err = root.Rename(tmp, name)
 	}
-	return root.Rename(tmp, name)
+	if err != nil {
+		return errors.Join(err, root.Remove(tmp))
+	}
+	return nil
 }

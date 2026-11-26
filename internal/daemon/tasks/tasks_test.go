@@ -24,7 +24,7 @@ func TestFastSynchronousCompletion(t *testing.T) {
 			mu.Unlock()
 		},
 	})
-	defer mgr.Close()
+	defer checkClose(t, mgr)
 
 	task := &Task{
 		Kind:  "test",
@@ -71,7 +71,7 @@ func TestFastSynchronousCompletion(t *testing.T) {
 
 func TestCallerContextCancellationDuringWait(t *testing.T) {
 	mgr := New(Config{})
-	defer mgr.Close()
+	defer checkClose(t, mgr)
 
 	started := make(chan struct{})
 	task := &Task{
@@ -119,7 +119,7 @@ func TestBackgroundTransitionWhenWaitExpires(t *testing.T) {
 			mu.Unlock()
 		},
 	})
-	defer mgr.Close()
+	defer checkClose(t, mgr)
 
 	unblock := make(chan struct{})
 	task := &Task{
@@ -197,7 +197,7 @@ func TestWriteInputTailAndSubscribeOutput(t *testing.T) {
 	mgr := New(Config{
 		OutputsDir: tempDir,
 	})
-	defer mgr.Close()
+	defer checkClose(t, mgr)
 
 	inputReceived := make(chan string, 1)
 	task := &Task{
@@ -309,7 +309,7 @@ func TestWriteInputRejectsTasksWithoutAcceptsInput(t *testing.T) {
 
 func TestKillRunningBackgroundTask(t *testing.T) {
 	mgr := New(Config{})
-	defer mgr.Close()
+	defer checkClose(t, mgr)
 
 	task := &Task{
 		Kind:  "bash",
@@ -341,7 +341,7 @@ func TestKillRunningBackgroundTask(t *testing.T) {
 
 func TestListSorting(t *testing.T) {
 	mgr := New(Config{})
-	defer mgr.Close()
+	defer checkClose(t, mgr)
 
 	t1 := &Task{
 		ID:    "task-b",
@@ -386,7 +386,7 @@ func TestBoundedMemoryAndDiskWrites(t *testing.T) {
 	mgr := New(Config{
 		OutputsDir: tempDir,
 	})
-	defer mgr.Close()
+	defer checkClose(t, mgr)
 
 	task := &Task{
 		Kind:  "test",
@@ -438,7 +438,7 @@ func TestBoundedMemoryAndDiskWrites(t *testing.T) {
 
 func TestKillTaskLifecycle(t *testing.T) {
 	mgr := New(Config{})
-	defer mgr.Close()
+	defer checkClose(t, mgr)
 
 	// 1. Lookup unknown task -> not found
 	if _, ok := mgr.Get("missing"); ok {
@@ -508,5 +508,12 @@ func TestStandaloneTaskExecution(t *testing.T) {
 	}
 	if !strings.Contains(tail, "standalone output") {
 		t.Fatalf("expected output, got %q", tail)
+	}
+}
+
+func checkClose(t *testing.T, closer io.Closer) {
+	t.Helper()
+	if err := closer.Close(); err != nil {
+		t.Errorf("close %T: %v", closer, err)
 	}
 }

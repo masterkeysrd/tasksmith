@@ -539,7 +539,11 @@ spec:
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sb.Close()
+	defer func() {
+		if err := sb.Close(); err != nil {
+			t.Errorf("close sandbox: %v", err)
+		}
+	}()
 
 	sp, err := tools.NewSpiller(tools.SpillerConfig{
 		BaseDir: filepath.Join(dir, ".spill"),

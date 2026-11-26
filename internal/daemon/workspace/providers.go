@@ -56,6 +56,10 @@ func providerManifestDir(rootDir string) string {
 	return filepath.Join(rootDir, warp.DefaultAgentsDir, "providers")
 }
 
+func validManifestName(name string) bool {
+	return name != "" && name != "." && !strings.Contains(name, "..") && !strings.ContainsAny(name, "/\\\x00")
+}
+
 func writableProviderNamespace(ns string) bool {
 	switch strings.ToLower(strings.TrimSpace(ns)) {
 	case warp.NamespaceUser, warp.NamespaceWorkspace, warp.NamespaceLocal:
@@ -98,7 +102,7 @@ func (w *Workspace) providerRecords() []ProviderRecord {
 			continue
 		}
 		name := strings.TrimSpace(mp.Metadata.Name)
-		if name != "" {
+		if validManifestName(name) {
 			byName[name] = append(byName[name], mp)
 		}
 	}
@@ -131,6 +135,9 @@ func (w *Workspace) providerRecords() []ProviderRecord {
 		}
 
 		writable := writableProviderNamespace(ns) && path != ""
+		if writable && ns != warp.NamespaceUser {
+			writable = fsutils.IsConfinedInsideDir(path, w.RootDir())
+		}
 		if writable {
 			if info, err := os.Stat(path); err != nil || info.IsDir() {
 				writable = false
@@ -339,7 +346,7 @@ func (w *Workspace) SetProviderEnabled(name string, enabled bool) error {
 	}
 	// Muting a global provider locally: author the workspace shadow rather than
 	// editing the user manifest, which every other repository inherits.
-	return w.writeProviderShadow(name, false)
+	return w.writeProviderShadow(rec.Name, false)
 }
 
 func enabledPtr(enabled bool) *bool {
@@ -353,8 +360,17 @@ func enabledPtr(enabled bool) *bool {
 // writeProviderShadow creates (or patches) the workspace-tier shadow manifest
 // for an inherited provider, carrying only the enable flag.
 func (w *Workspace) writeProviderShadow(name string, enabled bool) error {
+	if !validManifestName(name) {
+		return fmt.Errorf("workspace: invalid provider name %q", name)
+	}
 	dir := providerManifestDir(w.RootDir())
+	if !fsutils.IsConfinedInsideDir(dir, w.RootDir()) {
+		return errors.New("workspace: providers directory escapes workspace")
+	}
 	path := filepath.Join(dir, name+".provider.yaml")
+	if !fsutils.IsConfinedInsideDir(path, w.RootDir()) {
+		return errors.New("workspace: provider shadow escapes workspace")
+	}
 
 	var mp *warp.ModelProvider
 	if data, err := os.ReadFile(path); err == nil {
@@ -422,6 +438,9 @@ func (w *Workspace) promoteInheritedProvider(rec ProviderRecord) error {
 	promoted.Spec.Enabled = nil
 
 	dir := providerManifestDir(w.RootDir())
+	if !fsutils.IsConfinedInsideDir(dir, w.RootDir()) {
+		return errors.New("workspace: providers directory escapes workspace")
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("workspace: create providers directory: %w", err)
 	}

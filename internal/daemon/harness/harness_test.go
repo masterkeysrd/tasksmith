@@ -322,10 +322,12 @@ func TestSingleTurnStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	deltas, reply, err := drainStream(ctx, h, message.NewUserText("Hi there"))
 	if err != nil {
@@ -383,10 +385,12 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: model,
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Verify empty state before any turn on thread
 	initialState, err := h.LoadState(ctx)
@@ -419,10 +423,12 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New h2 error: %v", err)
 	}
-	h2.Configure(NodeOptions{
+	if err := h2.Configure(NodeOptions{
 		Model: model,
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	_, reply2, err := drainStream(ctx, h2, message.NewUserText("What is my name?"))
 	if err != nil {
@@ -504,11 +510,13 @@ func TestSystemPromptIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model:        newTestModel(t, prov),
 		Tools:        reg,
 		SystemPrompt: sysPrompt,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	_, _, err = drainStream(ctx, h, message.NewUserText("Ping"))
 	if err != nil {
@@ -577,10 +585,12 @@ func TestThreadIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New hA error: %v", err)
 	}
-	hA.Configure(NodeOptions{
+	if err := hA.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	hB, err := New(Config{
 		ID:          "thread-B",
@@ -594,10 +604,12 @@ func TestThreadIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New hB error: %v", err)
 	}
-	hB.Configure(NodeOptions{
+	if err := hB.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, _, err := drainStream(ctx, hA, message.NewUserText("Message for A")); err != nil {
 		t.Fatalf("Stream thread-A error: %v", err)
@@ -684,10 +696,12 @@ func TestMultiStepToolExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var emittedMessages []message.Message
 	var completedMsg message.Message
@@ -806,10 +820,12 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// 1. Calling Resume on a thread with no pending permissions -> ErrNoPendingPermissions
 	for _, err := range h.Stream(ctx, Input{Decisions: map[string]api.PermissionDecision{}}) {
@@ -975,10 +991,12 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Turn 1: Trigger permission interrupt
 	var interrupted bool
@@ -1075,7 +1093,12 @@ func TestCancelPendingCallsPreservesUserMessageID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: reg})
+	if err := h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: reg,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var interrupted bool
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
@@ -1178,10 +1201,12 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var toolMsgs []*message.Tool
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Try view, write, and unknown")}) {
@@ -1276,10 +1301,12 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: model,
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// 2. Nil message -> ErrNilMessage
 	if _, _, err := drainStream(ctx, h, nil); !errors.Is(err, ErrNilMessage) {
@@ -1321,10 +1348,12 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New hCancel error: %v", err)
 	}
-	hCancel.Configure(NodeOptions{
+	if err := hCancel.Configure(NodeOptions{
 		Model: newTestModel(t, cancelProv),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := drainStream(streamCancelCtx, hCancel, message.NewUserText("hi")); err == nil {
 		t.Errorf("expected error when context is canceled during streaming, got nil")
 	}
@@ -1352,10 +1381,12 @@ func TestCallerSuppliedUserMessageID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	customID := uuid.Must(uuid.NewV7()).String()
 	userMsg := message.NewUserText("Hello with custom id")
@@ -1536,10 +1567,12 @@ func TestInboxDrainAfterToolExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var emittedMessages []message.Message
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Read file")}) {
@@ -1660,10 +1693,12 @@ func TestInboxDrainDuringAgentWithoutTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var emittedMessages []message.Message
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Start turn")}) {
@@ -1751,10 +1786,12 @@ func TestInboxDirectTurnWithEmptyInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Calling Stream with empty Input{} initiates an inbox drain turn!
 	var emittedMessages []message.Message
@@ -1822,10 +1859,12 @@ func TestCommandNodeDoesNotWakeAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var events []any
 	for ev, err := range h.Stream(ctx, Input{}) {
@@ -1898,7 +1937,12 @@ func TestToolSpillUsesHarnessSessionScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
+	if err := h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: registry,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	ctx := tools.WithSpiller(context.Background(), spiller)
 	var output api.BashOutput
 	var found bool
@@ -1960,7 +2004,12 @@ func TestCommandSpillUsesSessionAndCommandScope(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			h.Configure(NodeOptions{Model: newTestModel(t, nil), Tools: registry})
+			if err := h.Configure(NodeOptions{
+				Model: newTestModel(t, nil),
+				Tools: registry,
+			}); err != nil {
+				t.Fatal(err)
+			}
 			ctx := context.Background()
 			if tc.conflict {
 				ctx = scope.With(ctx, scope.Scope{SessionID: "other-session", TurnID: "caller-turn", MessageID: "caller-message", ToolCallID: "other-call", ToolName: "other-tool"})
@@ -2092,10 +2141,12 @@ func TestUnifiedQueueOrderingAcrossGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var emittedMessages []message.Message
 	var cmdStartedCount, cmdCompletedCount int
@@ -2227,10 +2278,12 @@ func TestTodosToolExecutionAndCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, prov),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var todosEvents []api.TodosUpdatedEvent
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Start work")}) {
@@ -2316,10 +2369,12 @@ func TestForkFromCopiesAllChannelsAndRecordsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New child error: %v", err)
 	}
-	child.Configure(NodeOptions{
+	if err := child.Configure(NodeOptions{
 		Model: newTestModel(t, &fakeProvider{}),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := child.ForkFrom(ctx, "parent-thread"); err != nil {
 		t.Fatalf("ForkFrom: %v", err)
@@ -2392,10 +2447,12 @@ func TestForkFromNoParentCheckpointIsNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New child error: %v", err)
 	}
-	child.Configure(NodeOptions{
+	if err := child.Configure(NodeOptions{
 		Model: newTestModel(t, &fakeProvider{}),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Forking from a thread with no checkpoint is a no-op.
 	if err := child.ForkFrom(ctx, "missing-parent"); err != nil {
@@ -2494,10 +2551,12 @@ func TestCacheBrokenRequiresReportedMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, provider),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for turn := 1; turn <= 4; turn++ {
 		var events []api.CacheBrokenRecord
 		for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("request")}) {
@@ -2599,12 +2658,14 @@ func TestIncomingMessageUpdatesContextBeforeRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model:  newTestModel(t, provider),
 		Tools:  reg,
 		Static: static,
 		Limits: limits,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("first request")}) {
 		if err != nil && !errors.Is(err, failure) {
 			t.Fatal(err)
@@ -2638,11 +2699,13 @@ func TestIncomingMessageCrossesCompactionThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model:  newTestModel(t, provider),
 		Tools:  reg,
 		Limits: models.Limits{Context: 10000, Output: 1000},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("first")}) {
 		if err != nil {
 			t.Fatal(err)
@@ -2702,11 +2765,13 @@ func TestAutoCompactionTurnAndCommandBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model:  newTestModel(t, prov),
 		Tools:  reg,
 		Limits: models.Limits{Context: 10000, Output: 1000},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	run := func(input Input) []any {
 		t.Helper()
@@ -2801,10 +2866,12 @@ func TestManualCompactionDoesNotStreamSummaryChunks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model: newTestModel(t, provider),
 		Tools: reg,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("request")}) {
 		if err != nil {
 			t.Fatal(err)
@@ -2986,12 +3053,14 @@ func TestHarnessConfigureHotSwap(t *testing.T) {
 	_ = st
 
 	// Configure first model & tools
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model:        m1,
 		Tools:        reg1,
 		SystemPrompt: "System 1",
 		Limits:       models.Limits{Context: 1000},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Run turn 1
 	_, msg1, err := drainStream(ctx, h, message.NewUserText("Turn 1"))
@@ -3007,12 +3076,14 @@ func TestHarnessConfigureHotSwap(t *testing.T) {
 	}
 
 	// Hot-swap to second model, tools, and system prompt on existing Harness
-	h.Configure(NodeOptions{
+	if err := h.Configure(NodeOptions{
 		Model:        m2,
 		Tools:        reg2,
 		SystemPrompt: "System 2",
 		Limits:       models.Limits{Context: 2000},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Run turn 2 on same Harness instance
 	_, msg2, err := drainStream(ctx, h, message.NewUserText("Turn 2"))
@@ -3116,7 +3187,7 @@ func TestDeduplicateToolBlocks(t *testing.T) {
 
 	// A ToolDefinitionBlock is deduplicated the same way.
 	defMsg := message.NewUser(&message.ToolDefinitionBlock{Name: "custom_tool", Description: "x"})
-	out, newly = empty.DeduplicateToolBlocks(defMsg)
+	_, newly = empty.DeduplicateToolBlocks(defMsg)
 	if !reflect.DeepEqual(newly, []string{"custom_tool"}) {
 		t.Errorf("ToolDefinitionBlock newly loaded = %v, want [custom_tool]", newly)
 	}

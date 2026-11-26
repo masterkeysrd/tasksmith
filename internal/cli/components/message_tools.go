@@ -73,8 +73,11 @@ func formatDuration(ms int64) string {
 }
 
 func toolHeaderLeading(status store.ToolStatus, verb string, hasTarget bool, scheme *theme.Scheme) []trail.Node {
-	dotChar := "○"
-	var dotColor color.Color
+	var (
+		dotChar  string
+		dotColor color.Color
+	)
+
 	switch status {
 	case store.ToolSucceeded:
 		dotChar = "●"
