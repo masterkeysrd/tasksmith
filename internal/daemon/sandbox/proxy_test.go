@@ -312,6 +312,31 @@ func TestProxyHTTPDeniedAndAllowed(t *testing.T) {
 	}
 }
 
+func TestProxyConnectTLS(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, "upstream received %s", r.URL.Path)
+	}))
+	defer upstream.Close()
+	p, err := NewProxy(ProxyConfig{Policy: ProxyPolicy{AllowedDomains: []string{"127.0.0.1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = p.Close() }()
+
+	client := upstream.Client()
+	client.Timeout = 5 * time.Second
+	client.Transport.(*http.Transport).Proxy = http.ProxyURL(&url.URL{Scheme: "http", Host: p.Addr()})
+	resp, err := client.Get(upstream.URL + "/probe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || string(body) != "upstream received /probe" {
+		t.Fatalf("unexpected upstream response: %q, %v", body, err)
+	}
+}
+
 func TestProxyConnectTunnel(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -366,6 +391,112 @@ func TestProxyConnectTunnel(t *testing.T) {
 	}
 	if want := "HTTP/1.1 403"; len(status) < len(want) || status[:len(want)] != want {
 		t.Fatalf("CONNECT metadata target: want 403, got %q", status)
+	}
+}
+
+func TestProxyConnectHalfCloseAndShutdown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("loopback listen unavailable: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	go func() {
+		for {
+			conn, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				data, rerr := io.ReadAll(conn)
+				if rerr != nil {
+					return
+				}
+				if len(data) == 0 {
+					return
+				}
+				time.Sleep(25 * time.Millisecond)
+				_, _ = conn.Write(data)
+			}()
+		}
+	}()
+
+	_, echoPort, _ := net.SplitHostPort(ln.Addr().String())
+	target := "127.0.0.1:" + echoPort
+
+	p, err := NewProxy(ProxyConfig{Policy: ProxyPolicy{AllowedDomains: []string{"127.0.0.1"}}})
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	openTunnel := func() (*net.TCPConn, *bufio.Reader) {
+		t.Helper()
+		raw, derr := net.DialTimeout("tcp", p.Addr(), 5*time.Second)
+		if derr != nil {
+			t.Fatalf("dial proxy: %v", derr)
+		}
+		tcpConn := raw.(*net.TCPConn)
+		_ = tcpConn.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, werr := fmt.Fprintf(tcpConn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); werr != nil {
+			_ = tcpConn.Close()
+			t.Fatalf("write CONNECT: %v", werr)
+		}
+		br := bufio.NewReader(tcpConn)
+		resp, rerr := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
+		if rerr != nil {
+			_ = tcpConn.Close()
+			t.Fatalf("read CONNECT response: %v", rerr)
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = tcpConn.Close()
+			t.Fatalf("CONNECT status: want 200, got %d", resp.StatusCode)
+		}
+		return tcpConn, br
+	}
+
+	// Client writes payload and half-closes its write side before the upstream
+	// replies; the reverse stream must remain open to deliver the full echo.
+	conn, br := openTunnel()
+	const payload = "hello over half-closed connect tunnel"
+	if _, err := io.WriteString(conn, payload); err != nil {
+		_ = conn.Close()
+		t.Fatalf("write payload: %v", err)
+	}
+	if err := conn.CloseWrite(); err != nil {
+		_ = conn.Close()
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	got, err := io.ReadAll(br)
+	_ = conn.Close()
+	if err != nil {
+		t.Fatalf("read response after CloseWrite: %v", err)
+	}
+	if string(got) != payload {
+		t.Fatalf("half-close echo: want %q, got %q", payload, string(got))
+	}
+
+	// Closing the proxy must force-close idle open CONNECT tunnels promptly.
+	idleConn, idleBR := openTunnel()
+	defer func() { _ = idleConn.Close() }()
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, rerr := idleBR.ReadByte()
+		readDone <- rerr
+	}()
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case rerr := <-readDone:
+		if rerr == nil {
+			t.Fatal("expected idle tunnel read to fail after Proxy.Close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle CONNECT tunnel did not close after Proxy.Close")
 	}
 }
 

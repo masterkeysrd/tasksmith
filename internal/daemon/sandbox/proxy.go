@@ -319,6 +319,8 @@ type Proxy struct {
 	dialer    *proxyDialer
 	transport *http.Transport
 	closed    atomic.Bool
+	ctx       context.Context
+	cancel    context.CancelFunc
 	closeMu   sync.Mutex
 }
 
@@ -398,6 +400,11 @@ func NewProxy(cfg ProxyConfig) (*Proxy, error) {
 		p.unix = ul
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	p.ctx = ctx
+	p.cancel = cancel
+	p.server.BaseContext = func(net.Listener) context.Context { return ctx }
+
 	go func() { _ = p.server.Serve(ln) }()
 	if p.unix != nil {
 		go func() { _ = p.server.Serve(p.unix) }()
@@ -451,6 +458,7 @@ func (p *Proxy) Close() error {
 	if !p.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	p.cancel()
 	err := p.server.Close()
 	if p.transport != nil {
 		p.transport.CloseIdleConnections()
@@ -482,41 +490,53 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(r.Context())
-	conn, err := p.dialer.dial(ctx, "tcp", host, port)
+	conn, err := p.dialer.dial(r.Context(), "tcp", host, port)
 	if err != nil {
-		cancel()
 		http.Error(w, proxyDenialMessage(err), http.StatusForbidden)
 		return
 	}
+	defer func() { _ = conn.Close() }()
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		_ = conn.Close()
-		cancel()
 		http.Error(w, "proxy cannot hijack", http.StatusInternalServerError)
 		return
 	}
 	client, brw, err := hj.Hijack()
 	if err != nil {
+		return
+	}
+	defer func() { _ = client.Close() }()
+
+	closeBoth := func() {
+		_ = client.Close()
 		_ = conn.Close()
-		cancel()
+	}
+	stop := context.AfterFunc(p.ctx, closeBoth)
+	defer stop()
+	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
 
-	_, _ = client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	var clientReader io.Reader = client
+	if n := brw.Reader.Buffered(); n > 0 {
+		clientReader = io.MultiReader(io.LimitReader(brw.Reader, int64(n)), client)
+	}
 
-	// The request context ends when this handler returns, so pin the tunnel
-	// lifetime to the connections and cancel only once both sides finish.
+	forward := func(dst net.Conn, src io.Reader) {
+		if _, err := io.Copy(dst, src); err == nil {
+			if half, ok := dst.(interface{ CloseWrite() error }); ok && half.CloseWrite() == nil {
+				return
+			}
+		}
+		closeBoth()
+	}
 	done := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(conn, client)
-		_ = conn.Close()
-		cancel()
-		close(done)
+		defer close(done)
+		forward(conn, clientReader)
 	}()
-	_, _ = io.Copy(client, brw)
-	_ = client.Close()
+	forward(client, conn)
 	<-done
 }
 

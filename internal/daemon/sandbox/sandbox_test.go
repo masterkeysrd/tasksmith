@@ -689,6 +689,49 @@ func TestModeNativeExecution(t *testing.T) {
 	}
 }
 
+func TestConcurrentNetworkPolicy(t *testing.T) {
+	policy := NetworkPolicy{AllowedHosts: []string{"allowed.test"}, BlockedHosts: []string{"blocked.test"}}
+	sbx, err := New(Config{WorkDir: t.TempDir(), Network: policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer checkClose(t, sbx)
+
+	policy.AllowedHosts[0] = "blocked.test"
+	policy.BlockedHosts[0] = "allowed.test"
+	if _, err := sbx.Net().ValidateURL("https://allowed.test"); err != nil {
+		t.Fatalf("constructor retained caller slices: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 256 {
+			policy := NetworkPolicy{BlockedHosts: []string{"blocked.test"}}
+			if err := sbx.SetNetworkPolicy(policy); err != nil {
+				t.Error(err)
+				return
+			}
+			policy.BlockedHosts[0] = "changed.test"
+		}
+	}()
+	for range 256 {
+		if _, err := sbx.Net().ValidateURL("https://blocked.test"); !errors.Is(err, ErrHostBlocked) {
+			t.Errorf("ValidateURL: expected blocked host, got %v", err)
+			break
+		}
+		conn, err := sbx.Net().DialContext(t.Context(), "tcp", "blocked.test:443")
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if !errors.Is(err, ErrHostBlocked) {
+			t.Errorf("DialContext: expected blocked host, got %v", err)
+			break
+		}
+	}
+	<-done
+}
+
 func TestNetPolicyEnforcement(t *testing.T) {
 	ctx := context.Background()
 	workDir := t.TempDir()

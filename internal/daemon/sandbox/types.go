@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -77,6 +78,12 @@ type NetworkPolicy struct {
 	// When false (the default), dialing any host that resolves to or specifies a
 	// loopback address is rejected with ErrLoopbackBlocked.
 	AllowLoopback bool `json:"allow_loopback,omitempty"`
+}
+
+func (p NetworkPolicy) clone() NetworkPolicy {
+	p.AllowedHosts = slices.Clone(p.AllowedHosts)
+	p.BlockedHosts = slices.Clone(p.BlockedHosts)
+	return p
 }
 
 func (p *NetworkPolicy) IsZero() bool {

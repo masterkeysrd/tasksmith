@@ -100,6 +100,7 @@ func New(cfg Config) (Sandbox, error) {
 	envCopy := make(map[string]string, len(cfg.Env))
 	maps.Copy(envCopy, cfg.Env)
 	cfg.Env = envCopy
+	cfg.Network = cfg.Network.clone()
 	cfg.Mode = mode
 	cfg.WorkDir = cleanWorkDir
 
@@ -215,7 +216,7 @@ func (s *session) SetNetworkPolicy(policy NetworkPolicy) error {
 	if s.closed.Load() {
 		return ErrSandboxClosed
 	}
-	s.cfg.Network = policy
+	s.cfg.Network = policy.clone()
 	switch {
 	case s.netProxy != nil && (policy.Allowlist && !policy.Disabled):
 		s.netProxy.SetPolicy(policy.ProxyPolicy())

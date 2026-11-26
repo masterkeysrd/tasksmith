@@ -109,7 +109,8 @@ func (n *sandboxNet) ValidateURL(rawURL string) (*url.URL, error) {
 		return nil, fmt.Errorf("%w: missing host", ErrInvalidURL)
 	}
 
-	if err := checkHostPolicy(n.s.cfg.Network, rawHost, normalizedHost); err != nil {
+	policy, _ := n.s.networkPosture()
+	if err := checkHostPolicy(policy, rawHost, normalizedHost); err != nil {
 		return nil, err
 	}
 
@@ -124,7 +125,7 @@ func (n *sandboxNet) DialContext(ctx context.Context, network, addr string) (net
 		return nil, err
 	}
 
-	policy := n.s.cfg.Network
+	policy, _ := n.s.networkPosture()
 	if policy.Disabled {
 		return nil, ErrNetworkDisabled
 	}
