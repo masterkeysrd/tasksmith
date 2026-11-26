@@ -35,10 +35,11 @@ If you **are** `code-reviewer` (or do not have `invoke_agent`), execute the revi
    - **Paths**: Scope diffs with `-- <paths>` and read callers outside those paths only as needed to verify impact.
    - **PR number or URL**: Use `gh pr view <target>` and `gh pr diff <target>`. Do not check out the PR branch. If `gh` cannot access the PR, report the limitation clearly instead of silently reviewing an unverified local diff.
    - **Empty diff**: If there is nothing to review in the resolved scope, say so immediately and stop.
-2. **Load project rules & history**:
+2. **Load project rules, domain skills, & history**:
    - Read root and directory-scoped `AGENTS.md` and `WORKSPACE.md` files covering touched paths.
    - Load matching conditional `.agents/rules/` via `load_rule` so rule compliance checks cite real repository invariants.
-   - Check recent `git log` on key modified files when helpful to distinguish intentional refactors from accidental regressions.
+   - Check `<available_skills>` and call `load_skill` for any domain skill whose `<description>` or `<use_when>` matches the modified files or subsystems (for example, UI framework, storage, or protocol playbooks) so you verify domain-specific conventions too.
+   - Inspect sibling files in the same package/subsystem and recent `git log` on key modified files to understand local idioms, existing reusable helpers, and recent intent.
 
 ## 3. Audit & Adversarial Validation
 

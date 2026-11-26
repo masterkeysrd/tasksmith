@@ -39,13 +39,13 @@ Trace untrusted or external input (user input, repository files, PR/commit text,
 - **Auth & secret hygiene**: credentials/tokens leaked in logs, error messages, child environments, tests, or tracked files; missing auth/permission checks or stale-credential recovery loops.
 - **Trust & policy ceilings**: untrusted/restricted workspaces bypassing deny rules, sandbox confinement loosening, or child/subagent sessions inheriting broader privileges than their parent.
 
-## 5. Project Rules & Architectural Invariants
+## 5. Project Rules, Domain Skills, & Local Conventions
 
-Check the diff against the repository's explicit written standards (`AGENTS.md`, `WORKSPACE.md`, and matching `.agents/rules/` loaded via `load_rule`):
+Check the diff against the repository's written standards (`AGENTS.md`, `WORKSPACE.md`, matching `.agents/rules/` via `load_rule`, and matching domain skills from `<available_skills>` via `load_skill`) as well as established conventions in sibling files:
 
-- Cite the **exact rule** being violated and explain the concrete consequence.
-- Verify structural boundaries (e.g., daemon-vs-client separation, UI component/theme rules, docs/embedded-skill sync when user-facing behavior or schemas change).
-- Do **not** invent unwritten personal preferences and present them as repository rules.
+- **Written rules & domain playbooks**: Cite the **exact rule or skill** being violated and explain the concrete consequence. Verify structural boundaries (e.g., daemon-vs-client separation, UI component/theme/layout rules, docs/embedded-skill sync when user-facing behavior or schemas change).
+- **Reuse & sibling consistency**: Compare new code against neighboring files in the same package/subsystem. Flag material drift such as hand-rolling a duplicate formatter/truncator/test-helper/lock/error pattern when the codebase already provides a canonical one, or breaking a local invariant that sibling implementations uphold (e.g., viewport-width fallbacks, cleanup ordering, shared fixtures).
+- **No invented style rules**: Only flag local convention drift when there is a concrete maintainability, reuse, or behavioral consequence—do **not** dress up personal naming or formatting preferences as repository conventions.
 
 ## 6. High-Signal Test & Verification Gaps
 
