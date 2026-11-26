@@ -42,11 +42,11 @@ type AskQuestionOutput struct {
 // BashInput defines the input parameters for the bash tool.
 type BashInput struct {
 	Command         string `json:"command" jsonschema:"Shell command string passed to sh -c."`
-	BypassSandbox   bool   `json:"bypass_sandbox,omitempty" jsonschema:"Run this single command directly on the host without the OS sandbox. Requires explicit user approval and is only for commands that genuinely fail because of kernel sandbox restrictions (GPG commit signing, SSH push, Docker daemon socket)."`
+	BypassSandbox   bool   `json:"bypass_sandbox,omitempty" jsonschema:"Run directly on the host outside the OS sandbox (requires user approval; only after a real kernel-sandbox failure)."`
 	Description     string `json:"description,omitempty" jsonschema:"Clear, concise description of what this command does (recommend 3-6 words for UI display)."`
 	Dir             string `json:"dir,omitempty" jsonschema:"Optional working directory relative to the sandbox root."`
 	RunInBackground bool   `json:"run_in_background,omitempty" jsonschema:"Set to true to run long-running commands, servers, or watchers in the background and return a task_id immediately."`
-	WaitMs          int    `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait for synchronous completion before transitioning the command to a background task. Defaults to 60000 (1 minute), or 500 when run_in_background is true."`
+	WaitMs          int    `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait before transitioning to a background task (default 60000, or 500 when run_in_background is true)."`
 }
 
 // BashOutput defines the structured output of the bash tool.
@@ -176,7 +176,7 @@ type InvokeAgentInput struct {
 	Agent     string `json:"agent" jsonschema:"Name of the subagent to invoke (must be listed in <available_subagents>)."`
 	Title     string `json:"title" jsonschema:"Concise 3-6 word summary of the delegated task for UI display."`
 	Prompt    string `json:"prompt" jsonschema:"Detailed task instructions for the subagent."`
-	Model     string `json:"model,omitempty" jsonschema:"Optional model override for the subagent: a tier alias ('@fast', '@balanced', '@smart', '@flagship', '@default'), '@inherit' to reuse this session's model, or a provider/model identifier. Must be permitted by the subagent's spec.models allowlist when it declares one."`
+	Model     string `json:"model,omitempty" jsonschema:"Optional model override ('@fast', '@balanced', '@smart', '@flagship', '@default', '@inherit', or 'provider/model'); omit to use the subagent's default."`
 	Workspace string `json:"workspace,omitempty" jsonschema:"Workspace mode for the subagent: 'inherit' (default, shares current working directory) or 'worktree' (creates an isolated git worktree)."`
 }
 
