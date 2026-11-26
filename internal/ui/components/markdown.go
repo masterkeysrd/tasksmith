@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
@@ -53,7 +54,9 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 		md := goldmark.New(
 			goldmark.WithExtensions(extension.Table),
 			goldmark.WithParserOptions(
+				parser.WithBlockParsers(util.Prioritized(mathBlockParser{}, 850)),
 				parser.WithInlineParsers(
+					util.Prioritized(mathInlineParser{}, 150),
 					util.Prioritized(&attachmentRefParser{attachments: attMap}, 999),
 				),
 			),
@@ -70,6 +73,16 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 		// consecutive *ast.Text nodes into a single kitex.Text so that embedded
 		// \n characters produce visual line breaks (a single text node with \n
 		// works; separate nodes with \n at the boundary do not).
+		mathSpan := func(seg mathSegment) trail.Node {
+			s := style.S()
+			if seg.style&mathBold != 0 {
+				s = s.Bold(true)
+			}
+			if seg.style&mathMono != 0 {
+				s = s.Foreground(t.Color.Text.Accent).Background(t.Color.Surface.Code)
+			}
+			return trail.Span(trail.SpanProps{Style: s}, trail.Text(seg.text))
+		}
 		var renderInlineChildren = func(parent ast.Node) []kitex.Node {
 			var out []kitex.Node
 			var textBuf strings.Builder
@@ -82,7 +95,16 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 			}
 
 			for child := parent.FirstChild(); child != nil; child = child.NextSibling() {
-				if tn, ok := child.(*ast.Text); ok {
+				if m, ok := child.(*MathInlineNode); ok {
+					for _, seg := range translateMath(m.Raw) {
+						if seg.style == 0 {
+							textBuf.WriteString(seg.text)
+						} else {
+							flushText()
+							out = append(out, mathSpan(seg))
+						}
+					}
+				} else if tn, ok := child.(*ast.Text); ok {
 					textBuf.WriteString(string(tn.Value(src)))
 					if tn.SoftLineBreak() || tn.HardLineBreak() {
 						textBuf.WriteByte('\n')
@@ -193,6 +215,20 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				return kitex.Box(kitex.BoxProps{Style: docStyle},
 					renderBlockChildren(node)...)
 
+			case *MathBlockNode:
+				var children []trail.Node
+				for _, seg := range translateMath(node.Raw) {
+					if seg.style == 0 {
+						children = append(children, trail.Text(seg.text))
+					} else {
+						children = append(children, mathSpan(seg))
+					}
+				}
+				s := style.S().PaddingLeft(2)
+				if node.NextSibling() != nil {
+					s = s.MarginBottom(1)
+				}
+				return trail.Box(trail.BoxProps{Style: s}, trail.Span(trail.SpanProps{}, children...))
 			case *ast.Paragraph:
 				children := renderInlineChildren(node)
 				if len(children) == 0 {

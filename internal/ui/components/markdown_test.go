@@ -5,10 +5,49 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/element"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/testenv"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
+
+func TestMarkdownRenderMath(t *testing.T) {
+	for source, want := range map[string]string{
+		`(action) $\rightarrow$ output`:          "(action) → output",
+		"`deny` $\\to$ `allow` $\\to$ `ask`":     "deny → allow → ask",
+		`$1 - H(p)/\ln(2)$; $P \ge 0.95$`:        "1 - H(p)/ln(2); P ≥ 0.95",
+		`# \(\alpha\)`:                           "α",
+		`- $x_{10}$`:                             "• x₁₀",
+		`> $\sqrt{x}$`:                           "√x",
+		"| Heading |\n|---|\n| $\\frac{a}{b}$ |": "a/b",
+		"before\n$$a^2+b^2=c^2$$\nafter":         "before\n\n  a²+b²=c²\n\nafter",
+		"before\n\\[\nx_i\n\\]\nafter":           "before\n\n  xᵢ\n\nafter",
+		"before\n$$\nx\ny\n$$\nafter":            "before\n\n  x\n  y\n\nafter",
+		"before\n$$\nx^2$$\n\n## Explanation":    "before\n\n  x²\n\nExplanation",
+		`Costs $0.01 to $0.05`:                   `Costs $0.01 to $0.05`,
+		"Pay $5; use `$` for currency.":          "Pay $5; use $ for currency.",
+		`$5+$10`:                                 `$5+$10`,
+		`$HOME and $XDG_CONFIG_HOME`:             `$HOME and $XDG_CONFIG_HOME`,
+		`\$escaped`:                              `\$escaped`,
+		"`$\\rightarrow$`":                       `$\rightarrow$`,
+		"```\n$\\rightarrow$\n```":               `$\rightarrow$`,
+	} {
+		out := testutils.TrimmedLinesText(testutils.Render(t, Markdown(MarkdownProps{Source: source, PlainCodeBlocks: true}), 80, 12))
+		if !strings.Contains(out, want) {
+			t.Errorf("%q: got %q, want %q", source, out, want)
+		}
+	}
+	env := testutils.NewEnv(t, 50, 4)
+	out := env.Render(Markdown(MarkdownProps{Source: `a$\mathbf{B}\mathtt{C}$ d`}))
+	if out != "aBC d" {
+		t.Fatalf("styled output: %q", out)
+	}
+	surface := env.Backend.LastFrame().Surface
+	if surface.CellAt(1, 0).Style&backend.CellBold == 0 || surface.CellAt(2, 0).Bg == nil || surface.CellAt(2, 0).Fg == surface.CellAt(0, 0).Fg {
+		t.Errorf("missing math styles: %s", env.DumpANSI())
+	}
+}
 
 func TestMarkdown(t *testing.T) {
 	t.Run("BasicParagraph", func(t *testing.T) {

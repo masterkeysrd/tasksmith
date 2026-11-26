@@ -136,7 +136,7 @@ As the agent works, the transcript streams live updates directly into your termi
   - **Metrics & Timing**: Execution duration in milliseconds or seconds, bytes transferred, and unified line change statistics (`+14/-2`).
   - **Diff Previews**: Inline unified diffs for `edit` and `write` tools showing exact additions and deletions in color.
 - **Warnings**: Operation-specific failures and security notices still appear inline. Explicit `/mcp` actions still report their outcomes, but background MCP refresh no longer adds transcript announcements. Previously printed scrollback is not rewritten.
-- **Markdown Rendering**: Agent responses render GitHub-flavored Markdown with bold text, lists, syntax-highlighted code blocks, and formatted tables.
+- **Markdown Rendering**: Agent responses render GitHub-flavored Markdown with bold text, lists, syntax-highlighted code blocks, and formatted tables. Inline formulas (`$...$` or `\(...\)`) use copyable Unicode: `$P \ge 0.95$` appears as `P ≥ 0.95`. Use `$$...$$` or `\[...\]` on a separate line for an indented formula. Put TeX in backticks or a fenced code block to show it literally.
 
 ### 3. Multi-Line Composer
 
