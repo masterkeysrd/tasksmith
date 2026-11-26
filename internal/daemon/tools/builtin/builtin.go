@@ -18,7 +18,7 @@ import (
 	"github.com/masterkeysrd/warp"
 )
 
-//go:generate toolgen -dir . -pkg builtin -out generated.go -types-pkg api -types-out ../../../../api/tools.go
+//go:generate go run github.com/masterkeysrd/tasksmith/tools/toolgen -dir . -pkg builtin -out generated.go -types-pkg api -types-out ../../../../api/tools.go
 
 //go:embed *.tool.md
 var builtinFS embed.FS
