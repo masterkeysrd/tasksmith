@@ -71,6 +71,34 @@ func TestHeaderRender(t *testing.T) {
 	}
 }
 
+func TestHeaderWorkspaceLine(t *testing.T) {
+	tests := []struct {
+		name   string
+		branch string
+		mode   api.SandboxMode
+		want   string
+	}{
+		{"branch and sandbox", "main", api.SandboxNative, "~/repo · main · native sandbox"},
+		{"branch only", "main", "", "~/repo · main"},
+		{"sandbox only", "", api.SandboxNative, "~/repo · native sandbox"},
+		{"workspace only", "", "", "~/repo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := store.HeaderData{
+				Workspace:   "~/repo",
+				Branch:      tt.branch,
+				SandboxMode: tt.mode,
+			}
+			out := testutils.Render(t, Header(HeaderProps{HeaderData: data}), 80, 12)
+			if !strings.HasSuffix(strings.TrimSpace(out), tt.want) {
+				t.Errorf("expected workspace line ending in %q, got:\n%s", tt.want, out)
+			}
+		})
+	}
+}
+
 func TestHeaderResolvedProvider(t *testing.T) {
 	store.ResetSession()
 	t.Cleanup(store.ResetSession)

@@ -34,7 +34,7 @@ If you want an answer on stdout instead of the terminal UI, use the
 
 | Region | What to look for |
 | --- | --- |
-| **Header banner** | Version, resolved model and thinking effort, and workspace (`~` abbreviates home). A sandbox fallback appears here. The live mascot moves while idle and rests on input; scrollback stays still. |
+| **Header banner** | Version, resolved model and thinking effort, and workspace (`~` abbreviates home). The workspace path is followed by the current Git branch (or `HEAD@` and a short commit ID when detached) and the sandbox mode, when available. The live mascot moves while idle and rests on input; scrollback stays still. |
 | **Committed transcript** | Previous prompts, replies, tool results, and colored edit/write diffs. Earlier output isn't rewritten by later health changes. |
 | **Live stream and slot** | The current response, thinking indicator, or inline view waiting for your choice. Tool cards show the action, target, status, timing, and available byte/line counts. |
 | **Composer** | Your draft, attachment pills, and autocomplete. Type a prompt, `/command`, or `!` followed by a shell command. |

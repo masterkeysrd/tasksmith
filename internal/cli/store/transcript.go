@@ -30,6 +30,7 @@ type HeaderData struct {
 	Model       string
 	Thinking    string
 	Workspace   string
+	Branch      string
 	SandboxMode api.SandboxMode
 	Warnings    []string
 }
@@ -85,6 +86,7 @@ func CurrentHeaderData() HeaderData {
 	return HeaderData{
 		Version:     appState.Version,
 		Workspace:   appState.Workspace,
+		Branch:      appState.Branch,
 		Model:       sess.ModelLabels().Full,
 		Thinking:    sess.Thinking,
 		SandboxMode: sess.SandboxMode,
@@ -95,6 +97,7 @@ func CurrentHeaderData() HeaderData {
 type headerAppMeta struct {
 	version   string
 	workspace string
+	branch    string
 	warnings  *[]string
 }
 
@@ -111,6 +114,7 @@ func UseHeaderData() HeaderData {
 		return headerAppMeta{
 			version:   s.Version,
 			workspace: s.Workspace,
+			branch:    s.Branch,
 			warnings:  s.SandboxWarnings,
 		}
 	})
@@ -131,6 +135,7 @@ func UseHeaderData() HeaderData {
 	return HeaderData{
 		Version:     appMeta.version,
 		Workspace:   appMeta.workspace,
+		Branch:      appMeta.branch,
 		Model:       sessionInfo.model,
 		Thinking:    sessionInfo.thinking,
 		SandboxMode: sessionInfo.sandboxMode,

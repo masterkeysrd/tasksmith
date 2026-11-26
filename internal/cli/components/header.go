@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 	tsversion "github.com/masterkeysrd/tasksmith/internal/version"
@@ -86,6 +87,10 @@ var Header = trail.FC("Header", func(props HeaderProps) trail.Node {
 
 	line3 := []trail.Node{
 		trail.Span(trail.SpanProps{Style: dimStyle}, trail.Text(workspace)),
+	}
+	if props.Branch != "" {
+		branch, _ := strutils.TruncateLine(props.Branch, 40, "…")
+		line3 = append(line3, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text(" · "+branch)))
 	}
 	if sandboxLabel != "" {
 		line3 = append(line3, trail.Span(trail.SpanProps{Style: sandboxStyle}, trail.Text(sandboxLabel)))

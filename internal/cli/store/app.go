@@ -1,11 +1,14 @@
 package store
 
 import (
+	"context"
 	"slices"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/vcs"
 )
 
 const (
@@ -31,6 +34,7 @@ type AppState struct {
 	Hint          string
 	Version       string
 	Workspace     string
+	Branch        string
 	Warnings      *[]string
 	Agents        *[]api.Agent
 	Commands      *[]api.Command
@@ -65,9 +69,21 @@ func GetApp() AppState {
 
 // SetHeaderMeta updates the version and workspace metadata in AppState.
 func SetHeaderMeta(version, workspace string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var branch string
+	if info, err := vcs.Inspect(ctx, workspace); err == nil && info.Type != vcs.RepoTypeNone {
+		branch = info.Branch
+		if info.Detached {
+			branch = "HEAD@" + info.Commit[:7]
+		}
+	}
+
 	app.Set(func(s AppState) AppState {
 		s.Version = version
 		s.Workspace = workspace
+		s.Branch = branch
 		return s
 	})
 }
@@ -269,6 +285,7 @@ func ResetApp() {
 			Hint:            DefaultHint,
 			Version:         s.Version,
 			Workspace:       s.Workspace,
+			Branch:          s.Branch,
 			Warnings:        s.Warnings,
 			SandboxWarnings: s.SandboxWarnings,
 			DaemonStatus:    DaemonConnected,

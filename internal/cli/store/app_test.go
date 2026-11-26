@@ -1,8 +1,10 @@
 package store
 
 import (
+	"os/exec"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -43,6 +45,42 @@ func TestStoreApp(t *testing.T) {
 	}
 	if GetApp().Hint != DefaultHint {
 		t.Fatalf("expected Hint to reset to %q, got %q", DefaultHint, GetApp().Hint)
+	}
+}
+
+func TestHeaderWorkspaceBranch(t *testing.T) {
+	old := GetApp()
+	t.Cleanup(func() { app.Set(func(AppState) AppState { return old }) })
+
+	dir := t.TempDir()
+	cmd := exec.CommandContext(t.Context(), "git", "init", "--initial-branch=main", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+
+	SetHeaderMeta("test", dir)
+	ResetApp()
+	if got := CurrentHeaderData().Branch; got != "main" {
+		t.Fatalf("branch after reset = %q, want main", got)
+	}
+
+	for _, args := range [][]string{
+		{"-C", dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "init"},
+		{"-C", dir, "checkout", "--detach", "HEAD"},
+	} {
+		c := exec.CommandContext(t.Context(), "git", args...)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	SetHeaderMeta("test", dir)
+	if got := CurrentHeaderData().Branch; !strings.HasPrefix(got, "HEAD@") || len(got) != len("HEAD@")+7 {
+		t.Fatalf("detached HEAD branch = %q, want HEAD@<7-char>", got)
+	}
+
+	SetHeaderMeta("test", t.TempDir())
+	if got := CurrentHeaderData().Branch; got != "" {
+		t.Fatalf("non-Git workspace kept branch %q", got)
 	}
 }
 
