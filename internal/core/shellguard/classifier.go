@@ -360,10 +360,16 @@ func (g *Guard) analyzePipelines(
 				continue
 			}
 
-			// Check for literal directory changes (cd)
 			if cmd.Executable == "cd" {
-				g.applyCdCommand(cmd, state)
-				// cd commands are collapsed, emitting 0 operations
+				literal := literalCdTarget(cmd)
+				if !literal || len(cmd.Redirects) != 0 || cmd.HasCmdSubst {
+					*ops = append(*ops, g.determineOperation(cmd, state))
+				}
+				if literal {
+					g.applyCdCommand(cmd, state)
+				} else {
+					state.isCWDUnknown = true
+				}
 				continue
 			}
 
@@ -385,12 +391,19 @@ func (g *Guard) analyzePipelines(
 	}
 }
 
-func (g *Guard) applyCdCommand(cmd ParsedCommand, state *trackerState) {
-	if len(cmd.Args) > 0 && len(cmd.ArgsIsDynamic) > 0 && cmd.ArgsIsDynamic[0] {
-		state.isCWDUnknown = true
-		return
+func literalCdTarget(cmd ParsedCommand) bool {
+	if len(cmd.Env) != 0 || len(cmd.Args) > 1 || slices.Contains(cmd.ArgsIsDynamic, true) {
+		return false
 	}
+	if len(cmd.Args) == 0 {
+		return true
+	}
+	target := cmd.Args[0]
+	return target != "" && !strings.HasPrefix(target, "-") && !strings.ContainsAny(target, "*?[{}") &&
+		(!strings.HasPrefix(target, "~") || target == "~" || strings.HasPrefix(target, "~/"))
+}
 
+func (g *Guard) applyCdCommand(cmd ParsedCommand, state *trackerState) {
 	targetDir := "~"
 	if len(cmd.Args) > 0 {
 		targetDir = cmd.Args[0]
@@ -466,6 +479,10 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 
 	effectiveExec, effectiveArgs := resolveExecutableAndArgs(cmd)
 	rule, hasRule := g.policy.Rules[effectiveExec]
+	if cmd.Executable == "cd" && literalCdTarget(cmd) && !hasRule {
+		rule = CommandRule{DefaultCategory: api.ActionRead, TargetMode: TargetsNone}
+		hasRule = true
+	}
 
 	// Determine Action
 	var action api.ActionType

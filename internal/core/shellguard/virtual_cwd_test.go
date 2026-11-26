@@ -6,6 +6,40 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 )
 
+func TestCdEffects(t *testing.T) {
+	root := t.TempDir()
+	g := New(Config{WorkspaceDir: root})
+	for _, tc := range []struct {
+		cd         string
+		action     api.ActionType
+		path       string
+		nextSafety api.SafetyLevel
+	}{
+		{"cd subdir", "", "", api.SafetySafe},
+		{"cd /tmp > out.txt", api.ActionWrite, root + "/out.txt", api.SafetyUnsafe},
+		{"cd subdir < input.txt", api.ActionRead, root + "/input.txt", api.SafetySafe},
+		{"cd $(rm -rf /outside)", api.ActionDelete, "/outside", api.SafetyUnknown},
+		{"cd $TARGET", api.ActionUnknown, "", api.SafetyUnknown},
+	} {
+		t.Run(tc.cd, func(t *testing.T) {
+			ops, err := g.AnalyzeDetailed(tc.cd + " && touch file.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.action != "" {
+				if len(ops) != 2 || ops[0].Action != tc.action || ops[0].CWD != root ||
+					(tc.path != "" && ops[0].Path != tc.path) {
+					t.Fatalf("unexpected cd effects: %+v", ops)
+				}
+				ops = ops[1:]
+			}
+			if len(ops) != 1 || ops[0].Action != api.ActionWrite || ops[0].Safety != tc.nextSafety {
+				t.Fatalf("unexpected following operation: %+v", ops)
+			}
+		})
+	}
+}
+
 func TestVirtualCWDTracker(t *testing.T) {
 	guard := New(Config{
 		WorkspaceDir: "/tmp/workspace",
@@ -35,12 +69,6 @@ func TestVirtualCWDTracker(t *testing.T) {
 			command:        "cd subdir && cd .. && touch file.txt",
 			expectedAction: api.ActionWrite,
 			expectedSafety: api.SafetySafe,
-		},
-		{
-			name:           "Dynamic Navigation Taints CWD",
-			command:        "cd $TARGET && touch file.txt",
-			expectedAction: api.ActionWrite,
-			expectedSafety: api.SafetyUnknown,
 		},
 		{
 			name:           "Relative Escapes from subdir",
