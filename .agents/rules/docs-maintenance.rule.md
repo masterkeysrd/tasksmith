@@ -19,6 +19,7 @@ spec:
       - "internal/cmd/**"
       - "internal/cli/**"
       - "internal/exec/**"
+      - "internal/acp/**"
       - "internal/daemon/tools/builtin/**"
       - "internal/daemon/workspace/**"
       - "internal/daemon/gateway/**"

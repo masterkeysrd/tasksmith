@@ -53,6 +53,7 @@ and tests on Linux and macOS, so anything below that fails locally fails CI.
 | `client/` | Go client library for the daemon HTTP + SSE API, plus daemon lifecycle (`ConnectOrStart`, spawn helpers). |
 | `internal/cmd/` | Cobra root command, flags, daemon start/stop lifecycle. |
 | `internal/cli/` | TUI app, REPL, slash commands (`command/`), components, state stores. |
+| `internal/acp/` | Editor frontend (`tasksmith acp`); translates stdio JSON-RPC into daemon requests and SSE updates. |
 | `internal/exec/` | Headless one-shot and bidirectional NDJSON runs (`tasksmith exec`, `-p`); UI-free slash dispatcher and exit-code contract. |
 | `internal/ui/`, `internal/tui/` | Reusable `trail` components, theme, formatting, render test utils. |
 | `internal/daemon/` | Daemon subsystems: `server`, `broker` (SSE), `gateway` (providers), `harness` (agent graph), `session`, `journal` (SQLite), `timeline` (snapshots/revert), `tools` + `mcp`, `permissions`, `sandbox`/`sandboxcfg`, `workspace` (WARP loading, embedded built-ins). |

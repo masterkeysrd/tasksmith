@@ -79,6 +79,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(
 		newREPLCmd(rootOpts),
 		newExecCmd(rootOpts),
+		newACPCmd(rootOpts),
 		newDaemonCmd(rootOpts),
 		newVersionCmd(rootOpts),
 		newAuthCmd(rootOpts),

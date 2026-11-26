@@ -11,6 +11,7 @@ Step-by-step guides for setting up workspaces, authoring agents, managing securi
 | Guide | Description |
 | :--- | :--- |
 | [Workspaces & Projects](./guides/workspaces.md) | Multi-tier resource hierarchy (`WORKSPACE.md`, `AGENTS.md`), project discovery, and isolated `.env` secret layering. |
+| [Connect an editor with ACP](./guides/acp.md) | Run daemon-backed sessions from Zed, JetBrains, or Neovim. |
 | [CLI & Interactive Workflow](./guides/cli.md) | Terminal user interface, slash commands (`/effort`, `/mode`, `/revert`), interactive reviews, and keyboard shortcuts. |
 | [Security & Permissions](./guides/permissions.md) | Operational modes (`default`, `plan`, `auto`), rule matching (`deny`, `allow`, `ask`), and interactive approval scopes. |
 | [Customizations & Extensions](./guides/customizations.md) | Building custom agents (`*.agent.md`), ambient rules (`*.rule.md`), skills (`*.skill.md`), commands (`*.command.md`), and decisions (`*.decision.md`). |

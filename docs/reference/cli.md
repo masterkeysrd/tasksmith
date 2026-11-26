@@ -26,6 +26,7 @@ git diff | tasksmith -p "review this diff"
 | Command | Usage | Description |
 | :--- | :--- | :--- |
 | **`repl`** | `tasksmith repl [flags]` | Starts the [interactive terminal REPL](../guides/cli.md#1-header-banner--workspace-warnings) (identical to invoking `tasksmith` directly). |
+| **`acp`** | `tasksmith acp [--socket <path>] [-w <workspace>]` | Serves [editor sessions](../guides/acp.md) over JSON-RPC stdio. Each new, loaded, or resumed session uses the editor’s `cwd`; `-w` supplies the fallback workspace for listing and deleting detached sessions. Load replays history; resume does not. Close detaches without deleting history. |
 | **`exec`** | `tasksmith exec [flags] [prompt...]` | Runs a single headless task against the Brain daemon and exits. Prompt text comes from arguments and/or piped stdin; `--input-format jsonl` drives a bidirectional NDJSON session. See the [Headless Execution Reference](./exec.md). |
 | **`daemon serve`** | `tasksmith daemon serve [flags]` | Runs the Brain daemon server in the foreground. |
 | **`daemon start`** | `tasksmith daemon start` | Spawns and detaches the Brain daemon process in the background. |

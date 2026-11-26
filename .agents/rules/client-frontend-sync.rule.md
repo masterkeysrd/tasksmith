@@ -30,7 +30,7 @@ spec:
 # Client-Frontend Sync
 
 The daemon (`internal/daemon`) is the single source of truth for agent behavior; every
-frontend (`internal/cli` TUI, `internal/exec` headless, future `internal/acp`) is a thin,
+frontend (`internal/cli` TUI, `internal/exec` headless, `internal/acp` editor adapter) is a thin,
 interchangeable driver of the same `api/` protocol over `client.Client`. This rule holds that
 boundary and keeps protocol changes from landing on one client only.
 
@@ -51,7 +51,9 @@ boundary and keeps protocol changes from landing on one client only.
 ## 2. Cross-client protocol invariants
 
 When changing any of the following, update **all** existing frontends in the same change, or
-scope the addition explicitly (UI-only) in the change description:
+scope the addition explicitly (UI-only) in the change description. For ACP, translate stream events,
+mode/model changes, permissions, and daemon commands into their editor equivalents. Document any
+unsupported interaction and terminate it explicitly; never leave a turn waiting for invisible input:
 
 - **New `api.Event` types or payload fields**: decode in `Event.UnmarshalJSON` (`api/events.go`),
   handle in the TUI conversation/store layer, handle in `internal/exec` (stream pass-through plus

@@ -106,6 +106,7 @@ export default defineConfig({
           text: 'User Guides',
           items: [
             { text: 'Workspaces & Projects', link: '/guides/workspaces' },
+            { text: 'Editor Integration (ACP)', link: '/guides/acp' },
             { text: 'CLI & Interactive Workflow', link: '/guides/cli' },
             { text: 'Security & Permissions', link: '/guides/permissions' },
             { text: 'Customizations & Extensions', link: '/guides/customizations' },
@@ -124,6 +125,7 @@ export default defineConfig({
           text: 'User Guides',
           items: [
             { text: 'Workspaces & Projects', link: '/guides/workspaces' },
+            { text: 'Editor Integration (ACP)', link: '/guides/acp' },
             { text: 'CLI & Interactive Workflow', link: '/guides/cli' },
             { text: 'Security & Permissions', link: '/guides/permissions' },
             { text: 'Customizations & Extensions', link: '/guides/customizations' },
