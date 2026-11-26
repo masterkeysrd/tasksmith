@@ -158,9 +158,23 @@ func TestRunMigrationsDowngradeAndDev(t *testing.T) {
 		t.Fatalf("expected version to remain v2.0.0, got %s", meta.Version)
 	}
 
-	// Dev build: skips
-	if err := RunMigrations(ctx, wsDir, "v0.0.0-dev"); err != nil {
-		t.Fatalf("expected dev build to skip migrations, got: %v", err)
+	for _, v := range []string{
+		"v0.0.0-dev",
+		"v3.0.0+dirty",
+		"v3.0.1-0.20260102030405-abcdef012345",
+	} {
+		t.Run(v, func(t *testing.T) {
+			if err := RunMigrations(ctx, wsDir, v); err != nil {
+				t.Fatalf("expected dev build to skip migrations, got: %v", err)
+			}
+			meta, err := ReadMetadata(wsDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if meta.Version != "v2.0.0" {
+				t.Fatalf("expected version to remain v2.0.0, got %s", meta.Version)
+			}
+		})
 	}
 }
 

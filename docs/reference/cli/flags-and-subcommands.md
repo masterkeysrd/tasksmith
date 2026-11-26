@@ -43,7 +43,7 @@ Workspace and socket flags are inherited. Help is available on each command; `--
 | :--- | :--- | :--- | :--- |
 | `--workspace <path>` | `-w` | `.` (current directory) | Path to the target workspace root directory. Discovers `WORKSPACE.md` and `.agents/`. |
 | `--socket <path>` | | `$XDG_RUNTIME_DIR/tasksmith/brain.sock` | Explicit path to the Brain daemon Unix domain socket. When `XDG_RUNTIME_DIR` is unset, defaults to `~/.local/state/tasksmith/run/brain.sock`. |
-| `--version` | | | Print the client build version and exit. |
+| `--version` | | | Print the client build version and exit. Uses the release stamp, then Go’s embedded module version, then `v0.0.0-dev`. |
 | `--help` | `-h` | | Print help and usage information for any command. |
 
 ## REPL Session Flags

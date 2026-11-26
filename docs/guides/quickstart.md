@@ -47,6 +47,9 @@ command -v tasksmith
 tasksmith version
 ```
 
+Binaries built with Go report the embedded module version unless the release build supplies its own.
+If Go has no module version, TaskSmith reports `v0.0.0-dev`.
+
 ## Connect a model provider
 
 Choose the row that matches how you normally access a model:

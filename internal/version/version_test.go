@@ -21,11 +21,15 @@ func TestNormalize(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	v := Get()
-	if v == "" {
-		t.Fatal("expected non-empty version")
+	if got, want := Get(), Normalize(""); got != want {
+		t.Errorf("Get() without a release stamp = %q, want %q", got, want)
 	}
-	if v[0] != 'v' {
-		t.Fatalf("expected version to start with 'v', got %q", v)
+
+	original := Version
+	t.Cleanup(func() { Version = original })
+	Version = "1.2.3"
+
+	if got, want := Get(), "v1.2.3"; got != want {
+		t.Errorf("Get() with a release stamp = %q, want %q", got, want)
 	}
 }

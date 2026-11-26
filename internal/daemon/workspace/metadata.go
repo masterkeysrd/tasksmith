@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/version"
+	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 )
 
@@ -196,7 +197,7 @@ func isDevVersion(v string) bool {
 		return true
 	}
 	norm := version.Normalize(v)
-	return !semver.IsValid(norm)
+	return !semver.IsValid(norm) || strings.HasSuffix(norm, "+dirty") || module.IsPseudoVersion(norm)
 }
 
 // RunMigrations checks the stored version of a workspace against runningVersion

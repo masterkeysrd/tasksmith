@@ -175,7 +175,8 @@ A marker looks like this:
 
 On open, a newer release applies registered migrations in ascending version order. A failed
 step stops the upgrade; the marker stays at the last successful step for retry. An older
-binary leaves a newer marker alone and logs the downgrade. Non-semver development builds skip migrations.
+binary leaves a newer marker alone and logs the downgrade. Development builds, including Go
+pseudo-versions for untagged commits and versions marked `+dirty`, skip migrations.
 If an upgrade would change tracked configuration, inspect **Upgrade available** in `/setup`;
 those repository edits require review rather than a silent background rewrite.
 
