@@ -17,7 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	coretestutils "github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
@@ -162,8 +162,7 @@ func TestSandboxCommandArgsValidation(t *testing.T) {
 }
 
 func TestSandboxCommandEnqueuesSlot(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ResetApp()
 	store.ClearSlot()
 	defer store.ResetApp()
@@ -250,8 +249,7 @@ func TestSandboxLockedKnobs(t *testing.T) {
 }
 
 func TestSandboxBrowserView(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ResetApp()
 	store.ResetSession()
 	store.ClearSlot()
@@ -323,8 +321,7 @@ func TestSandboxBrowserView(t *testing.T) {
 }
 
 func TestSandboxBrowserViewUnavailable(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ResetApp()
 	store.ResetSession()
 	store.ClearSlot()

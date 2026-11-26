@@ -28,6 +28,7 @@ import (
 	"sync"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
@@ -213,34 +214,7 @@ func (m *manager) writeToFile(path string, scope api.PermissionScope, settings a
 		return fmt.Errorf("sandboxcfg: create directory: %w", err)
 	}
 
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return fmt.Errorf("sandboxcfg: marshal settings: %w", err)
-	}
-	data = append(data, '\n')
-
-	tmp, err := os.CreateTemp(dir, ".sandbox-*.tmp")
-	if err != nil {
-		return fmt.Errorf("sandboxcfg: create temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("sandboxcfg: chmod temp file: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return fmt.Errorf("sandboxcfg: write %q: %w", path, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("sandboxcfg: close temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("sandboxcfg: replace %q: %w", path, err)
-	}
-	return nil
+	return fsutils.WriteJSONAtomic(path, settings, 0o600)
 }
 
 // Get returns the stored [api.SandboxSettings] for the given scope.

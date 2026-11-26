@@ -58,6 +58,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	theme.SetClient(theme.ClientCLI)
+	store.LoadStatusLine()
 
 	if opts.Client.CWD() == "" && opts.Workspace != "" {
 		opts.Client = opts.Client.WithCWD(opts.Workspace)

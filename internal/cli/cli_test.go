@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,13 +15,13 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	coretestutils "github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func TestMain(m *testing.M) {
-	xdg.RunWithTestEnv(m, "tasksmith-cli-test")
+	os.Exit(coretestutils.RunWithXDG(m, "tasksmith-cli-test"))
 }
 
 func waitFor(t *testing.T, condition func() bool, timeout time.Duration, msg string) {
@@ -792,8 +793,7 @@ func TestRunClearReprintHeader(t *testing.T) {
 }
 
 func TestStatusLineCommandDoesNotCorruptLayoutOrSegments(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	theme.SetClient(theme.ClientCLI)
 	store.ResetApp()
 	defer store.ResetApp()

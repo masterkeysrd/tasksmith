@@ -19,6 +19,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
@@ -40,8 +41,7 @@ func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container,
 // custom endpoint so web_search tests can serve canned result pages.
 func setupBuiltinEnvSearch(t *testing.T, allowLoopback bool, searchEndpoint string) (string, tools.Container, *std.Std, sandbox.Sandbox, *workspace.Workspace) {
 	t.Helper()
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-builtin-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-builtin-test")
 	ctx := context.Background()
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
@@ -1462,8 +1462,7 @@ func TestBashBackgroundAndTasksManagement(t *testing.T) {
 // seeded with the given project settings.
 func setupUnsandboxedEnv(t *testing.T, settings api.SandboxSettings, restricted bool) (tools.Container, sandbox.Sandbox) {
 	t.Helper()
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-unsandboxed-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-unsandboxed-test")
 	ctx := context.Background()
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
@@ -1617,8 +1616,7 @@ func TestBashUnsandboxedNativeExecution(t *testing.T) {
 	if err := sandbox.NativeAvailable(); err != nil {
 		t.Skipf("skipping live ModeNative test: %v", err)
 	}
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-unsandboxed-native-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-unsandboxed-native-test")
 	ctx := context.Background()
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {

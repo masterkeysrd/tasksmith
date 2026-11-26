@@ -18,7 +18,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
@@ -314,9 +314,7 @@ func testCard() api.PermissionRequest {
 // provider model list.
 func newTestService(t *testing.T, mode api.PermissionMode, wsDir string, decisionCaps bool) (*Service, *fakeGateway, permissions.SessionManager, *metricsRecorder) {
 	t.Helper()
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-permreview-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-permreview-test")
 
 	if wsDir == "" {
 		wsDir = t.TempDir()
@@ -757,9 +755,7 @@ func TestReviewPayloadUserIntentUTF8Truncation(t *testing.T) {
 }
 
 func TestReviewNoModelWarns(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-permreview-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-permreview-test")
 	wsDir := t.TempDir()
 	ws, err := workspace.Open(context.Background(), wsDir)
 	if err != nil {

@@ -10,7 +10,15 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 )
+
+func approveTestWorkspace(t *testing.T, cli *client.Client) {
+	t.Helper()
+	if err := cli.TrustWorkspace(t.Context(), api.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // seedWorkspaceTool drops a Tool manifest into the workspace tier before any
 // API call so the lazily-resolved workspace runtime loads it on first use.
@@ -66,6 +74,7 @@ func TestWorkspaceToolsAPIListsAndToggles(t *testing.T) {
 	_, cli, wsDir := setupDaemonTest(t, nil)
 	ctx := context.Background()
 	path := seedWorkspaceTool(t, wsDir, "linter")
+	approveTestWorkspace(t, cli)
 
 	list, err := cli.ListTools(ctx, "")
 	if err != nil {
@@ -82,6 +91,14 @@ func TestWorkspaceToolsAPIListsAndToggles(t *testing.T) {
 	list, err = cli.SetToolEnabled(ctx, "linter", false)
 	if err != nil {
 		t.Fatalf("SetToolEnabled(false): %v", err)
+	}
+	if _, ok := findAPITool(list, "linter"); ok {
+		t.Fatal("changed manifest visible before reapproval")
+	}
+	approveTestWorkspace(t, cli)
+	list, err = cli.ListTools(ctx, "")
+	if err != nil {
+		t.Fatal(err)
 	}
 	tool, _ = findAPITool(list, "linter")
 	if tool.Enabled {
@@ -107,6 +124,14 @@ func TestWorkspaceToolsAPIListsAndToggles(t *testing.T) {
 	list, err = cli.SetToolEnabled(ctx, "linter", true)
 	if err != nil {
 		t.Fatalf("SetToolEnabled(true): %v", err)
+	}
+	if _, ok := findAPITool(list, "linter"); ok {
+		t.Fatal("changed manifest visible before reapproval")
+	}
+	approveTestWorkspace(t, cli)
+	list, err = cli.ListTools(ctx, "")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if tool, _ := findAPITool(list, "linter"); !tool.Enabled {
 		t.Error("after re-enable: enabled = false, want true")
@@ -159,6 +184,7 @@ func TestWorkspaceMCPsAPITogglesAndMergesDisabled(t *testing.T) {
 	_, cli, wsDir := setupDaemonTest(t, nil)
 	ctx := context.Background()
 	path := seedWorkspaceMCP(t, wsDir, "notes")
+	approveTestWorkspace(t, cli)
 
 	list, err := cli.ListMCPs(ctx)
 	if err != nil {
@@ -175,6 +201,14 @@ func TestWorkspaceMCPsAPITogglesAndMergesDisabled(t *testing.T) {
 	list, err = cli.SetMCPEnabled(ctx, "notes", false)
 	if err != nil {
 		t.Fatalf("SetMCPEnabled(false): %v", err)
+	}
+	if _, ok := findAPIMCPServer(list, "notes"); ok {
+		t.Fatal("changed manifest visible before reapproval")
+	}
+	approveTestWorkspace(t, cli)
+	list, err = cli.ListMCPs(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
 	server, _ = findAPIMCPServer(list, "notes")
 	if server.Enabled {

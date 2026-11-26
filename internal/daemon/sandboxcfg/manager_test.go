@@ -10,15 +10,14 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 )
 
 func testManager(t *testing.T, restricted bool) (Manager, string) {
 	t.Helper()
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-sandboxcfg-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-sandboxcfg-test")
 
 	workDir := t.TempDir()
 	mgr, err := New(Config{

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
@@ -37,8 +38,7 @@ func TestValidateStatusLineConfig(t *testing.T) {
 }
 
 func TestSaveAndLoadStatusLine(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith")
 	before := GetStatusLine()
 	t.Cleanup(func() { _, _ = ApplyStatusLine(before) })
 
@@ -69,8 +69,7 @@ func TestSaveAndLoadStatusLine(t *testing.T) {
 }
 
 func TestLoadStatusLineMalformedKeepsCurrent(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith")
 	before := GetStatusLine()
 	t.Cleanup(func() { _, _ = ApplyStatusLine(before) })
 

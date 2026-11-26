@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
@@ -35,7 +36,7 @@ func parseJSONLines(t *testing.T, data string) []map[string]any {
 }
 
 func TestDefaultSilentLogger(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+	testutils.SetupXDG(t, "tasksmith-test")
 
 	// Reset default logger after test.
 	orig := Default()
@@ -83,7 +84,7 @@ func TestDefaultSilentLogger(t *testing.T) {
 }
 
 func TestParseLevelAndFiltering(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+	testutils.SetupXDG(t, "tasksmith-test")
 
 	cases := []struct {
 		input string
@@ -130,7 +131,7 @@ func TestParseLevelAndFiltering(t *testing.T) {
 }
 
 func TestAllAttrConstructorsAndScoping(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+	testutils.SetupXDG(t, "tasksmith-test")
 
 	var buf bytes.Buffer
 	logger := New(&buf, LevelDebug)
@@ -210,7 +211,7 @@ func TestAllAttrConstructorsAndScoping(t *testing.T) {
 }
 
 func TestRotatingWriterRotationAndMaxBackups(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+	testutils.SetupXDG(t, "tasksmith-test")
 
 	// When Dir is empty, RotatingWriter resolves xdg.LogsDir().
 	logger, rw, err := NewRotating(RotatingWriterConfig{
@@ -277,7 +278,7 @@ func TestRotatingWriterRotationAndMaxBackups(t *testing.T) {
 }
 
 func TestRotatingWriterMaxAgePruning(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+	testutils.SetupXDG(t, "tasksmith-test")
 
 	logDir := filepath.Join(t.TempDir(), "logs")
 	if err := os.MkdirAll(logDir, 0o700); err != nil {
@@ -339,7 +340,7 @@ func TestRotatingWriterMaxAgePruning(t *testing.T) {
 }
 
 func TestRotatingWriterConcurrentWrites(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+	testutils.SetupXDG(t, "tasksmith-test")
 
 	logger, rw, err := NewRotating(RotatingWriterConfig{
 		MaxSizeBytes: 512,

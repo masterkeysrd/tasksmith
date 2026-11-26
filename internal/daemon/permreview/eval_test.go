@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
@@ -1390,9 +1391,7 @@ func TestProtectedPathSymlinkAndShellForms(t *testing.T) {
 		t.Fatal("symlink pointing to ~/.ssh/id_rsa must be flagged protected")
 	}
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-protected-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-protected-test")
 	cfgDir, err := xdg.Home(xdg.VarTypeConfig)
 	if err != nil {
 		t.Fatal(err)

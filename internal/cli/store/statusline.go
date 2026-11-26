@@ -42,10 +42,6 @@ type statusLineState struct {
 
 var statusLine = kites.Create(statusLineState{cfg: defaultStatusLine(false)})
 
-func init() {
-	LoadStatusLine()
-}
-
 func defaultStatusLine(compact bool) StatusLineConfig {
 	return StatusLineConfig{
 		Rows:    [][]StatusLineSegmentID{slices.Clone(DefaultStatusLineRows[0]), slices.Clone(DefaultStatusLineRows[1])},

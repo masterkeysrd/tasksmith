@@ -13,7 +13,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -42,8 +42,7 @@ func (s *stubAttachmentMCPCaller) GetMCPPrompt(context.Context, string, string, 
 
 func setupAttachmentTestEnv(t *testing.T) (*AttachmentResolver, *workspace.Workspace, tools.Container) {
 	t.Helper()
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-attachments-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-attachments-test")
 
 	baseResolver, _, dir := setupTestResolver(t)
 	rulesDir := filepath.Join(dir, ".agents", "rules")

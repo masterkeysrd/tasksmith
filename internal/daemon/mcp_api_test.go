@@ -130,7 +130,7 @@ func setupMCPDaemon(t *testing.T, manifests map[string]string) (*Daemon, *worksp
 	t.Helper()
 	srv, _, wsDir := setupDaemonTest(t, nil)
 	writeMCPScripts(t, wsDir, manifests)
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
 		t.Fatal(err)
 	}
 

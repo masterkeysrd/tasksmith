@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	coretestutils "github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
@@ -50,8 +51,7 @@ func pressKey(inst *trail.Instance, code rune, mod key.Mod) {
 }
 
 func TestComposerEnterSubmitsAndClears(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 
 	store.ClearSlot()
 	store.ResetApp()
@@ -107,8 +107,7 @@ func TestComposerShiftEnterInsertsNewline(t *testing.T) {
 }
 
 func TestComposerHistoryNavigation(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 
 	store.ClearSlot()
 	store.ResetApp()
@@ -277,8 +276,7 @@ func TestComposerCtrlCClearsDraft(t *testing.T) {
 }
 
 func TestComposerHistoryPersistsToDisk(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -305,8 +303,7 @@ func TestComposerHistoryPersistsToDisk(t *testing.T) {
 }
 
 func TestComposerHistoryMultiLineRoundTrip(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -337,8 +334,7 @@ func TestComposerHistoryMultiLineRoundTrip(t *testing.T) {
 }
 
 func TestComposerHistoryDeduplication(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -367,8 +363,7 @@ func TestComposerHistoryDeduplication(t *testing.T) {
 }
 
 func TestComposerHistoryCap500(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 
 	// Write 600 entries directly, then verify loadHistoryFromFile caps at 500.
 	entries := make([]HistoryEntry, 0, 600)
@@ -393,8 +388,7 @@ func TestComposerHistoryCap500(t *testing.T) {
 }
 
 func TestComposerBashModeActivationAndCancellation(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 
 	store.ClearSlot()
 	store.ResetApp()
@@ -450,8 +444,7 @@ func TestComposerBashModeActivationAndCancellation(t *testing.T) {
 }
 
 func TestComposerBashModeSubmitAndHistory(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 
 	store.ClearSlot()
 	store.ResetApp()
@@ -505,8 +498,7 @@ func TestComposerBashModeSubmitAndHistory(t *testing.T) {
 }
 
 func TestComposerHistoryPositionIndicator(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -560,8 +552,7 @@ func TestComposerHistoryPositionIndicator(t *testing.T) {
 }
 
 func TestComposerHistoryBrowsingSuppressesAutocomplete(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -620,8 +611,7 @@ func TestComposerHistoryBrowsingSuppressesAutocomplete(t *testing.T) {
 }
 
 func TestComposerHistoryEscRestoresDraft(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -654,8 +644,7 @@ func TestComposerHistoryEscRestoresDraft(t *testing.T) {
 }
 
 func TestComposerHistoryEditExitsBrowsing(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -790,8 +779,7 @@ func TestComposerAutocompleteCtrlPNavigatesUp(t *testing.T) {
 }
 
 func TestComposerHistoryLegacyJSONL(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 
 	// Write mixed legacy strings and rich HistoryEntry objects
 	p, err := xdg.HistoryFilePath("repl.jsonl")
@@ -824,8 +812,7 @@ func TestComposerHistoryLegacyJSONL(t *testing.T) {
 }
 
 func TestComposerAutocompleteAttachmentTrackingAndHistory(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -913,8 +900,7 @@ func TestComposerAutocompleteAttachmentTrackingAndHistory(t *testing.T) {
 }
 
 func TestComposerEnterSubmitsWhileAutocompleteLoading(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()

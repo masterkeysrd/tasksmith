@@ -7,6 +7,39 @@ import (
 	"testing"
 )
 
+func TestReadRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	for _, path := range []string{dir, os.DevNull} {
+		if _, err := ReadRegularFile(path); err == nil {
+			t.Fatalf("accepted non-regular file %q", path)
+		}
+	}
+	if _, err := ReadRegularFile(filepath.Join(dir, "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing file: %v", err)
+	}
+}
+
+func TestWriteJSONAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "subdir", "config.json")
+	if err := WriteJSONAtomic(path, map[string]int{"value": 1}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteJSONAtomic(path, make(chan int), 0o644); err == nil {
+		t.Fatal("accepted unsupported JSON value")
+	}
+	got, err := ReadRegularFile(path)
+	if err != nil || string(got) != "{\n  \"value\": 1\n}\n" {
+		t.Fatalf("read after failed write: %q, %v", got, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode: got %o, want 600", info.Mode().Perm())
+	}
+}
+
 func TestCleanPathEmpty(t *testing.T) {
 	for _, input := range []string{"", "   ", "\t\n"} {
 		_, err := CleanPath(input)

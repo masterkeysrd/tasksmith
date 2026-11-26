@@ -8,6 +8,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
@@ -120,9 +121,7 @@ func TestIsProtectedPath(t *testing.T) {
 }
 
 func TestIsSensitivePathAndEvaluatePath(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-guard-test")
 
 	configDir, err := xdg.Home(xdg.VarTypeConfig)
 	if err != nil {
@@ -198,11 +197,9 @@ func TestIsSensitivePathAndEvaluatePath(t *testing.T) {
 }
 
 func TestHostCredentialPaths(t *testing.T) {
-	xdgRoot := t.TempDir()
+	testutils.SetupXDG(t, "tasksmith-guard-creds-test")
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
-	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-creds-test")
-	t.Cleanup(xdg.ClearCache)
 
 	configDir, err := xdg.Home(xdg.VarTypeConfig)
 	if err != nil {
@@ -247,11 +244,9 @@ func TestHostCredentialPaths(t *testing.T) {
 }
 
 func TestHostCredentialPathsSkipsWorkspaceOverlaps(t *testing.T) {
-	xdgRoot := t.TempDir()
+	testutils.SetupXDG(t, "tasksmith-guard-creds-overlap")
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
-	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-creds-overlap")
-	t.Cleanup(xdg.ClearCache)
 
 	sshDir := filepath.Join(fakeHome, ".ssh")
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
@@ -267,11 +262,9 @@ func TestHostCredentialPathsSkipsWorkspaceOverlaps(t *testing.T) {
 }
 
 func TestHostCredentialPathsSkipsSymlinkedCredentialIntoWorkspace(t *testing.T) {
-	xdgRoot := t.TempDir()
+	testutils.SetupXDG(t, "tasksmith-guard-creds-symlink")
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
-	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-creds-symlink")
-	t.Cleanup(xdg.ClearCache)
 
 	workDir := t.TempDir()
 	realKeys := filepath.Join(workDir, "ssh-keys")
@@ -293,9 +286,7 @@ func TestHostCredentialPathsSkipsSymlinkedCredentialIntoWorkspace(t *testing.T) 
 }
 
 func TestProtectedWorkspaceWritePaths(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-protected-write-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-guard-protected-write-test")
 
 	configDir, err := xdg.Home(xdg.VarTypeConfig)
 	if err != nil {
@@ -343,9 +334,7 @@ func containsPath(paths []string, want string) bool {
 }
 
 func TestTasksmithConfigPathsSensitiveForWrites(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-sandbox-cfg")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-guard-sandbox-cfg")
 
 	configDir, err := xdg.Home(xdg.VarTypeConfig)
 	if err != nil {

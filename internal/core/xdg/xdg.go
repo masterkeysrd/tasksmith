@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"testing"
 )
 
 // DefaultAppName is the default application directory name when TASKSMITH_APPNAME
@@ -67,29 +66,12 @@ func defaultDirFor(varType VarType) string {
 }
 
 var (
-	mu            sync.RWMutex
-	appname       string
-	varCache      = make(map[VarType]string)
-	inheritedHome = os.Getenv("HOME")
+	mu       sync.RWMutex
+	appname  string
+	varCache = make(map[VarType]string)
 )
 
 func init() {
-	if testing.Testing() {
-		if testRoot, err := os.MkdirTemp("", "tasksmith-xdg-test-*"); err == nil {
-			defaults := map[string]string{
-				"XDG_CONFIG_HOME": filepath.Join(testRoot, "config"),
-				"XDG_DATA_HOME":   filepath.Join(testRoot, "data"),
-				"XDG_STATE_HOME":  filepath.Join(testRoot, "state"),
-				"XDG_CACHE_HOME":  filepath.Join(testRoot, "cache"),
-				"XDG_RUNTIME_DIR": filepath.Join(testRoot, "runtime"),
-			}
-			for k, v := range defaults {
-				if os.Getenv(k) == "" {
-					_ = os.Setenv(k, v)
-				}
-			}
-		}
-	}
 
 	mu.Lock()
 	loadAppNameLocked()
@@ -232,7 +214,7 @@ func UserResourceDirs() []string {
 	}
 
 	home := os.Getenv("HOME")
-	if !filepath.IsAbs(home) || (testing.Testing() && filepath.Clean(home) == filepath.Clean(inheritedHome)) {
+	if !filepath.IsAbs(home) {
 		return dirs
 	}
 
@@ -273,48 +255,4 @@ func ClearCache() {
 	varCache = make(map[VarType]string)
 	loadAppNameLocked()
 	mu.Unlock()
-}
-
-// SetTestEnv configures all XDG environment variables and TASKSMITH_APPNAME to use
-// a temporary directory and refreshes the cache.
-func SetTestEnv(tmpDir string, appName string) {
-	_ = os.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "config"))
-	_ = os.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "data"))
-	_ = os.Setenv("XDG_STATE_HOME", filepath.Join(tmpDir, "state"))
-	_ = os.Setenv("XDG_CACHE_HOME", filepath.Join(tmpDir, "cache"))
-	_ = os.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmpDir, "runtime"))
-	_ = os.Setenv("TASKSMITH_APPNAME", appName)
-	ClearCache()
-}
-
-// RunWithTestEnv executes a test suite within an isolated temporary XDG environment.
-func RunWithTestEnv(m *testing.M, appName string) {
-	tmpDir, err := os.MkdirTemp("", appName+"-*")
-	if err != nil {
-		panic(err)
-	}
-
-	origConfig := os.Getenv("XDG_CONFIG_HOME")
-	origData := os.Getenv("XDG_DATA_HOME")
-	origState := os.Getenv("XDG_STATE_HOME")
-	origCache := os.Getenv("XDG_CACHE_HOME")
-	origRuntime := os.Getenv("XDG_RUNTIME_DIR")
-	origAppName := os.Getenv("TASKSMITH_APPNAME")
-
-	SetTestEnv(tmpDir, appName)
-
-	code := m.Run()
-
-	_ = os.Setenv("XDG_CONFIG_HOME", origConfig)
-	_ = os.Setenv("XDG_DATA_HOME", origData)
-	_ = os.Setenv("XDG_STATE_HOME", origState)
-	_ = os.Setenv("XDG_CACHE_HOME", origCache)
-	_ = os.Setenv("XDG_RUNTIME_DIR", origRuntime)
-	_ = os.Setenv("TASKSMITH_APPNAME", origAppName)
-	ClearCache()
-
-	if err := os.RemoveAll(tmpDir); err != nil {
-		panic(err)
-	}
-	os.Exit(code)
 }

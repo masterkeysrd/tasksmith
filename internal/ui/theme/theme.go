@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -398,7 +399,7 @@ func getBuiltin(name string) (*Theme, error) {
 
 // Resolve converts a Theme (JSON) to a Scheme (Resolved) using the currently configured client.
 func Resolve(t *Theme) (*Scheme, error) {
-	c := store.Get().client
+	c := themeStore().Get().client
 	if c == "" {
 		c = ClientCLI
 	}
@@ -662,14 +663,7 @@ type state struct {
 	transparent bool
 }
 
-var store = kites.Create(state{
-	themeName:   Default,
-	scheme:      nil,
-	client:      ClientCLI,
-	transparent: false,
-})
-
-func init() {
+var themeStore = sync.OnceValue(func() *kites.Store[state] {
 	themeName := Default
 	transparent := false
 	if dir, err := xdg.SubConfigDir(); err == nil {
@@ -693,24 +687,19 @@ func init() {
 		t, err = getBuiltin(Default)
 		themeName = Default
 	}
+	st := state{themeName: themeName, client: ClientCLI, transparent: transparent}
 	if err == nil {
-		s, _ := ResolveFor(t, ClientCLI)
-		if transparent && s != nil {
-			s = s.WithTransparent(true)
+		st.scheme, _ = ResolveFor(t, ClientCLI)
+		if transparent && st.scheme != nil {
+			st.scheme = st.scheme.WithTransparent(true)
 		}
-		store.Set(func(st state) state {
-			st.themeName = themeName
-			st.scheme = s
-			st.client = ClientCLI
-			st.transparent = transparent
-			return st
-		})
 	}
-}
+	return kites.Create(st)
+})
 
 // SetClient updates the active client type and refreshes the scheme.
 func SetClient(client Client) {
-	store.Set(func(st state) state {
+	themeStore().Set(func(st state) state {
 		st.client = client
 		t, err := Find(st.themeName)
 		if err != nil {
@@ -731,7 +720,7 @@ func SetClient(client Client) {
 
 // GetClient returns the currently configured client type.
 func GetClient() Client {
-	return store.Get().client
+	return themeStore().Get().client
 }
 
 // Set updates the active global theme.
@@ -740,7 +729,7 @@ func Set(name string) error {
 	if err != nil {
 		return fmt.Errorf("theme %q not found: %w", name, err)
 	}
-	client := store.Get().client
+	client := themeStore().Get().client
 	if client == "" {
 		client = ClientCLI
 	}
@@ -748,7 +737,7 @@ func Set(name string) error {
 	if err != nil {
 		return fmt.Errorf("invalid theme %q: %w", name, err)
 	}
-	store.Set(func(st state) state {
+	themeStore().Set(func(st state) state {
 		st.themeName = name
 		if st.transparent && s != nil {
 			s = s.WithTransparent(true)
@@ -761,7 +750,7 @@ func Set(name string) error {
 
 // SetTransparent sets whether the active global theme should be transparent.
 func SetTransparent(transparent bool) {
-	store.Set(func(st state) state {
+	themeStore().Set(func(st state) state {
 		st.transparent = transparent
 		t, err := Find(st.themeName)
 		if err != nil {
@@ -785,24 +774,24 @@ func SetTransparent(transparent bool) {
 
 // IsTransparent returns whether the active global theme is configured as transparent.
 func IsTransparent() bool {
-	return store.Get().transparent
+	return themeStore().Get().transparent
 }
 
 // GetName returns the current global theme name.
 func GetName() string {
-	return store.Get().themeName
+	return themeStore().Get().themeName
 }
 
 // UseName returns the current theme name in a reactive hook context.
 func UseName() string {
-	return kites.Use(store, func(s state) string {
+	return kites.Use(themeStore(), func(s state) string {
 		return s.themeName
 	})
 }
 
 // Get returns the current active scheme snapshot.
 func Get() *Scheme {
-	s := store.Get().scheme
+	s := themeStore().Get().scheme
 	if s == nil {
 		t, _ := getBuiltin(Default)
 		if t != nil {
@@ -814,7 +803,7 @@ func Get() *Scheme {
 
 // UseTheme returns the current theme from the reactive store.
 func UseTheme() *Scheme {
-	return kites.Use(store, func(s state) *Scheme {
+	return kites.Use(themeStore(), func(s state) *Scheme {
 		return s.scheme
 	})
 }

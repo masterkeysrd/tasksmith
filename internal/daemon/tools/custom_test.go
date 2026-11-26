@@ -16,7 +16,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
@@ -41,8 +41,7 @@ echo "stdin_bytes=$bytes"
 func customToolFixture(t *testing.T, manifests map[string]string, agent *warp.Agent) (string, tools.Container) {
 	t.Helper()
 
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-custom-tool-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-custom-tool-test")
 
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
@@ -603,8 +602,7 @@ spec:
 `,
 	}
 
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-custom-sync-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-custom-sync-test")
 
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {

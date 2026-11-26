@@ -16,7 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
@@ -257,11 +257,7 @@ func TestManagerTurnErrorLogging(t *testing.T) {
 	var logBuf bytes.Buffer
 	testLogger := log.New(&logBuf, log.LevelDebug)
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-session-log-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-session-log-test")
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := sqlite.Open(ctx, dbPath)

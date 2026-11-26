@@ -8,6 +8,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	coretestutils "github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
@@ -243,8 +244,7 @@ func TestHeaderThemeReactivity(t *testing.T) {
 }
 
 func testHeaderThemeSwitching(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-header-test")
-	t.Cleanup(xdg.ClearCache)
+	coretestutils.SetupXDG(t, "tasksmith-header-test")
 
 	origTheme := theme.GetName()
 	defer func() {
@@ -304,8 +304,7 @@ func testHeaderThemeSwitching(t *testing.T) {
 }
 
 func TestHeaderCustomRegisteredTheme(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-header-test")
-	t.Cleanup(xdg.ClearCache)
+	coretestutils.SetupXDG(t, "tasksmith-header-test")
 
 	origTheme := theme.GetName()
 	defer func() {

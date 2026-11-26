@@ -2,6 +2,7 @@ package fsutils
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -271,4 +272,26 @@ func LinkOrCopy(srcPath, dstPath string, perm fs.FileMode) error {
 		return nil
 	}
 	return CopyFile(srcPath, dstPath, perm)
+}
+
+func ReadRegularFile(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", path)
+	}
+	return os.ReadFile(path)
+}
+
+func WriteJSONAtomic(path string, v any, perm fs.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("fsutils: marshal %q: %w", path, err)
+	}
+	return WriteFileAtomic(path, append(data, '\n'), perm)
 }

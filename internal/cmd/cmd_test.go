@@ -25,7 +25,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	coretestutils "github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
@@ -174,11 +174,7 @@ func (p *fakeGatewayPool) Close() error {
 func setupCLITestDaemon(t *testing.T, prov *fakeProvider) (*daemon.Daemon, string, string) {
 	t.Helper()
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-cli-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	coretestutils.SetupXDG(t, "tasksmith-cli-test")
 
 	shortTmp, err := os.MkdirTemp("/tmp", "tscli-*")
 	if err != nil {
@@ -211,7 +207,7 @@ func setupCLITestDaemon(t *testing.T, prov *fakeProvider) (*daemon.Daemon, strin
 	if err := os.MkdirAll(wsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll wsDir: %v", err)
 	}
-	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+	if err := workspace.TrustFolder(wsDir, api.TrustScopeFolder); err != nil {
 		t.Fatalf("TrustFolder: %v", err)
 	}
 	wsFile := filepath.Join(wsDir, "WORKSPACE.md")
@@ -520,11 +516,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 }
 
 func TestDaemonServeCommandLifecycle(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-cli-serve-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	coretestutils.SetupXDG(t, "tasksmith-cli-serve-test")
 
 	shortTmp, err := os.MkdirTemp("/tmp", "tsserve-*")
 	if err != nil {

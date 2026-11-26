@@ -1,4 +1,4 @@
-package xdg
+package xdg_test
 
 import (
 	"os"
@@ -6,6 +6,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
 func saveAndRestoreEnv(t *testing.T) {
@@ -27,16 +30,16 @@ func saveAndRestoreEnv(t *testing.T) {
 		for _, k := range keys {
 			_ = os.Setenv(k, orig[k])
 		}
-		ClearCache()
+		xdg.ClearCache()
 	})
 }
 
 func TestUserResourceDirs(t *testing.T) {
 	saveAndRestoreEnv(t)
-	SetTestEnv(t.TempDir(), "tasksmith-test")
+	testutils.SetupXDG(t, "tasksmith-test")
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dir, err := SubConfigDir("agents")
+	dir, err := xdg.SubConfigDir("agents")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +50,7 @@ func TestUserResourceDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := UserResourceDirs(); len(got) != 1 || got[0] != dir {
+	if got := xdg.UserResourceDirs(); len(got) != 1 || got[0] != dir {
 		t.Fatalf("expected only the XDG path %q, got %v", dir, got)
 	}
 }
@@ -57,16 +60,16 @@ func TestAppName(t *testing.T) {
 
 	t.Run("DefaultAppName", func(t *testing.T) {
 		_ = os.Setenv("TASKSMITH_APPNAME", "")
-		ClearCache()
-		if got := AppName(); got != "tasksmith" {
+		xdg.ClearCache()
+		if got := xdg.AppName(); got != "tasksmith" {
 			t.Errorf("expected default appname %q, got %q", "tasksmith", got)
 		}
 	})
 
 	t.Run("CustomAppName", func(t *testing.T) {
 		_ = os.Setenv("TASKSMITH_APPNAME", "tasksmith-dev")
-		ClearCache()
-		if got := AppName(); got != "tasksmith-dev" {
+		xdg.ClearCache()
+		if got := xdg.AppName(); got != "tasksmith-dev" {
 			t.Errorf("expected custom appname %q, got %q", "tasksmith-dev", got)
 		}
 	})
@@ -82,8 +85,8 @@ func TestAppName(t *testing.T) {
 		}
 		for _, invalid := range invalidNames {
 			_ = os.Setenv("TASKSMITH_APPNAME", invalid)
-			ClearCache()
-			if got := AppName(); got != "tasksmith" {
+			xdg.ClearCache()
+			if got := xdg.AppName(); got != "tasksmith" {
 				t.Errorf("for TASKSMITH_APPNAME=%q: expected fallback %q, got %q", invalid, "tasksmith", got)
 			}
 		}
@@ -101,9 +104,9 @@ func TestDirectories(t *testing.T) {
 		_ = os.Setenv("XDG_CACHE_HOME", "")
 		_ = os.Setenv("XDG_RUNTIME_DIR", "")
 		_ = os.Setenv("TASKSMITH_APPNAME", "")
-		ClearCache()
+		xdg.ClearCache()
 
-		cfg, err := SubConfigDir("settings")
+		cfg, err := xdg.SubConfigDir("settings")
 		if err != nil {
 			t.Fatalf("SubConfigDir error: %v", err)
 		}
@@ -111,7 +114,7 @@ func TestDirectories(t *testing.T) {
 			t.Errorf("SubConfigDir: want %q, got %q", want, cfg)
 		}
 
-		data, err := SubDataDir("db")
+		data, err := xdg.SubDataDir("db")
 		if err != nil {
 			t.Fatalf("SubDataDir error: %v", err)
 		}
@@ -119,7 +122,7 @@ func TestDirectories(t *testing.T) {
 			t.Errorf("SubDataDir: want %q, got %q", want, data)
 		}
 
-		state, err := SubStateDir("sessions")
+		state, err := xdg.SubStateDir("sessions")
 		if err != nil {
 			t.Fatalf("SubStateDir error: %v", err)
 		}
@@ -127,7 +130,7 @@ func TestDirectories(t *testing.T) {
 			t.Errorf("SubStateDir: want %q, got %q", want, state)
 		}
 
-		cache, err := SubCacheDir("http")
+		cache, err := xdg.SubCacheDir("http")
 		if err != nil {
 			t.Fatalf("SubCacheDir error: %v", err)
 		}
@@ -136,7 +139,7 @@ func TestDirectories(t *testing.T) {
 		}
 
 		// When XDG_RUNTIME_DIR is unset, Home(VarTypeRuntime) falls back to <StateHome>/run
-		rt, err := SubRuntimeDir("brain.sock")
+		rt, err := xdg.SubRuntimeDir("brain.sock")
 		if err != nil {
 			t.Fatalf("SubRuntimeDir error: %v", err)
 		}
@@ -152,9 +155,9 @@ func TestDirectories(t *testing.T) {
 		_ = os.Setenv("XDG_CACHE_HOME", "/custom/cache")
 		_ = os.Setenv("XDG_RUNTIME_DIR", "/custom/run/user/1000")
 		_ = os.Setenv("TASKSMITH_APPNAME", "custom-app")
-		ClearCache()
+		xdg.ClearCache()
 
-		cfg, err := SubConfigDir("init.toml")
+		cfg, err := xdg.SubConfigDir("init.toml")
 		if err != nil {
 			t.Fatalf("SubConfigDir error: %v", err)
 		}
@@ -162,7 +165,7 @@ func TestDirectories(t *testing.T) {
 			t.Errorf("SubConfigDir: want %q, got %q", want, cfg)
 		}
 
-		data, err := SubDataDir("store")
+		data, err := xdg.SubDataDir("store")
 		if err != nil {
 			t.Fatalf("SubDataDir error: %v", err)
 		}
@@ -170,7 +173,7 @@ func TestDirectories(t *testing.T) {
 			t.Errorf("SubDataDir: want %q, got %q", want, data)
 		}
 
-		state, err := SubStateDir("history")
+		state, err := xdg.SubStateDir("history")
 		if err != nil {
 			t.Fatalf("SubStateDir error: %v", err)
 		}
@@ -178,7 +181,7 @@ func TestDirectories(t *testing.T) {
 			t.Errorf("SubStateDir: want %q, got %q", want, state)
 		}
 
-		cache, err := SubCacheDir("blobs")
+		cache, err := xdg.SubCacheDir("blobs")
 		if err != nil {
 			t.Fatalf("SubCacheDir error: %v", err)
 		}
@@ -186,7 +189,7 @@ func TestDirectories(t *testing.T) {
 			t.Errorf("SubCacheDir: want %q, got %q", want, cache)
 		}
 
-		rt, err := SubRuntimeDir("brain.sock")
+		rt, err := xdg.SubRuntimeDir("brain.sock")
 		if err != nil {
 			t.Fatalf("SubRuntimeDir error: %v", err)
 		}
@@ -199,11 +202,10 @@ func TestDirectories(t *testing.T) {
 func TestHelpers(t *testing.T) {
 	saveAndRestoreEnv(t)
 
-	tmpDir := t.TempDir()
-	SetTestEnv(tmpDir, "tasksmith-test")
+	tmpDir := testutils.SetupXDG(t, "tasksmith-test")
 
 	t.Run("WorkspaceDir", func(t *testing.T) {
-		path1, err := WorkspaceDir("/workspace/project-a")
+		path1, err := xdg.WorkspaceDir("/workspace/project-a")
 		if err != nil {
 			t.Fatalf("WorkspaceDir error: %v", err)
 		}
@@ -216,7 +218,7 @@ func TestHelpers(t *testing.T) {
 		}
 
 		// Deterministic
-		path2, err := WorkspaceDir("/workspace/project-a")
+		path2, err := xdg.WorkspaceDir("/workspace/project-a")
 		if err != nil {
 			t.Fatalf("WorkspaceDir error: %v", err)
 		}
@@ -225,7 +227,7 @@ func TestHelpers(t *testing.T) {
 		}
 
 		// Distinct keys yield distinct dirs
-		path3, err := WorkspaceDir("/workspace/project-b")
+		path3, err := xdg.WorkspaceDir("/workspace/project-b")
 		if err != nil {
 			t.Fatalf("WorkspaceDir error: %v", err)
 		}
@@ -235,7 +237,7 @@ func TestHelpers(t *testing.T) {
 	})
 
 	t.Run("LogsDirAndLogFilePath", func(t *testing.T) {
-		logsDir, err := LogsDir()
+		logsDir, err := xdg.LogsDir()
 		if err != nil {
 			t.Fatalf("LogsDir error: %v", err)
 		}
@@ -244,7 +246,7 @@ func TestHelpers(t *testing.T) {
 			t.Errorf("LogsDir: want %q, got %q", wantLogsDir, logsDir)
 		}
 
-		logFile, err := LogFilePath("brain.log")
+		logFile, err := xdg.LogFilePath("brain.log")
 		if err != nil {
 			t.Fatalf("LogFilePath error: %v", err)
 		}
@@ -255,7 +257,7 @@ func TestHelpers(t *testing.T) {
 	})
 
 	t.Run("SocketPath", func(t *testing.T) {
-		sock, err := SocketPath("brain.sock")
+		sock, err := xdg.SocketPath("brain.sock")
 		if err != nil {
 			t.Fatalf("SocketPath error: %v", err)
 		}
@@ -266,7 +268,7 @@ func TestHelpers(t *testing.T) {
 	})
 
 	t.Run("HistoryDirAndHistoryFilePath", func(t *testing.T) {
-		histDir, err := HistoryDir()
+		histDir, err := xdg.HistoryDir()
 		if err != nil {
 			t.Fatalf("HistoryDir error: %v", err)
 		}
@@ -275,7 +277,7 @@ func TestHelpers(t *testing.T) {
 			t.Errorf("HistoryDir: want %q, got %q", wantHistDir, histDir)
 		}
 
-		histFile, err := HistoryFilePath("repl.jsonl")
+		histFile, err := xdg.HistoryFilePath("repl.jsonl")
 		if err != nil {
 			t.Fatalf("HistoryFilePath error: %v", err)
 		}
@@ -288,8 +290,7 @@ func TestHelpers(t *testing.T) {
 
 func TestConcurrentAccess(t *testing.T) {
 	saveAndRestoreEnv(t)
-	tmpDir := t.TempDir()
-	SetTestEnv(tmpDir, "tasksmith-race")
+	testutils.SetupXDG(t, "tasksmith-race")
 
 	var wg sync.WaitGroup
 	for i := range 32 {
@@ -298,18 +299,18 @@ func TestConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := range 50 {
 				if j%15 == 0 {
-					ClearCache()
+					xdg.ClearCache()
 				}
-				_ = AppName()
-				_, _ = SubConfigDir("cfg")
-				_, _ = SubDataDir("data")
-				_, _ = SubStateDir("state")
-				_, _ = SubCacheDir("cache")
-				_, _ = SubRuntimeDir("run")
-				_, _ = WorkspaceDir("ws")
-				_, _ = LogFilePath("app.log")
-				_, _ = SocketPath("brain.sock")
-				_, _ = HistoryFilePath("repl.jsonl")
+				_ = xdg.AppName()
+				_, _ = xdg.SubConfigDir("cfg")
+				_, _ = xdg.SubDataDir("data")
+				_, _ = xdg.SubStateDir("state")
+				_, _ = xdg.SubCacheDir("cache")
+				_, _ = xdg.SubRuntimeDir("run")
+				_, _ = xdg.WorkspaceDir("ws")
+				_, _ = xdg.LogFilePath("app.log")
+				_, _ = xdg.SocketPath("brain.sock")
+				_, _ = xdg.HistoryFilePath("repl.jsonl")
 			}
 		}(i)
 	}

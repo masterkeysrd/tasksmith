@@ -13,7 +13,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -61,8 +61,7 @@ func (s *stubResourceReader) GetMCPPrompt(context.Context, string, string, map[s
 // one resource, then wires the built-in tools with a stub MCP runtime.
 func readResourceEnv(t *testing.T, reader tools.MCPCaller) (tools.Container, *workspace.Workspace) {
 	t.Helper()
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-read-mcp-resource-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-read-mcp-resource-test")
 
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/core/sys"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 )
 
 func TestWaitForDaemonLockReleaseSkipsMissingLock(t *testing.T) {
@@ -133,11 +133,7 @@ func TestConnectOrStartFailsWhenSpawnedDaemonDies(t *testing.T) {
 
 	// The spawned child's stderr goes to the XDG logs directory; keep it inside
 	// the test so nothing is appended to the developer's real daemon-spawn.log.
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-daemon-lifecycle-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-daemon-lifecycle-test")
 
 	prev := client.SpawnWaitTimeout
 	client.SpawnWaitTimeout = 5 * time.Second

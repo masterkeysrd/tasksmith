@@ -17,8 +17,8 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
@@ -1014,9 +1014,7 @@ func TestInvokeSubagentDoesNotLeakAgentPoliciesToParent(t *testing.T) {
 func setupTierTestEnv(t *testing.T) (*workspace.Workspace, *models.Catalog) {
 	t.Helper()
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-tier-test")
-	t.Cleanup(func() { xdg.ClearCache() })
+	testutils.SetupXDG(t, "tasksmith-tier-test")
 
 	wsDir := t.TempDir()
 	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: tiers\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake/fake-balanced-model\n---\n"
@@ -1388,9 +1386,7 @@ func TestMainAgentPromptSurfacesSubagentModelTiers(t *testing.T) {
 func setupMultiTierTestEnv(t *testing.T) (*workspace.Workspace, *models.Catalog) {
 	t.Helper()
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-multitier-test")
-	t.Cleanup(func() { xdg.ClearCache() })
+	testutils.SetupXDG(t, "tasksmith-multitier-test")
 
 	wsDir := t.TempDir()
 	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: multitiers\nspec:\n  defaultProvider: alpha\n  modelAliases:\n    code-reviewer: alpha/alpha-fast-model\n    smart: beta/beta-fast-model\n  defaultModels:\n    completion: alpha/alpha-balanced-model\n---\n"
@@ -1499,9 +1495,7 @@ func TestResolveSubagentModelMultiProvider(t *testing.T) {
 // tier alias the workspace cannot resolve fails synchronously with
 // ErrInvalidConfig instead of spawning a child bound to a literal "@fast".
 func TestResolveSubagentModelUnresolvableAliasRejected(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-notier-test")
-	t.Cleanup(func() { xdg.ClearCache() })
+	testutils.SetupXDG(t, "tasksmith-notier-test")
 
 	wsDir := t.TempDir()
 	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: notiers\nspec:\n  defaultProvider: plain\n  defaultModels:\n    completion: plain/plain-model\n---\n"
@@ -1709,9 +1703,7 @@ func TestManageSubagentsModelsDiscovery(t *testing.T) {
 // - provider-scoped globs ("ollama/*") permit matching models and reject others,
 // - unknown/typo model requests return ErrInvalidConfig with up to 3 "did you mean" hints.
 func TestResolveSubagentModelWildcardsAndFuzzyHints(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-glob-test")
-	t.Cleanup(func() { xdg.ClearCache() })
+	testutils.SetupXDG(t, "tasksmith-glob-test")
 
 	wsDir := t.TempDir()
 	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: globs\nspec:\n  defaultProvider: alpha\n  defaultModels:\n    completion: alpha/alpha-balanced\n---\n"

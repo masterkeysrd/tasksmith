@@ -31,6 +31,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/memdb"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
@@ -819,11 +820,7 @@ func (c *testCoordinator) Close() error {
 func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspace, *fakeGateway, *testPublisher, *testCoordinator) {
 	t.Helper()
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-session-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-session-test")
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	db, err := sqlite.Open(context.Background(), dbPath)
@@ -1132,11 +1129,7 @@ func TestSessionCRUD(t *testing.T) {
 }
 
 func TestCreateWorkspaceDefaultsAndConcurrentSessionOverrides(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-session-ws-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-session-ws-test")
 
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "ws-test.db")
@@ -6217,11 +6210,7 @@ func TestDirectSessionPackageAPIs(t *testing.T) {
 func TestPreviewResolvesModelAlias(t *testing.T) {
 	ctx := context.Background()
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-session-alias-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-session-alias-test")
 
 	wsDir := t.TempDir()
 	manifest := `---
@@ -7289,11 +7278,7 @@ spec:
 func newSandboxPolicyCoordinator(t *testing.T, wsPolicies string, restricted bool) *testCoordinator {
 	t.Helper()
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-session-sandbox-policy-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-session-sandbox-policy-test")
 
 	dbPath := filepath.Join(t.TempDir(), "sandbox-policy.db")
 	db, err := sqlite.Open(context.Background(), dbPath)

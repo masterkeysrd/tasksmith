@@ -10,6 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 	"testing"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 )
 
 // TestMain intercepts the hidden sandbox-relay subcommand when the Go test
@@ -20,7 +22,7 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == SandboxRelayArg {
 		os.Exit(runTestSandboxRelay(os.Args[2:]))
 	}
-	os.Exit(m.Run())
+	os.Exit(testutils.RunWithXDG(m, "tasksmith"))
 }
 
 func runTestSandboxRelay(args []string) int {

@@ -11,7 +11,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -21,8 +21,7 @@ import (
 
 func setupTestResolver(t *testing.T) (*AttachmentResolver, *std.MemoryTracker, string) {
 	t.Helper()
-	xdg.SetTestEnv(t.TempDir(), "tasksmith-files-test")
-	t.Cleanup(xdg.ClearCache)
+	testutils.SetupXDG(t, "tasksmith-files-test")
 
 	dir := t.TempDir()
 

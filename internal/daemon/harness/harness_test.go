@@ -23,7 +23,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
@@ -174,11 +174,7 @@ func openTestSQLite(t *testing.T) *sql.DB {
 
 func newTestToolsRegistry(t *testing.T) (string, tools.Container, permissions.SessionManager) {
 	t.Helper()
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-harness-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+	testutils.SetupXDG(t, "tasksmith-harness-test")
 
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {

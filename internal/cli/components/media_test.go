@@ -17,7 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/hash"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	coretestutils "github.com/masterkeysrd/tasksmith/internal/core/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
@@ -70,8 +70,7 @@ func (s *stubImageClipboard) Read(mime string) *promise.Promise[[]byte] {
 var _ terminal.Clipboard = (*stubImageClipboard)(nil)
 
 func TestComposerClipboardImagePasteAndPill(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 
 	store.ClearSlot()
 	store.ResetApp()
@@ -175,8 +174,7 @@ func (s *staticMapClipboard) Read(mime string) *promise.Promise[[]byte] {
 }
 
 func TestComposerClipboardFileCopyAndDrop(t *testing.T) {
-	xdg.SetTestEnv(t.TempDir(), "tasksmith")
-	defer xdg.ClearCache()
+	coretestutils.SetupXDG(t, "tasksmith")
 
 	store.ClearSlot()
 	store.ResetApp()
