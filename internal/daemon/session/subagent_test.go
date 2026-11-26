@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -452,6 +453,79 @@ func TestInvokeSubagentAndManageSubagents(t *testing.T) {
 	_, err = parent.ManageSubagents(ctx, api.ManageAgentsInput{Action: "status", SessionID: "unknown"})
 	if !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("expected ErrSessionNotFound, got %v", err)
+	}
+}
+
+type silentChildHarness struct {
+	harness.Harness
+}
+
+func (silentChildHarness) Stream(ctx context.Context, _ harness.Input) iter.Seq2[any, error] {
+	return func(func(any, error) bool) { <-ctx.Done() }
+}
+
+func TestSubagentStatusWithoutStreamEvents(t *testing.T) {
+	for _, spawn := range []string{"invoke_agent", "delegated command"} {
+		t.Run(spawn, func(t *testing.T) {
+			ctx := t.Context()
+			_, _, _, pub, mgr := setupTestEnv(t, &fakeProvider{})
+			defer closeTestResource(t, mgr)
+			parent, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Parent"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent.onUpdate = func(_ context.Context, child *Session) error {
+				child.Harness = silentChildHarness{child.Harness}
+				return nil
+			}
+
+			if spawn == "invoke_agent" {
+				_, err = parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+					Agent: "explore", Title: "Explore", Prompt: "Find interfaces",
+				})
+			} else {
+				err = parent.dispatchCommandSubagent(ctx, &commandExecution{
+					Name: "explore", Message: message.NewUserText("Find interfaces"),
+				})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			children := parent.Children()
+			if len(children) != 1 {
+				t.Fatalf("got %d children, want 1", len(children))
+			}
+			child := children[0]
+			assertUpdates := func(want api.SessionStatus) {
+				t.Helper()
+				var globalStatus, parentStatus api.SessionStatus
+				for _, rec := range pub.recordedRecords() {
+					ev, ok := rec.event.(api.SessionUpdatedEvent)
+					if !ok {
+						continue
+					}
+					switch rec.topic {
+					case api.TopicSessions:
+						if ev.Session.ID == child.ID {
+							globalStatus = ev.Session.Status
+						}
+					case api.SessionStreamTopic(parent.ID):
+						if ev.Session.ID == parent.ID && len(ev.Session.Subagents) == 1 && ev.Session.Subagents[0].ID == child.ID {
+							parentStatus = ev.Session.Subagents[0].Status
+						}
+					}
+				}
+				if globalStatus != want || parentStatus != want {
+					t.Errorf("global status = %q, parent snapshot status = %q; want %q", globalStatus, parentStatus, want)
+				}
+			}
+			assertUpdates(api.StatusThinking)
+			pub.reset()
+			if err := child.Cancel(ctx); err != nil {
+				t.Fatal(err)
+			}
+			assertUpdates(api.StatusIdle)
+		})
 	}
 }
 

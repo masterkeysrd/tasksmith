@@ -456,6 +456,7 @@ func (s *Session) startTurnLocked(hInput harness.Input) error {
 		SessionID: s.ID,
 		Status:    initialStatus,
 	})
+	s.notifyParentUpdate()
 
 	s.wg.Go(func() {
 		defer func() {
@@ -476,6 +477,7 @@ func (s *Session) startTurnLocked(hInput harness.Input) error {
 					SessionID: s.ID,
 					Status:    api.StatusIdle,
 				})
+				s.notifyParentUpdate()
 			}
 			cancel()
 			close(done)
