@@ -4373,6 +4373,109 @@ spec:
 	}
 }
 
+type gatedSessionStore struct {
+	session.Store
+	ctx    context.Context
+	once   sync.Once
+	read   chan struct{}
+	resume chan struct{}
+}
+
+func (s *gatedSessionStore) Get(ctx context.Context, id string) (*session.Session, error) {
+	sess, err := s.Store.Get(ctx, id)
+	if ctx == s.ctx {
+		s.once.Do(func() { close(s.read); <-s.resume })
+	}
+	return sess, err
+}
+
+func TestSessionDeleteDuringRestore(t *testing.T) {
+	for _, tree := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tree=%t", tree), func(t *testing.T) {
+			srv, _, dir := setupDaemonTest(t, &fakeProvider{})
+			ctx := t.Context()
+			rt, err := srv.workspace(ctx, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, _, err := rt.CreateSession(ctx, api.CreateSessionRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var childID string
+			if tree {
+				child, _, err := rt.CreateSession(ctx, api.CreateSessionRequest{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				child.ParentID = parent.ID
+				childID = child.ID
+				if err := child.CheckpointTo(ctx, rt.sessionStore); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rt.sessions.Delete(parent.ID)
+			if err := parent.Close(); err != nil {
+				t.Fatal(err)
+			}
+			gatedCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			gate := &gatedSessionStore{Store: rt.sessionStore, ctx: gatedCtx, read: make(chan struct{}), resume: make(chan struct{})}
+			rt.sessionStore = gate
+			done := make(chan error, 1)
+			go func() {
+				if tree {
+					done <- rt.DeleteSession(gatedCtx, parent.ID)
+					return
+				}
+				_, err := rt.GetSession(gatedCtx, parent.ID)
+				done <- err
+			}()
+			<-gate.read
+			if tree {
+				writer := make(chan struct{})
+				go func() {
+					rt.reloadMu.Lock()
+					rt.RefreshSessions()
+					rt.reloadMu.Unlock()
+					close(writer)
+				}()
+				for rt.reloadMu.TryRLock() {
+					rt.reloadMu.RUnlock()
+					time.Sleep(time.Millisecond)
+				}
+				close(gate.resume)
+				select {
+				case <-writer:
+				case <-time.After(5 * time.Second):
+					t.Fatal("reload blocked by recursive deletion")
+				}
+			} else {
+				err := rt.DeleteSession(ctx, parent.ID)
+				close(gate.resume)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = <-done
+			if tree && err != nil || !tree && !errors.Is(err, session.ErrSessionNotFound) {
+				t.Fatalf("unexpected result: %v", err)
+			}
+			for _, id := range []string{parent.ID, childID} {
+				if id == "" {
+					continue
+				}
+				if _, ok := rt.sessions.Snapshot().Get(id); ok {
+					t.Fatalf("cached deleted session %s", id)
+				}
+				if _, err := rt.sessionStore.Get(ctx, id); !errors.Is(err, session.ErrSessionNotFound) {
+					t.Fatalf("deleted session %s: %v", id, err)
+				}
+			}
+		})
+	}
+}
+
 func TestScanGlobalMCPsIncludesHomeAgents(t *testing.T) {
 	home := t.TempDir()
 	xdgCfg := filepath.Join(home, "xdg-config")

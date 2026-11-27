@@ -117,27 +117,35 @@ func (r *workspaceRuntime) loadOrCacheSession(ctx context.Context, dbSess *sessi
 		// Restored sessions need the caller too, or a session resumed after a
 		// daemon restart would silently lose every MCP tool.
 		MCPCaller: sessionRT.MCPCaller,
-		OnUpdate:  owner.persistSession,
 	}
 
-	sess, err := session.Open(ctx, dbSess, cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	if !createMuHeld {
-		owner.createMu.Lock()
-	}
-	if existing, ok := owner.sessions.Snapshot().Get(sess.ID); ok {
+	sess, opened, err := func() (*session.Session, bool, error) {
 		if !createMuHeld {
-			owner.createMu.Unlock()
+			owner.createMu.Lock()
+			defer owner.createMu.Unlock()
 		}
-		_ = sess.Close()
-		return existing, nil
-	}
-	owner.sessions.Save(sess)
-	if !createMuHeld {
-		owner.createMu.Unlock()
+		if existing, ok := owner.sessions.Snapshot().Get(dbSess.ID); ok {
+			return existing, false, nil
+		}
+		current, err := owner.sessionStore.Get(ctx, dbSess.ID)
+		if err != nil {
+			return nil, false, err
+		}
+		cfg.OnUpdate = func(ctx context.Context, updated *session.Session) error {
+			if updated == current {
+				return updated.CheckpointTo(ctx, owner.sessionStore)
+			}
+			return owner.persistSession(ctx, updated)
+		}
+		live, err := session.Open(ctx, current, cfg)
+		if err != nil {
+			return nil, false, err
+		}
+		owner.sessions.Save(live)
+		return live, true, nil
+	}()
+	if !opened {
+		return sess, err
 	}
 
 	if sess.ParentID == "" {
@@ -394,6 +402,11 @@ func (r *workspaceRuntime) DeleteSession(ctx context.Context, id string) error {
 	owner := r.sessionOwnerOrSelf()
 	owner.reloadMu.RLock()
 	defer owner.reloadMu.RUnlock()
+	return r.deleteSessionLocked(ctx, id)
+}
+
+func (r *workspaceRuntime) deleteSessionLocked(ctx context.Context, id string) error {
+	owner := r.sessionOwnerOrSelf()
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return session.ErrEmptySessionID
@@ -402,22 +415,16 @@ func (r *workspaceRuntime) DeleteSession(ctx context.Context, id string) error {
 		return err
 	}
 
-	sess, _ := owner.sessions.Snapshot().Get(id)
-	owner.sessions.Delete(id)
-
-	if sess == nil {
-		if live, err := r.getLiveSession(ctx, id); err == nil {
-			sess = live
-			owner.sessions.Delete(id)
-		}
-	}
+	sess, _ := r.getLiveSession(ctx, id)
 
 	if sess != nil {
 		if parent := sess.Parent(); parent != nil {
 			parent.RemoveChild(sess.ID)
 		}
 		for _, child := range sess.Children() {
-			_ = r.DeleteSession(ctx, child.ID)
+			if err := r.deleteSessionLocked(ctx, child.ID); err != nil {
+				return err
+			}
 		}
 		_ = sess.Cancel(ctx)
 		_ = sess.Close()
@@ -445,8 +452,8 @@ func (r *workspaceRuntime) DeleteSession(ctx context.Context, id string) error {
 	owner.createMu.Lock()
 	owner.sessions.Delete(id)
 	err := owner.sessionStore.Delete(ctx, id)
-	owner.createMu.Unlock()
 	if err != nil {
+		owner.createMu.Unlock()
 		return err
 	}
 
@@ -454,6 +461,8 @@ func (r *workspaceRuntime) DeleteSession(ctx context.Context, id string) error {
 	if err == nil {
 		_ = os.RemoveAll(sessDir)
 	}
+
+	owner.createMu.Unlock()
 
 	owner.publisher.Publish(api.TopicSessions, api.SessionDeletedEvent{
 		Workspace: owner.ws.RootDir(),
