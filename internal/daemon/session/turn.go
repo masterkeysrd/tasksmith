@@ -37,6 +37,12 @@ func (s *Session) sendWithUserIntent(ctx context.Context, req api.SendRequest, u
 		return errors.New("session: uninitialized session")
 	}
 
+	s.forkMu.RLock()
+	defer s.forkMu.RUnlock()
+	if s.IsClosing() {
+		return context.Canceled
+	}
+
 	id := strings.TrimSpace(req.ID)
 	if id != "" && (req.Question != nil || req.Decision != nil) {
 		return fmt.Errorf("%w: cannot combine question/decision with id", ErrInvalidConfig)
@@ -97,11 +103,13 @@ func (s *Session) sendWithUserIntent(ctx context.Context, req api.SendRequest, u
 		if strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 {
 			return fmt.Errorf("%w: cannot specify both message and command", ErrInvalidConfig)
 		}
-		s.enqueueItem(queueItem{
+		if err := s.enqueueItem(queueItem{
 			ID:      id,
 			Kind:    api.QueueKindCommand,
 			Command: cmd,
-		})
+		}); err != nil {
+			return err
+		}
 		s.Lock()
 		running := s.Running
 		s.Unlock()
@@ -194,11 +202,17 @@ func (s *Session) sendWithUserIntent(ctx context.Context, req api.SendRequest, u
 	}
 
 	s.Lock()
+	if s.closing {
+		s.Unlock()
+		return context.Canceled
+	}
 	if strings.TrimSpace(s.Title) == "" && !s.titleGenerating {
 		text := msg.GetContent().Text()
 		if text != "" {
 			s.titleGenerating = true
+			s.localWG.Add(1)
 			s.wg.Go(func() {
+				defer s.localWG.Done()
 				s.generateTitle(text)
 			})
 		}
@@ -207,17 +221,19 @@ func (s *Session) sendWithUserIntent(ctx context.Context, req api.SendRequest, u
 	s.Unlock()
 
 	if running {
-		s.enqueueItem(queueItem{
+		if err := s.enqueueItem(queueItem{
 			ID:      msg.GetID(),
 			Kind:    api.QueueKindMessage,
 			Message: message.CloneMessage(msg),
-		})
+		}); err != nil {
+			return err
+		}
 		return nil
 	}
 
 	var hInput harness.Input
 	hInput.Message = msg
-	if exec != nil && exec.TargetModel != "" && !strings.EqualFold(exec.TargetModel, s.Config.Model) {
+	if exec != nil && exec.TargetModel != "" && !strings.EqualFold(exec.TargetModel, s.configSnapshot().Model) {
 		hInput.ModelOverride = exec.TargetModel
 	}
 
@@ -291,7 +307,7 @@ func (s *Session) visibleQueueLocked() []api.QueueItem {
 	return vis
 }
 
-func (s *Session) enqueueItem(item queueItem) {
+func (s *Session) enqueueItem(item queueItem) error {
 	if item.ID == "" && !uuid.Validate(item.ID) {
 		item.ID = uuid.NewString()
 	}
@@ -302,6 +318,10 @@ func (s *Session) enqueueItem(item queueItem) {
 
 	var vis []api.QueueItem
 	s.Lock()
+	if s.closing {
+		s.Unlock()
+		return context.Canceled
+	}
 	s.queue = append(s.queue, item)
 	isVisible := item.Kind == api.QueueKindMessage || item.Kind == api.QueueKindCommand
 	if isVisible {
@@ -315,26 +335,27 @@ func (s *Session) enqueueItem(item queueItem) {
 			Queue:     vis,
 		})
 	}
+	return nil
 }
 
 // HasItems reports whether the execution queue has pending items.
 func (s *Session) HasItems() bool {
 	s.Lock()
 	defer s.Unlock()
-	return len(s.queue) > 0
+	return s.turnOverride == "" && len(s.queue) > 0
 }
 
 // HasLeadingCommand reports whether the next pending item in the queue is a command.
 func (s *Session) HasLeadingCommand() bool {
 	s.Lock()
 	defer s.Unlock()
-	return len(s.queue) > 0 && s.queue[0].Kind == api.QueueKindCommand
+	return s.turnOverride == "" && len(s.queue) > 0 && s.queue[0].Kind == api.QueueKindCommand
 }
 
 // PopCommand pops and returns the leading command item if present.
 func (s *Session) PopCommand() (id, command string, ok bool) {
 	s.Lock()
-	if len(s.queue) == 0 || s.queue[0].Kind != api.QueueKindCommand {
+	if s.turnOverride != "" || len(s.queue) == 0 || s.queue[0].Kind != api.QueueKindCommand {
 		s.Unlock()
 		return "", "", false
 	}
@@ -353,7 +374,7 @@ func (s *Session) PopCommand() (id, command string, ok bool) {
 // PopMessages pops and returns all leading messages up to the next command item.
 func (s *Session) PopMessages() []message.Message {
 	s.Lock()
-	if len(s.queue) == 0 {
+	if s.turnOverride != "" || len(s.queue) == 0 {
 		s.Unlock()
 		return nil
 	}
@@ -411,6 +432,10 @@ func (s *Session) startTurn(hInput harness.Input) error {
 
 func (s *Session) startTurnLocked(hInput harness.Input) error {
 	s.Lock()
+	if s.closing {
+		s.Unlock()
+		return context.Canceled
+	}
 	if s.Running {
 		s.Unlock()
 		return ErrSessionRunning
@@ -450,6 +475,13 @@ func (s *Session) startTurnLocked(hInput harness.Input) error {
 	s.StartedAt = time.Now().UTC()
 	s.cancel = cancel
 	s.done = done
+	prevOverride := s.turnOverride
+	if hInput.HasResponses() {
+		hInput.ModelOverride = s.turnOverride
+	}
+	s.turnOverride = hInput.ModelOverride
+	s.wg.Add(1)
+	s.localWG.Add(1)
 	s.Unlock()
 
 	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
@@ -458,7 +490,9 @@ func (s *Session) startTurnLocked(hInput harness.Input) error {
 	})
 	s.notifyParentUpdate()
 
-	s.wg.Go(func() {
+	go func() {
+		defer s.wg.Done()
+		defer s.localWG.Done()
 		defer func() {
 			var statusChanged bool
 			s.Lock()
@@ -483,22 +517,22 @@ func (s *Session) startTurnLocked(hInput harness.Input) error {
 			close(done)
 		}()
 
-		// Apply a per-turn model override (e.g. a command's spec.models) and
-		// restore the original model when the turn exits on any path.
-		if hInput.ModelOverride != "" {
-			origModel := s.Config.Model
-			s.setConfigModel(hInput.ModelOverride)
-			_ = s.configureHarness(runCtx)
-			defer func() {
-				s.setConfigModel(origModel)
-				_ = s.configureHarness(s.bgCtx)
-			}()
+		if hInput.ModelOverride != "" || prevOverride != "" {
+			if err := s.configureHarness(runCtx); err != nil {
+				if hInput.ModelOverride == "" && prevOverride != "" {
+					_ = s.configureHarness(s.bgCtx)
+				}
+				s.clearTurnOverride(done)
+				s.handleAsyncError(runCtx, err)
+				return
+			}
 		}
 
 		s.Lock()
 		hErr := s.harnessErr
 		s.Unlock()
 		if hErr != nil {
+			s.clearTurnOverride(done)
 			s.handleAsyncError(runCtx, hErr)
 			return
 		}
@@ -515,12 +549,20 @@ func (s *Session) startTurnLocked(hInput harness.Input) error {
 		var lastReply *message.Assistant
 		reply, err := s.send(sCtx, s.Harness.Stream(sCtx, hInput))
 		if err != nil {
+			s.clearTurnOverride(done)
 			s.handleAsyncError(runCtx, err)
 			return
 		}
 		if reply != nil {
 			lastReply = reply
 			s.finishTurn(api.TurnStatusDone)
+		}
+
+		s.Lock()
+		interrupted := s.waitingForInteractionLocked()
+		s.Unlock()
+		if !interrupted {
+			s.clearTurnOverride(done)
 		}
 
 		for {
@@ -558,12 +600,26 @@ func (s *Session) startTurnLocked(hInput harness.Input) error {
 					outText = strings.TrimSpace(lastReply.GetContent().Text())
 				}
 				text := fmt.Sprintf("<subagent_completed session_id=%q agent=%q title=%q status=\"completed\" work_dir=%q>\n%s\n</subagent_completed>",
-					s.ID, s.Config.Agent, s.Title, s.WorkDir, outText)
+					s.ID, s.configSnapshot().Agent, s.GetTitle(), s.WorkDir, outText)
 				s.parent.Enqueue(message.NewUserTextMeta(text, map[string]any{harness.MetaSystemKind: harness.SystemKindSubagent}))
 			}
 		}
-	})
+	}()
 	return nil
+}
+
+func (s *Session) clearTurnOverride(done chan struct{}) {
+	s.Lock()
+	if s.done != done {
+		s.Unlock()
+		return
+	}
+	override := s.turnOverride
+	s.turnOverride = ""
+	s.Unlock()
+	if override != "" {
+		_ = s.configureHarness(s.bgCtx)
+	}
 }
 
 // Enqueue adds a message to the session's execution queue or initiates an immediate turn if idle.
@@ -583,7 +639,11 @@ func (s *Session) Enqueue(msg message.Message) {
 		Kind:    kind,
 		Message: message.CloneMessage(msg),
 	}
-	s.enqueueItem(item)
+	s.forkMu.RLock()
+	defer s.forkMu.RUnlock()
+	if err := s.enqueueItem(item); err != nil {
+		return
+	}
 
 	s.Lock()
 	canStart := !s.Running && !s.waitingForInteractionLocked()
@@ -622,6 +682,10 @@ func (s *Session) resumeInteraction(ctx context.Context, record func(context.Con
 	s.interactionMu.Lock()
 	defer s.interactionMu.Unlock()
 	s.Lock()
+	if s.closing {
+		s.Unlock()
+		return context.Canceled
+	}
 	if s.Running {
 		s.Unlock()
 		return ErrSessionRunning
@@ -952,6 +1016,7 @@ func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 	s.PendingPermissions = nil
 	s.PendingQuestions = nil
 	s.PendingPlanReviews = nil
+	hadVisible := len(s.visibleQueueLocked()) != 0
 	if canceled {
 		s.queue = slices.DeleteFunc(s.queue, func(it queueItem) bool {
 			return it.Kind == api.QueueKindMessage || it.Kind == api.QueueKindCommand
@@ -966,6 +1031,9 @@ func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 		s.Error = errMsg
 	}
 	s.Unlock()
+	if hadVisible {
+		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QueueUpdatedEvent{SessionID: s.ID})
+	}
 
 	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 		SessionID: s.ID,
@@ -998,7 +1066,7 @@ func (s *Session) handleAsyncError(runCtx context.Context, err error) {
 	s.notifyParentUpdate()
 	if s.parent != nil && !canceled {
 		text := fmt.Sprintf("<subagent_completed session_id=%q agent=%q title=%q status=\"failed\" error=%q work_dir=%q>\n</subagent_completed>",
-			s.ID, s.Config.Agent, s.Title, errMsg, s.WorkDir)
+			s.ID, s.configSnapshot().Agent, s.GetTitle(), errMsg, s.WorkDir)
 		s.parent.Enqueue(message.NewUserTextMeta(text, map[string]any{harness.MetaSystemKind: harness.SystemKindSubagent}))
 	}
 }

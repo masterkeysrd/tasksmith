@@ -42,6 +42,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
@@ -7665,5 +7666,241 @@ func TestInitSessionDefaultsWorkDirToCWD(t *testing.T) {
 
 	if sess.WorkDir != ws.CWD() {
 		t.Errorf("sess.WorkDir = %q, want ws.CWD() = %q (ws.RootDir() = %q)", sess.WorkDir, ws.CWD(), ws.RootDir())
+	}
+}
+
+func TestClosedSessionRejectsTaskAndTurnAdmission(t *testing.T) {
+	_, _, _, _, mgr := setupTestEnv(t, nil)
+	defer closeTestResource(t, mgr)
+
+	s, _, err := mgr.Create(t.Context(), api.CreateSessionRequest{Title: "close"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	task := &tasks.Task{
+		Fn: func(ctx context.Context, _ io.Writer, _ io.Reader) (int, error) {
+			<-ctx.Done()
+			return -1, ctx.Err()
+		},
+	}
+	if err := s.Tasks.Add(task); err != nil {
+		t.Fatal(err)
+	}
+	if err := task.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s.Enqueue(message.NewUserText("late"))
+	if err := s.startTurnLocked(harness.Input{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("start after close: %v", err)
+	}
+	if s.HasItems() {
+		t.Fatal("closed session accepted a message")
+	}
+}
+
+func TestAsyncErrorPublishesQueueWipe(t *testing.T) {
+	_, _, _, pub, mgr := setupTestEnv(t, nil)
+	defer closeTestResource(t, mgr)
+
+	s, _, err := mgr.Create(t.Context(), api.CreateSessionRequest{Title: "queue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.enqueueItem(queueItem{Kind: api.QueueKindCommand, Command: "pwd"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.handleAsyncError(t.Context(), errors.New("turn failed"))
+	for _, e := range pub.recorded() {
+		if q, ok := e.(api.QueueUpdatedEvent); ok && q.SessionID == s.ID && len(q.Queue) == 0 {
+			return
+		}
+	}
+	t.Fatal("missing queue wipe event")
+}
+
+func TestTurnOverrideIsolatedFromSessionUpdatesAndQueue(t *testing.T) {
+	const base = "fake/fake-default-model"
+	const fast = "fake/fast-model"
+
+	for _, update := range []bool{false, true} {
+		t.Run(fmt.Sprintf("update=%t", update), func(t *testing.T) {
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var once sync.Once
+
+			prov := &fakeProvider{
+				handler: func(ctx context.Context, _ *llm.Request) ([]string, string, error) {
+					once.Do(func() {
+						close(entered)
+						select {
+						case <-release:
+						case <-ctx.Done():
+						}
+					})
+					return []string{"done"}, uuid.NewString(), nil
+				},
+			}
+			_, _, _, _, mgr := setupTwoModelEnv(t, prov)
+			defer closeTestResource(t, mgr)
+
+			unblock := sync.OnceFunc(func() { close(release) })
+			defer unblock()
+
+			s, _, err := mgr.Create(t.Context(), api.CreateSessionRequest{
+				Title: "override",
+				Config: api.SessionConfig{
+					Agent: "main",
+					Model: base,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			overrideTurn := harness.Input{
+				Message:       message.NewUserText("first"),
+				ModelOverride: fast,
+			}
+			if err := s.startTurn(overrideTurn); err != nil {
+				t.Fatal(err)
+			}
+
+			<-entered
+			if got := s.configSnapshot().Model; got != base {
+				t.Fatalf("override changed session model to %q", got)
+			}
+
+			want := base
+			if update {
+				want = fast
+				req := api.UpdateSessionRequest{
+					Config: api.SessionConfig{Model: want},
+					Force:  true,
+				}
+				if err := s.Update(t.Context(), req); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if err := s.Send(t.Context(), api.SendRequest{Content: "queued"}); err != nil {
+				t.Fatal(err)
+			}
+
+			unblock()
+			if err := s.Wait(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+
+			turns := prov.recordedTurns()
+			if len(turns) != 2 || turns[0].model != fast || turns[1].model != want || s.configSnapshot().Model != want {
+				t.Fatalf("turns=%+v session=%q", turns, s.configSnapshot().Model)
+			}
+		})
+	}
+}
+
+func TestAbandonedInterruptedOverrideRestoresBaseModel(t *testing.T) {
+	const base = "fake/fake-default-model"
+	const fast = "fake/fast-model"
+
+	var call atomic.Int32
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			if call.Add(1) == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: "turn-1"},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "ask-1",
+								Name: "ask_question",
+								Args: map[string]any{
+									"questions": []any{
+										map[string]any{
+											"type":        "text",
+											"question":    "Proceed?",
+											"description": "Confirm action.",
+										},
+									},
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "done"},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	_, _, _, _, mgr := setupTwoModelEnv(t, prov)
+	defer closeTestResource(t, mgr)
+
+	s, _, err := mgr.Create(t.Context(), api.CreateSessionRequest{
+		Title: "abandoned-override",
+		Config: api.SessionConfig{
+			Agent: "main",
+			Model: base,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.startTurn(harness.Input{
+		Message:       message.NewUserText("start override"),
+		ModelOverride: fast,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if s.Status != api.StatusWaitingQuestion {
+		t.Fatalf("status = %s, want %s", s.Status, api.StatusWaitingQuestion)
+	}
+
+	// Abandon the pending question with a fresh user message.
+	if err := s.Send(t.Context(), api.SendRequest{Content: "fresh message"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Follow up with one more normal turn to verify the base model remains restored.
+	if err := s.Send(t.Context(), api.SendRequest{Content: "follow up"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Wait(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	turns := prov.recordedTurns()
+	if len(turns) != 3 {
+		t.Fatalf("turns = %+v, want 3 calls", turns)
+	}
+	if turns[0].model != fast || turns[1].model != base || turns[2].model != base {
+		t.Fatalf("models = [%s, %s, %s], want [%s, %s, %s]",
+			turns[0].model, turns[1].model, turns[2].model, fast, base, base)
 	}
 }

@@ -47,12 +47,17 @@ func (s *Session) Fork(ctx context.Context, title string) (*Session, error) {
 		return nil, err
 	}
 
+	s.forkMu.Lock()
+	defer s.forkMu.Unlock()
+	s.interactionMu.Lock()
+	defer s.interactionMu.Unlock()
+
 	s.Lock()
 	if s.closing {
 		s.Unlock()
 		return nil, context.Canceled
 	}
-	if isRunningStatus(s.Status) {
+	if s.Running || isRunningStatus(s.Status) {
 		s.Unlock()
 		return nil, fmt.Errorf("%w: cannot fork while a turn is running", ErrSessionRunning)
 	}
@@ -100,6 +105,7 @@ func (s *Session) Fork(ctx context.Context, title string) (*Session, error) {
 		WaitGroup:       s.wg,
 		MCPCaller:       s.mcpCaller,
 		OnUpdate:        s.onUpdate,
+		OnDiscard:       s.onDiscard,
 	}
 	sourceID := s.ID
 	sourceTimeline := s.Timeline

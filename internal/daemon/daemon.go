@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
@@ -104,22 +105,26 @@ type Daemon struct {
 	srv        *server.Server
 	httpServer *http.Server
 
-	mu           sync.Mutex
-	lockFile     *os.File
-	listener     net.Listener
-	started      bool
-	closed       bool
-	wsMu         sync.Mutex
-	workspaces   map[string]*workspaceRuntime
-	dirToRoot    map[string]string
-	db           *sql.DB
-	metricsStore *metrics.Store
-	usage        *metrics.Live
-	shutdownCh   chan struct{}
-	shutdownOnce sync.Once
-	closeOnce    sync.Once
-	closeErr     error
-	serveErrCh   chan error
+	mu             sync.Mutex
+	lockFile       *os.File
+	listener       net.Listener
+	started        bool
+	closed         atomic.Bool
+	openCtx        context.Context
+	openCancel     context.CancelFunc
+	wsMu           sync.Mutex
+	workspaces     map[string]*workspaceRuntime
+	opening        map[string]*workspaceOpen
+	roots          map[string]*workspaceRoot
+	workspaceNames atomic.Pointer[[]string]
+	db             *sql.DB
+	metricsStore   *metrics.Store
+	usage          *metrics.Live
+	shutdownCh     chan struct{}
+	shutdownOnce   sync.Once
+	closeOnce      sync.Once
+	closeErr       error
+	serveErrCh     chan error
 
 	providerInstallMu sync.Mutex
 	auth              *auth.Manager
@@ -167,6 +172,8 @@ func New(cfg Config) (*Daemon, error) {
 		b.Publish(api.SessionStreamTopic(sessionID), api.UsageUpdatedEvent{SessionID: sessionID, Usage: u})
 	})
 
+	openCtx, openCancel := context.WithCancel(context.Background())
+
 	d := &Daemon{
 		db:           db,
 		metricsStore: store,
@@ -176,11 +183,15 @@ func New(cfg Config) (*Daemon, error) {
 		startedAt:    time.Now().UTC(),
 		broker:       b,
 		srv:          server.NewServer(serverLogger),
+		openCtx:      openCtx,
+		openCancel:   openCancel,
 		workspaces:   make(map[string]*workspaceRuntime),
-		dirToRoot:    make(map[string]string),
+		opening:      make(map[string]*workspaceOpen),
+		roots:        make(map[string]*workspaceRoot),
 		shutdownCh:   make(chan struct{}),
 		serveErrCh:   make(chan error, 1),
 	}
+	d.publishWorkspacesLocked()
 	d.auth = auth.NewManager(auth.ManagerConfig{
 		OnAuthenticated: d.reloadAllWorkspaces,
 	})
@@ -277,7 +288,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if d.closed {
+	if d.closed.Load() {
 		return errors.New("daemon: server is closed")
 	}
 	if d.started {
@@ -343,7 +354,8 @@ func (d *Daemon) Close(ctx context.Context) error {
 	d.signalShutdown()
 	d.closeOnce.Do(func() {
 		d.mu.Lock()
-		d.closed = true
+		d.closed.Store(true)
+		d.openCancel()
 
 		ln := d.listener
 		lockFile := d.lockFile

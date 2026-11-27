@@ -839,6 +839,42 @@ func TestInvokeSubagentWorktree(t *testing.T) {
 	}
 	defer closeTestResource(t, parent)
 
+	t.Run("failed registration", func(t *testing.T) {
+		store, err := NewStore(ctx, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var treeDir, root, id string
+		parent.onUpdate = func(_ context.Context, child *Session) error {
+			treeDir, root, id = child.WorkDir, child.Root, child.ID
+			if err := child.CheckpointTo(ctx, store); err != nil {
+				return err
+			}
+			return errors.New("registration failed")
+		}
+		defer func() { parent.onUpdate = nil }()
+		_, err = parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+			Agent:     "explore",
+			Title:     "failed",
+			Prompt:    "fail",
+			Workspace: "worktree",
+		})
+		if err == nil || treeDir == "" || len(parent.Children()) != 0 {
+			t.Fatalf("unexpected registration result: %v", err)
+		}
+		if _, err := store.Get(ctx, id); !errors.Is(err, ErrSessionNotFound) {
+			t.Fatalf("persisted child after rollback: %v", err)
+		}
+		for _, path := range []string{treeDir, root} {
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("rollback left %q: %v", path, err)
+			}
+		}
+		out, err := exec.CommandContext(ctx, "git", "-C", wsDir, "worktree", "list", "--porcelain").Output()
+		if err != nil || strings.Contains(string(out), treeDir) {
+			t.Fatalf("git registry after rollback: %s, %v", out, err)
+		}
+	})
 	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
 		Agent:     "explore",
 		Title:     "Worktree Task",

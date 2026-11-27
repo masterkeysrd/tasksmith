@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
 
 func TestSessionForkCopiesConversationAndState(t *testing.T) {
@@ -408,5 +409,55 @@ func TestStoreLatestScopesByWorkDir(t *testing.T) {
 	}
 	if got, err := store.Latest(ctx, LatestFilter{WorkDir: rootDir, IncludeEmptyWorkDir: true}); err != nil || got.ID != legacyRoot.ID {
 		t.Errorf("Latest(rootDir legacy fallback) = (%v, %v), want %q", got, err, legacyRoot.ID)
+	}
+}
+
+type pausedTimeline struct {
+	timeline.Timeline
+	entered, release chan struct{}
+}
+
+func (tl pausedTimeline) List(ctx context.Context) ([]timeline.Entry, error) {
+	close(tl.entered)
+	<-tl.release
+	return tl.Timeline.List(ctx)
+}
+
+func TestForkBlocksSendDuringTimelineCapture(t *testing.T) {
+	_, _, _, _, mgr := setupTestEnv(t, nil)
+	defer closeTestResource(t, mgr)
+	s, _, err := mgr.Create(t.Context(), api.CreateSessionRequest{Title: "source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tl := pausedTimeline{s.Timeline, make(chan struct{}), make(chan struct{})}
+	s.Timeline = tl
+	forked := make(chan error, 1)
+	go func() {
+		child, err := s.Fork(t.Context(), "branch")
+		if err == nil {
+			err = child.Close()
+		}
+		forked <- err
+	}()
+	<-tl.entered
+	sent := make(chan error, 1)
+	go func() { sent <- s.Send(t.Context(), api.SendRequest{Content: "after snapshot"}) }()
+	select {
+	case err := <-sent:
+		t.Errorf("send admitted during fork: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(tl.release)
+	if err := <-forked; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-sent:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("send failed to resume")
 	}
 }

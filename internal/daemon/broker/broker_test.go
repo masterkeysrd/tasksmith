@@ -469,3 +469,26 @@ func TestWithTopicBufferSizeAndDeleteTopic(t *testing.T) {
 		t.Fatalf("SubscribeSince after DeleteTopic error: %v", err)
 	}
 }
+
+func TestResumeMultiTopicReplay(t *testing.T) {
+	b := New()
+	b.Publish("a", testEvent{"cursor"})
+	cursor := b.lastID
+	for i, topic := range []string{"a", "b", "a", "b"} {
+		b.Publish(topic, testEvent{fmt.Sprint(i)})
+	}
+	for i := 0; i < 4; i += 2 {
+		sub := registered(t, b, "client")
+		if _, err := sub.SubscribeSince(cursor, "a", "b"); err != nil {
+			t.Fatal(err)
+		}
+		for j := range 2 {
+			msg := receive(t, sub)
+			if msg.Event.EventType() != fmt.Sprint(i+j) {
+				t.Fatalf("unexpected replay message: %+v", msg)
+			}
+			cursor = msg.ID
+		}
+		b.Remove(sub)
+	}
+}

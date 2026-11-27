@@ -2,6 +2,7 @@ package metrics_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -485,4 +486,100 @@ func TestAttrPathsAreBoundInQueryOrder(t *testing.T) {
 	if err != nil || strings.Contains(query, "$.") || !reflect.DeepEqual(args, want) {
 		t.Fatalf("query=%s args=%v err=%v", query, args, err)
 	}
+}
+
+func TestFlushReportsTransactionFailure(t *testing.T) {
+	s := newStore(t)
+
+	if _, err := s.DB().ExecContext(t.Context(), "DROP TABLE metrics_measurements"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(metrics.Entry{ID: "lost"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Flush(t.Context()); err == nil {
+		t.Fatal("flush acknowledged a failed transaction")
+	}
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatalf("empty flush after error: %v", err)
+	}
+}
+
+func TestFlushPreservesErrorAcrossCanceledAndConcurrentFlushers(t *testing.T) {
+	t.Run("canceled flusher does not swallow error", func(t *testing.T) {
+		s := newStore(t)
+
+		if _, err := s.DB().ExecContext(t.Context(), "DROP TABLE metrics_measurements"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Write(metrics.Entry{ID: "lost-canceled"}); err != nil {
+			t.Fatal(err)
+		}
+
+		canceledCtx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := s.Flush(canceledCtx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled flush = %v, want context.Canceled", err)
+		}
+
+		if err := s.Flush(t.Context()); err == nil {
+			t.Fatal("live flush missed error after canceled flusher")
+		}
+	})
+
+	t.Run("concurrent flushers behind failing write both see error", func(t *testing.T) {
+		s := newStore(t)
+
+		// Hold a SQLite write lock so the background writer blocks mid-insert
+		// while we queue a failing entry followed by two concurrent flushers.
+		tx, err := s.DB().BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(t.Context(), "DROP TABLE metrics_measurements"); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+
+		// Queue a blocker entry first so s.run() starts inserting it and blocks
+		// on tx's write lock before we enqueue lost-shared + both flushers.
+		if err := s.Write(metrics.Entry{
+			ID: "blocker",
+			Record: metrics.Record{
+				Measurements: []metrics.Measurement{{Metric: "m", Value: 1}},
+			},
+		}); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		time.Sleep(25 * time.Millisecond)
+
+		if err := s.Write(metrics.Entry{
+			ID: "lost-shared",
+			Record: metrics.Record{
+				Measurements: []metrics.Measurement{{Metric: "m", Value: 1}},
+			},
+		}); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+
+		errCh1 := make(chan error, 1)
+		errCh2 := make(chan error, 1)
+		go func() { errCh1 <- s.Flush(t.Context()) }()
+		go func() { errCh2 <- s.Flush(t.Context()) }()
+
+		// Give both goroutines a moment to enqueue their flush requests before releasing SQLite.
+		time.Sleep(25 * time.Millisecond)
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+
+		err1 := <-errCh1
+		err2 := <-errCh2
+		if err1 == nil || err2 == nil {
+			t.Fatalf("concurrent flushers got err1=%v err2=%v, want both non-nil", err1, err2)
+		}
+	})
 }

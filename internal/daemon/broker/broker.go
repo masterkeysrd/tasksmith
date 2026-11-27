@@ -364,22 +364,28 @@ func (b *Broker) subscribe(sub *Subscriber, since string, topics []string) ([]st
 		}
 	}
 
+	var replay []Message
 	for _, topic := range added {
 		if since != "" && b.rings[topic] != nil {
-			for _, msg := range b.rings[topic].messagesSince(since) {
-				select {
-				case sub.ch <- msg:
-				default:
-					for t := range sub.topics {
-						b.dropLocked(t, sub)
-					}
-					sub.topics = make(map[string]struct{})
-					delete(b.subscribers, sub.id)
-					sub.closeLocked(ErrOverflow)
-					return nil, ErrOverflow
-				}
-			}
+			replay = append(replay, b.rings[topic].messagesSince(since)...)
 		}
+	}
+	slices.SortFunc(replay, func(a, b Message) int { return strings.Compare(a.ID, b.ID) })
+	for _, msg := range replay {
+		select {
+		case sub.ch <- msg:
+		default:
+			for t := range sub.topics {
+				b.dropLocked(t, sub)
+			}
+			clear(sub.topics)
+			delete(b.subscribers, sub.id)
+			sub.closeLocked(ErrOverflow)
+			return nil, ErrOverflow
+		}
+	}
+
+	for _, topic := range added {
 		sub.topics[topic] = struct{}{}
 		index := b.topics[topic]
 		if index == nil {

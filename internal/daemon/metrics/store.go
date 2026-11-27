@@ -58,9 +58,14 @@ CREATE TABLE IF NOT EXISTS metrics_measurements (
 CREATE INDEX IF NOT EXISTS metrics_measurements_metric ON metrics_measurements (metric);
 `}
 
+type flushReq struct {
+	ack  chan error
+	done <-chan struct{}
+}
+
 type item struct {
 	entry Entry
-	flush chan struct{}
+	flush *flushReq
 }
 
 // Store is the asynchronous SQLite [Recorder]. Records are queued in memory
@@ -122,22 +127,25 @@ func (s *Store) Write(e Entry) error {
 
 // Flush blocks until every record queued before the call is written.
 func (s *Store) Flush(ctx context.Context) error {
-	ack := make(chan struct{})
+	req := &flushReq{
+		ack:  make(chan error),
+		done: ctx.Done(),
+	}
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
 		return ErrClosed
 	}
 	select {
-	case s.queue <- item{flush: ack}:
+	case s.queue <- item{flush: req}:
 		s.mu.RUnlock()
 	case <-ctx.Done():
 		s.mu.RUnlock()
 		return ctx.Err()
 	}
 	select {
-	case <-ack:
-		return nil
+	case err := <-req.ack:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -159,17 +167,31 @@ func (s *Store) Close() error {
 
 func (s *Store) run() {
 	defer close(s.done)
-	for first := range s.queue {
-		batch := []Entry{}
-		var acks []chan struct{}
-		collect := func(it item) {
-			if it.flush != nil {
-				acks = append(acks, it.flush)
+
+	var pendingErr error
+	var carry *item
+
+	for {
+		var first item
+		if carry != nil {
+			first = *carry
+			carry = nil
+		} else {
+			var ok bool
+			first, ok = <-s.queue
+			if !ok {
 				return
 			}
-			batch = append(batch, it.entry)
 		}
-		collect(first)
+
+		var batch []Entry
+		var flushers []*flushReq
+		if first.flush != nil {
+			flushers = append(flushers, first.flush)
+		} else {
+			batch = append(batch, first.entry)
+		}
+
 	drain:
 		for len(batch) < batchSize {
 			select {
@@ -177,16 +199,39 @@ func (s *Store) run() {
 				if !ok {
 					break drain
 				}
-				collect(it)
+				if it.flush != nil {
+					flushers = append(flushers, it.flush)
+					continue
+				}
+				if len(flushers) > 0 {
+					carry = &it
+					break drain
+				}
+				batch = append(batch, it.entry)
 			default:
 				break drain
 			}
 		}
+
 		if err := s.insert(batch); err != nil {
+			if pendingErr == nil {
+				pendingErr = err
+			}
 			s.logger.Warn("metrics write failed", log.String("error", err.Error()), log.Int("records", len(batch)))
 		}
-		for _, ack := range acks {
-			close(ack)
+
+		if len(flushers) > 0 {
+			delivered := false
+			for _, f := range flushers {
+				select {
+				case f.ack <- pendingErr:
+					delivered = true
+				case <-f.done:
+				}
+			}
+			if delivered {
+				pendingErr = nil
+			}
 		}
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -381,6 +382,17 @@ func (r *workspaceRuntime) getFileIndex() (*std.FileIndex, error) {
 	return idx, nil
 }
 
+type workspaceOpen struct {
+	done chan struct{}
+	rt   *workspaceRuntime
+	err  error
+}
+
+type workspaceRoot struct {
+	mu    sync.Mutex
+	owner *workspaceRuntime
+}
+
 func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, error) {
 	cleanDir, err := fsutils.CleanPath(dir)
 	if err != nil {
@@ -391,7 +403,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 	}
 
 	d.wsMu.Lock()
-	if d.closed {
+	if d.closed.Load() {
 		d.wsMu.Unlock()
 		return nil, errors.New("daemon: server is closed")
 	}
@@ -400,33 +412,71 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		return rt, nil
 	}
 
+	op := d.opening[cleanDir]
+	if op == nil {
+		op = &workspaceOpen{done: make(chan struct{})}
+		d.opening[cleanDir] = op
+		go func() {
+			rt, openErr := d.openWorkspace(d.openCtx, cleanDir)
+			d.wsMu.Lock()
+			closed := d.closed.Load()
+			if openErr == nil {
+				d.workspaces[cleanDir] = rt
+				if !closed {
+					d.publishWorkspacesLocked()
+				}
+			}
+			if closed {
+				rt = nil
+				openErr = errors.New("daemon: server is closed")
+			}
+			op.rt, op.err = rt, openErr
+			delete(d.opening, cleanDir)
+			close(op.done)
+			d.wsMu.Unlock()
+		}()
+	}
+	d.wsMu.Unlock()
+
+	select {
+	case <-op.done:
+		return op.rt, op.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (d *Daemon) openWorkspace(ctx context.Context, cleanDir string) (*workspaceRuntime, error) {
 	ws, err := workspace.Open(ctx, cleanDir, workspace.WithBuiltinFS(builtin.FS()), workspace.WithWorkspaceTrust())
 	if err != nil {
-		d.wsMu.Unlock()
 		return nil, fmt.Errorf("daemon: open workspace %q: %w", cleanDir, err)
 	}
 	rootDir := ws.RootDir()
-	d.dirToRoot[cleanDir] = rootDir
+	d.wsMu.Lock()
+	root := d.roots[rootDir]
+	if root == nil {
+		root = &workspaceRoot{}
+		d.roots[rootDir] = root
+	}
+	d.wsMu.Unlock()
+	root.mu.Lock()
+	defer root.mu.Unlock()
 
 	var db *sql.DB
 	var permMgr permissions.Manager
 	var sandboxMgr sandboxcfg.Manager
 	owner := &workspaceRuntime{catalog: &catalogSlot{}, gw: &gatewaySlot{}}
 	reloadMu := &sync.RWMutex{}
-	for _, existing := range d.workspaces {
-		if existing.ws.RootDir() == rootDir {
-			db = existing.db
-			permMgr = existing.perms
-			owner = existing.sessionOwner
-			reloadMu = existing.reloadMu
-			break
-		}
+	if existing := root.owner; existing != nil {
+		db = existing.db
+		permMgr = existing.perms
+		owner = existing
+		reloadMu = existing.reloadMu
 	}
 
 	gwCfg := buildGatewayConfig(ws, recorderOf(d.usage), d.auth)
 	gw, err := d.cfg.GatewayPool.Acquire(ctx, gwCfg)
 	if err != nil {
-		d.wsMu.Unlock()
 		return nil, fmt.Errorf("daemon: acquire gateway for %q: %w", cleanDir, err)
 	}
 	gwSlot := owner.gw
@@ -437,7 +487,6 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 
 	catalog, err := models.BuildContext(ctx, ws.Catalog(), gwSlot.get())
 	if err != nil {
-		d.wsMu.Unlock()
 		return nil, fmt.Errorf("daemon: build model catalog for %q: %w", cleanDir, err)
 	}
 
@@ -445,37 +494,31 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 	if owner.sessionStore == nil {
 		wsDataDir, err := xdg.WorkspaceDir(rootDir)
 		if err != nil {
-			d.wsMu.Unlock()
 			return nil, fmt.Errorf("daemon: resolve workspace data dir for %q: %w", rootDir, err)
 		}
 
 		dbPath := filepath.Join(wsDataDir, "tasksmith.db")
 		db, err = sqlite.Open(ctx, dbPath)
 		if err != nil {
-			d.wsMu.Unlock()
 			return nil, fmt.Errorf("daemon: open sqlite db %q: %w", dbPath, err)
 		}
 
 		if err := session.Migrate(ctx, db); err != nil {
 			_ = db.Close()
-			d.wsMu.Unlock()
 			return nil, fmt.Errorf("daemon: migrate session schema for %q: %w", rootDir, err)
 		}
 		if err := timeline.Migrate(ctx, db); err != nil {
 			_ = db.Close()
-			d.wsMu.Unlock()
 			return nil, fmt.Errorf("daemon: migrate timeline schema for %q: %w", rootDir, err)
 		}
 		if err := journal.Migrate(ctx, db); err != nil {
 			_ = db.Close()
-			d.wsMu.Unlock()
 			return nil, fmt.Errorf("daemon: migrate journal schema for %q: %w", rootDir, err)
 		}
 
 		permMgr, err = permissions.New(permissions.Config{Workspace: ws})
 		if err != nil {
 			_ = db.Close()
-			d.wsMu.Unlock()
 			return nil, fmt.Errorf("daemon: initialize permissions manager for %q: %w", rootDir, err)
 		}
 
@@ -485,14 +528,12 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		})
 		if err != nil {
 			_ = db.Close()
-			d.wsMu.Unlock()
 			return nil, fmt.Errorf("daemon: initialize sandbox settings manager for %q: %w", rootDir, err)
 		}
 
 		sessionStore, err := session.NewStore(ctx, db)
 		if err != nil {
 			_ = db.Close()
-			d.wsMu.Unlock()
 			return nil, fmt.Errorf("daemon: initialize session store for %q: %w", rootDir, err)
 		}
 
@@ -534,8 +575,8 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 			},
 		})
 		if err != nil {
+			bgCancel()
 			_ = db.Close()
-			d.wsMu.Unlock()
 			return nil, fmt.Errorf("daemon: initialize MCP manager for %q: %w", rootDir, err)
 		}
 		owner.mcpManager = mgr
@@ -597,8 +638,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 			)
 		}
 	}
-	d.workspaces[cleanDir] = rt
-	d.wsMu.Unlock()
+	root.owner = owner
 
 	if justStartedMCP && owner.mcpManager != nil {
 		owner.mcpManager.Sync(context.WithoutCancel(ctx))
@@ -609,9 +649,10 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 
 // Workspaces returns sorted canonical root directories of all open workspace runtimes.
 func (d *Daemon) Workspaces() []string {
-	d.wsMu.Lock()
-	defer d.wsMu.Unlock()
+	return slices.Clone(*d.workspaceNames.Load())
+}
 
+func (d *Daemon) publishWorkspacesLocked() {
 	seen := make(map[string]struct{})
 	roots := make([]string, 0, len(d.workspaces))
 	for _, rt := range d.workspaces {
@@ -622,7 +663,7 @@ func (d *Daemon) Workspaces() []string {
 		}
 	}
 	sort.Strings(roots)
-	return roots
+	d.workspaceNames.Store(&roots)
 }
 
 func (d *Daemon) reloadAllWorkspaces(ctx context.Context) {
@@ -658,12 +699,21 @@ func (d *Daemon) reloadWorkspacesUnder(ctx context.Context, dir string) error {
 
 func (d *Daemon) closeWorkspaces() error {
 	d.wsMu.Lock()
+	for len(d.opening) > 0 {
+		ops := slices.Collect(maps.Values(d.opening))
+		d.wsMu.Unlock()
+		for _, op := range ops {
+			<-op.done
+		}
+		d.wsMu.Lock()
+	}
 	runtimes := make([]*workspaceRuntime, 0, len(d.workspaces))
 	for _, rt := range d.workspaces {
 		runtimes = append(runtimes, rt)
 	}
 	clear(d.workspaces)
-	clear(d.dirToRoot)
+	clear(d.roots)
+	d.publishWorkspacesLocked()
 	d.wsMu.Unlock()
 
 	seen := make(map[*workspaceRuntime]struct{})

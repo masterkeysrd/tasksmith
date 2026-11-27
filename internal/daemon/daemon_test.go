@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -4514,5 +4515,323 @@ func checkClose(t *testing.T, closer io.Closer) {
 	t.Helper()
 	if err := closer.Close(); err != nil {
 		t.Errorf("close %T: %v", closer, err)
+	}
+}
+
+type pausedGatewayPool struct {
+	*fakeGatewayPool
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (p *pausedGatewayPool) Acquire(ctx context.Context, cfg gateway.Config) (gateway.Gateway, error) {
+	if p.calls.Add(1) == 1 {
+		close(p.entered)
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return p.fakeGatewayPool.Acquire(ctx, cfg)
+}
+
+func TestWorkspaceOpenLifecycle(t *testing.T) {
+	for _, shutdown := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shutdown=%t", shutdown), func(t *testing.T) {
+			testutils.SetupXDG(t, "open-lifecycle")
+
+			pool := &pausedGatewayPool{
+				fakeGatewayPool: newFakeGatewayPool(nil),
+				entered:         make(chan struct{}),
+				release:         make(chan struct{}),
+			}
+			d, err := New(Config{
+				SocketPath:            "brain.sock",
+				LockPath:              "brain.lock",
+				GatewayPool:           pool,
+				Logger:                log.Default(),
+				DisableMCPAutoConnect: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			release := sync.OnceFunc(func() { close(pool.release) })
+			defer func() {
+				release()
+				_ = d.Close(t.Context())
+			}()
+
+			type result struct {
+				rt  *workspaceRuntime
+				err error
+			}
+
+			dir := t.TempDir()
+			leaderCtx, cancelLeader := context.WithCancel(t.Context())
+			defer cancelLeader()
+
+			leaderRes := make(chan result, 1)
+			go func() {
+				rt, openErr := d.workspace(leaderCtx, dir)
+				leaderRes <- result{rt: rt, err: openErr}
+			}()
+
+			<-pool.entered
+
+			results := make(chan result, 8)
+			for range cap(results) {
+				go func() {
+					rt, openErr := d.workspace(t.Context(), dir)
+					results <- result{rt: rt, err: openErr}
+				}()
+			}
+
+			// Canceling the leader request must not abort the shared open for healthy waiters.
+			cancelLeader()
+			select {
+			case got := <-leaderRes:
+				if !errors.Is(got.err, context.Canceled) {
+					t.Fatalf("canceled leader: %v", got.err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("leader did not unblock on cancellation")
+			}
+
+			health := make(chan []string, 1)
+			go func() { health <- d.Workspaces() }()
+			select {
+			case paths := <-health:
+				if len(paths) != 0 {
+					t.Fatal(paths)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("health blocked on open")
+			}
+
+			other := t.TempDir()
+			independent := make(chan error, 1)
+			go func() {
+				_, openErr := d.workspace(t.Context(), other)
+				independent <- openErr
+			}()
+			select {
+			case err := <-independent:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("unrelated workspace waited on slow open")
+			}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if _, err := d.workspace(ctx, dir); !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled waiter: %v", err)
+			}
+
+			closed := make(chan error, 1)
+			if shutdown {
+				// Daemon.Close cancels openCtx so shutdown does not hang waiting for release().
+				go func() { closed <- d.Close(t.Context()) }()
+			} else {
+				release()
+			}
+
+			var first *workspaceRuntime
+			for range cap(results) {
+				got := <-results
+				if shutdown {
+					if got.err == nil {
+						t.Fatal("open succeeded during close")
+					}
+					continue
+				}
+				if got.err != nil {
+					t.Fatal(got.err)
+				}
+				if first != nil && first != got.rt {
+					t.Fatal("distinct runtimes for one path")
+				}
+				first = got.rt
+			}
+
+			if shutdown {
+				select {
+				case err := <-closed:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("Close hung on in-flight workspace open")
+				}
+				if len(d.Workspaces()) != 0 {
+					t.Fatal("workspace survived close")
+				}
+			}
+
+			if pool.calls.Load() != 2 {
+				t.Fatalf("gateway acquired %d times", pool.calls.Load())
+			}
+		})
+	}
+}
+
+func TestDeleteSessionCancelsTitleGenerationWithoutDeadlock(t *testing.T) {
+	testutils.SetupXDG(t, "delete-title-deadlock")
+
+	titleStarted := make(chan struct{})
+	titleCanceled := make(chan struct{})
+	var titleOnce sync.Once
+
+	provider := &fakeProvider{
+		chunkHandler: func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			for _, msg := range req.Messages {
+				if msg.Role() != message.RoleSystem {
+					continue
+				}
+				for _, b := range msg.GetContent() {
+					if tb, ok := b.(*message.TextBlock); ok && strings.Contains(strings.ToLower(tb.Text), "title") {
+						titleOnce.Do(func() { close(titleStarted) })
+						<-ctx.Done()
+						close(titleCanceled)
+						return nil, ctx.Err()
+					}
+				}
+			}
+			return func(yield func(message.AssistantChunk, error) bool) {
+				yield(message.AssistantChunk{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content:   []message.Block{&message.TextBlock{Text: "ok"}},
+					Done:      true,
+				}, nil)
+			}, nil
+		},
+	}
+
+	d, err := New(Config{
+		SocketPath:            "brain.sock",
+		LockPath:              "brain.lock",
+		GatewayPool:           newFakeGatewayPool(provider),
+		Logger:                log.Default(),
+		DisableMCPAutoConnect: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close(t.Context()) }()
+
+	dir := t.TempDir()
+	if err := workspace.TrustFolder(dir, api.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _, err := d.CreateSession(t.Context(), dir, api.CreateSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.Send(t.Context(), dir, s.ID, api.SendRequest{Content: "hello world"}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-titleStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("title generation did not start")
+	}
+
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- d.ReloadWorkspace(t.Context(), dir)
+	}()
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- d.DeleteSession(t.Context(), dir, s.ID)
+	}()
+
+	select {
+	case <-titleCanceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("DeleteSession did not cancel in-flight title generation")
+	}
+
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("DeleteSession: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("DeleteSession deadlocked")
+	}
+
+	select {
+	case err := <-reloadDone:
+		if err != nil {
+			t.Fatalf("ReloadWorkspace: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ReloadWorkspace deadlocked")
+	}
+}
+
+func TestUsageWhileRenamingSession(t *testing.T) {
+	testutils.SetupXDG(t, "usage-rename")
+
+	d, err := New(Config{
+		SocketPath:            "brain.sock",
+		LockPath:              "brain.lock",
+		GatewayPool:           newFakeGatewayPool(nil),
+		Logger:                log.Default(),
+		DisableMCPAutoConnect: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close(t.Context()) }()
+
+	dir := t.TempDir()
+	if err := workspace.TrustFolder(dir, api.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _, err := d.CreateSession(t.Context(), dir, api.CreateSessionRequest{Title: "initial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		for i := range 30 {
+			req := api.UpdateSessionRequest{Title: fmt.Sprint(i)}
+			if _, err := d.UpdateSession(t.Context(), dir, s.ID, req); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	for range 30 {
+		if _, err := d.Usage(t.Context(), dir, api.UsageRequest{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

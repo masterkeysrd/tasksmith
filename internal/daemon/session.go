@@ -114,6 +114,7 @@ func (r *workspaceRuntime) loadOrCacheSession(ctx context.Context, dbSess *sessi
 		ReloadLock:      owner.reloadMu,
 		Context:         owner.bgCtx,
 		WaitGroup:       &owner.wg,
+		OnDiscard:       owner.discardSession,
 		// Restored sessions need the caller too, or a session resumed after a
 		// daemon restart would silently lose every MCP tool.
 		MCPCaller: sessionRT.MCPCaller,
@@ -206,6 +207,7 @@ func (r *workspaceRuntime) CreateSession(ctx context.Context, req api.CreateSess
 		ReloadLock:      owner.reloadMu,
 		Context:         owner.bgCtx,
 		WaitGroup:       &owner.wg,
+		OnDiscard:       owner.discardSession,
 		MCPCaller:       r.MCPCaller,
 		OnUpdate:        owner.persistSession,
 	}
@@ -228,6 +230,17 @@ func (r *workspaceRuntime) CreateSession(ctx context.Context, req api.CreateSess
 	})
 
 	return newSession, true, nil
+}
+
+func (r *workspaceRuntime) discardSession(ctx context.Context, id string) error {
+	r.createMu.Lock()
+	defer r.createMu.Unlock()
+	r.sessions.Delete(id)
+	err := r.sessionStore.Delete(ctx, id)
+	if errors.Is(err, session.ErrSessionNotFound) {
+		return nil
+	}
+	return err
 }
 
 // persistSession checkpoints a live session unless teardown has started.
@@ -400,13 +413,6 @@ func (r *workspaceRuntime) ForkSession(ctx context.Context, id string, req api.F
 // DeleteSession terminates, cancels, and purges a session and its data from SQLite and disk.
 func (r *workspaceRuntime) DeleteSession(ctx context.Context, id string) error {
 	owner := r.sessionOwnerOrSelf()
-	owner.reloadMu.RLock()
-	defer owner.reloadMu.RUnlock()
-	return r.deleteSessionLocked(ctx, id)
-}
-
-func (r *workspaceRuntime) deleteSessionLocked(ctx context.Context, id string) error {
-	owner := r.sessionOwnerOrSelf()
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return session.ErrEmptySessionID
@@ -415,19 +421,21 @@ func (r *workspaceRuntime) deleteSessionLocked(ctx context.Context, id string) e
 		return err
 	}
 
+	owner.reloadMu.RLock()
 	sess, _ := r.getLiveSession(ctx, id)
+	owner.reloadMu.RUnlock()
 
 	if sess != nil {
 		if parent := sess.Parent(); parent != nil {
 			parent.RemoveChild(sess.ID)
 		}
+		_ = sess.Cancel(ctx)
+		_ = sess.Close()
 		for _, child := range sess.Children() {
-			if err := r.deleteSessionLocked(ctx, child.ID); err != nil {
+			if err := r.DeleteSession(ctx, child.ID); err != nil {
 				return err
 			}
 		}
-		_ = sess.Cancel(ctx)
-		_ = sess.Close()
 		if sess.Timeline != nil {
 			_ = sess.Timeline.Delete(ctx)
 		}

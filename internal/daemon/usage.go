@@ -87,7 +87,7 @@ func (d *Daemon) fillSessionTitles(ctx context.Context, rawWS string, summary *a
 	}
 	titles := make(map[string]string, len(sessions))
 	for _, s := range sessions {
-		titles[s.ID] = s.Title
+		titles[s.ID] = s.GetTitle()
 	}
 	for i := range summary.TopSessions {
 		summary.TopSessions[i].Title = titles[summary.TopSessions[i].SessionID]

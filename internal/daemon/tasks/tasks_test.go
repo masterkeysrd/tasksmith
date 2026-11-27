@@ -549,3 +549,46 @@ func checkClose(t *testing.T, closer io.Closer) {
 		t.Errorf("close %T: %v", closer, err)
 	}
 }
+
+func TestCloseWaitsForTaskCallback(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+
+	mgr := New(Config{
+		OnUpdate: func(task api.Task) {
+			if task.Status == api.TaskStatusCanceled {
+				close(entered)
+				<-release
+			}
+		},
+	})
+
+	task := &Task{
+		Fn: func(ctx context.Context, _ io.Writer, _ io.Reader) (int, error) {
+			<-ctx.Done()
+			return -1, ctx.Err()
+		},
+	}
+	if err := mgr.Add(task); err != nil {
+		t.Fatal(err)
+	}
+	if err := task.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- mgr.Close() }()
+
+	<-entered
+	select {
+	case err := <-done:
+		close(release)
+		t.Fatalf("close returned before callback finished: %v", err)
+	default:
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

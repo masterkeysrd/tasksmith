@@ -72,6 +72,7 @@ type Config struct {
 	ReloadLock      *sync.RWMutex
 	Context         context.Context
 	WaitGroup       *sync.WaitGroup
+	OnDiscard       func(context.Context, string) error
 	OnUpdate        func(ctx context.Context, s *Session) error
 	// MCPCaller resolves the MCP runtime for this session's workspace, or nil when
 	// no MCP manager is attached. It is a function rather than a value because a
@@ -117,6 +118,9 @@ func (c *Config) applyDefaults() error {
 	if c.Context == nil {
 		c.Context = context.Background()
 	}
+	if c.OnDiscard == nil {
+		c.OnDiscard = (&sqliteStore{db: c.DB}).Delete
+	}
 	if c.WaitGroup == nil {
 		c.WaitGroup = &sync.WaitGroup{}
 	}
@@ -140,7 +144,9 @@ func initSession(ctx context.Context, sess *Session, cfg Config) error {
 	sess.publisher = cfg.Publisher
 	sess.logger = cfg.Logger
 	sess.bgCtx = cfg.Context
+	sess.lifeCtx, sess.lifeCancel = context.WithCancel(cfg.Context)
 	sess.wg = cfg.WaitGroup
+	sess.onDiscard = cfg.OnDiscard
 	sess.onUpdate = cfg.OnUpdate
 	sess.mcpCaller = cfg.MCPCaller
 	sess.db = cfg.DB
@@ -153,7 +159,10 @@ func initSession(ctx context.Context, sess *Session, cfg Config) error {
 		sess.WorkDir = cmp.Or(cfg.Workspace.CWD(), cfg.Workspace.RootDir())
 	}
 	sess.Diagnostics = sess.modelDiagnostics(sess.Config)
-	return sess.initSubsystems(ctx, cfg.DB)
+	if err := sess.initSubsystems(ctx, cfg.DB); err != nil {
+		return errors.Join(err, sess.Close())
+	}
+	return nil
 }
 
 // New constructs and initializes a new [Session].
@@ -333,6 +342,9 @@ type Session struct {
 	PermManager permissions.SessionManager `json:"-"`
 	permRoot    permissions.Manager        `json:"-"`
 
+	forkMu        sync.RWMutex
+	localWG       sync.WaitGroup
+	turnOverride  string
 	reconfigureMu sync.Mutex
 	sandboxCfg    sandboxcfg.Manager `json:"-"`
 
@@ -383,10 +395,13 @@ type Session struct {
 	publisher    Publisher              `json:"-"`
 	logger       log.Interface          `json:"-"`
 	bgCtx        context.Context        `json:"-"`
+	lifeCtx      context.Context        `json:"-"`
+	lifeCancel   context.CancelFunc     `json:"-"`
 	wg           *sync.WaitGroup        `json:"-"`
 
 	interactionMu sync.Mutex
 	modeUpdateMu  sync.Mutex
+	onDiscard     func(context.Context, string) error
 	onUpdate      func(ctx context.Context, s *Session) error
 }
 
@@ -451,6 +466,12 @@ func (s *Session) Clone() *Session {
 	return cp
 }
 
+func (s *Session) GetTitle() string {
+	s.Lock()
+	defer s.Unlock()
+	return s.Title
+}
+
 // IsClosing reports whether Close has been called on the session.
 func (s *Session) IsClosing() bool {
 	s.Lock()
@@ -510,7 +531,8 @@ func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
 	if s.catalog == nil {
 		return models.Model{}, nil, false
 	}
-	modelID := models.ID(s.Config.Model)
+	config := s.effectiveConfig()
+	modelID := models.ID(config.Model)
 	if !modelID.Valid() {
 		return models.Model{}, nil, false
 	}
@@ -519,10 +541,10 @@ func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
 		return models.Model{}, nil, false
 	}
 	var agentThinking *api.ThinkingSetting
-	if agent, found := s.workspace.Catalog().GetAgent(s.Config.Agent); found {
+	if agent, found := s.workspace.Catalog().GetAgent(config.Agent); found {
 		agentThinking = agent.Thinking
 	}
-	return m, m.EffectiveThinking(s.Config.Thinking, agentThinking), true
+	return m, m.EffectiveThinking(config.Thinking, agentThinking), true
 }
 
 func isReadOnlyPolicy(p *warp.Policies) bool {
@@ -1146,28 +1168,34 @@ func (s *Session) Workspace() *workspace.Workspace {
 
 // Close closes session-scoped runtime resources like the Sandbox.
 func (s *Session) Close() error {
+	s.Lock()
+	s.closing = true
+	cancel := s.cancel
+	lifeCancel := s.lifeCancel
+	s.lifeCancel = nil
+	taskStore := s.Tasks
+	s.Unlock()
+	if lifeCancel != nil {
+		lifeCancel()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	s.cancelHostApprovals(errors.New("session: closed"))
+	if taskStore != nil {
+		_ = taskStore.Close()
+	}
+	s.localWG.Wait()
 	for _, ch := range s.Children() {
 		_ = ch.Close()
 	}
 	s.reconfigureMu.Lock()
 	defer s.reconfigureMu.Unlock()
 	s.Lock()
-	s.closing = true
-	cancel := s.cancel
-	s.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	s.cancelHostApprovals(errors.New("session: closed"))
-	s.Lock()
 	defer s.Unlock()
 	if s.FileIndex != nil {
 		_ = s.FileIndex.Close()
 		s.FileIndex = nil
-	}
-	if s.Tasks != nil {
-		_ = s.Tasks.Close()
-		s.Tasks = nil
 	}
 	if s.Sandbox != nil {
 		err := s.Sandbox.Close()
@@ -1228,15 +1256,6 @@ func (s *Session) updateContextLimits(agentName, modelName string) (models.Limit
 	return limits, staticCtx
 }
 
-// setConfigModel updates the session's configured model under the session lock.
-// It is used to apply a per-turn model override and to restore the original
-// model when the turn exits.
-func (s *Session) setConfigModel(model string) {
-	s.Lock()
-	s.Config.Model = model
-	s.Unlock()
-}
-
 func (s *Session) configureHarness(ctx context.Context) error {
 	s.reconfigureMu.Lock()
 	defer s.reconfigureMu.Unlock()
@@ -1250,6 +1269,7 @@ func (s *Session) configureHarnessLocked(ctx context.Context) error {
 	s.Lock()
 	sbx, policy, network := s.Sandbox, s.sbxPolicy, s.sbxNetwork
 	config := s.Config
+	config.Model = cmp.Or(s.turnOverride, config.Model)
 	s.Unlock()
 	if sbx != nil && s.workspace != nil {
 		sbx.SetEnv(s.workspace.SubprocessEnv())

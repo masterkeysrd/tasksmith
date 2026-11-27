@@ -66,6 +66,7 @@ type Task struct {
 	canceled     bool
 	subscribers  map[chan string]struct{}
 
+	owner      *store
 	bgCtx      context.Context
 	outputsDir string
 	onUpdate   func(api.Task)
@@ -384,6 +385,18 @@ func (t *Task) Run(ctx context.Context) error {
 		t.mu.Unlock()
 		return err
 	}
+	owner := t.owner
+	if owner != nil {
+		owner.mu.Lock()
+		if owner.closed {
+			owner.mu.Unlock()
+			t.mu.Unlock()
+			return errors.New("tasks: store is closed")
+		}
+		owner.wg.Add(1)
+		owner.mu.Unlock()
+		defer owner.wg.Done()
+	}
 	if t.ID == "" {
 		t.ID = uuid.NewString()
 	}
@@ -433,9 +446,16 @@ func (t *Task) Run(ctx context.Context) error {
 	t.stdinW = stdinW
 	t.cancel = taskCancel
 	t.status = api.TaskStatusRunning
+	if owner != nil {
+		owner.wg.Add(1)
+	}
 	t.mu.Unlock()
 
 	go func() {
+		if owner != nil {
+			defer owner.wg.Done()
+		}
+		defer taskCancel()
 		exitCode, fnErr := t.Fn(taskCtx, t, stdinR)
 
 		t.mu.Lock()
@@ -546,6 +566,7 @@ type store struct {
 	onUpdate   func(api.Task)
 	mu         sync.Mutex
 	closed     bool
+	wg         sync.WaitGroup
 }
 
 var _ Store = (*store)(nil)
@@ -569,14 +590,17 @@ func (s *store) Add(task *Task) error {
 		return errors.New("tasks: task and task.Fn must not be nil")
 	}
 
+	task.mu.Lock()
+	defer task.mu.Unlock()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
 		return errors.New("tasks: store is closed")
 	}
-	s.mu.Unlock()
-
-	task.mu.Lock()
+	if task.owner != nil || task.status != "" {
+		return errors.New("tasks: task already registered or started")
+	}
+	task.owner = s
 	if task.ID == "" {
 		task.ID = uuid.NewString()
 	}
@@ -589,7 +613,6 @@ func (s *store) Add(task *Task) error {
 	task.bgCtx = s.bgCtx
 	task.outputsDir = s.outputsDir
 	task.onUpdate = s.onUpdate
-	task.mu.Unlock()
 
 	s.db.Save(task)
 	return nil
@@ -639,10 +662,9 @@ func (s *store) Close() error {
 	s.closed = true
 	s.mu.Unlock()
 
-	if s.db != nil {
-		for _, t := range s.db.Snapshot().All() {
-			t.Cancel()
-		}
+	for _, t := range s.db.Snapshot().All() {
+		t.Cancel()
 	}
+	s.wg.Wait()
 	return nil
 }

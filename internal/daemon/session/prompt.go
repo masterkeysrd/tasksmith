@@ -616,7 +616,7 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 }
 
 func (s *Session) generateTitle(userText string) {
-	ctx, cancel := context.WithTimeout(s.bgCtx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(s.lifeCtx, 30*time.Second)
 	defer cancel()
 
 	// Release the in-flight latch when this attempt produces no title so that a

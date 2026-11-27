@@ -3,6 +3,7 @@ package session
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -88,7 +89,7 @@ func (s *Session) Parent() *Session {
 }
 
 // InvokeSubagent spawns a child subagent asynchronously in an isolated child session.
-func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (api.InvokeAgentOutput, error) {
+func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (_ api.InvokeAgentOutput, retErr error) {
 	agent := strings.TrimSpace(in.Agent)
 	title := strings.TrimSpace(in.Title)
 	prompt := strings.TrimSpace(in.Prompt)
@@ -122,6 +123,13 @@ func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return api.InvokeAgentOutput{}, fmt.Errorf("git worktree add: %w: %s", err, string(out))
 		}
+		defer func() {
+			if retErr == nil {
+				return
+			}
+			cleanup := exec.CommandContext(context.WithoutCancel(ctx), "git", "-C", s.WorkDir, "worktree", "remove", "--force", treeDir)
+			retErr = errors.Join(retErr, cleanup.Run(), os.RemoveAll(treeDir))
+		}()
 		workDir = treeDir
 	}
 
@@ -149,29 +157,58 @@ func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (
 		Context:         s.bgCtx,
 		WaitGroup:       s.wg,
 		OnUpdate:        s.onUpdate,
+		OnDiscard:       s.onDiscard,
 		MCPCaller:       s.mcpCaller,
 	}
 
+	childRoot, err := SessionDir(s.workspace.RootDir(), childID)
+	if err != nil {
+		return api.InvokeAgentOutput{}, err
+	}
+	defer func() {
+		if retErr != nil {
+			retErr = errors.Join(retErr, os.RemoveAll(childRoot))
+		}
+	}()
 	child, err := New(ctx, cfg)
 	if err != nil {
 		return api.InvokeAgentOutput{}, err
 	}
 
+	published := false
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		cleanupCtx := context.WithoutCancel(ctx)
+		s.RemoveChild(childID)
+		retErr = errors.Join(retErr, child.Close(), child.Timeline.Delete(cleanupCtx), child.Journal.Delete(cleanupCtx))
+		if s.onUpdate != nil {
+			if err := s.onDiscard(cleanupCtx, childID); err != nil && !errors.Is(err, ErrSessionNotFound) {
+				retErr = errors.Join(retErr, err)
+			}
+		}
+		if published {
+			s.publisher.Publish(api.TopicSessions, api.SessionDeletedEvent{Workspace: s.workspace.RootDir(), SessionID: childID})
+			s.publisher.DeleteTopic(api.SessionStreamTopic(childID))
+		}
+	}()
 	if s.onUpdate != nil {
 		if err := s.onUpdate(ctx, child); err != nil {
-			_ = child.Close()
 			return api.InvokeAgentOutput{}, err
 		}
 	}
 	s.AddChild(child)
 
 	snapshot := ToAPISession(child)
+
 	s.publisher.Publish(api.TopicSessions, api.SessionCreatedEvent{
 		Workspace: s.workspace.RootDir(),
 		Session:   snapshot,
 	})
 	child.notifyParentUpdate()
 
+	published = true
 	if err := child.sendWithUserIntent(ctx, api.SendRequest{Content: prompt}, s.lastTurnUserIntent()); err != nil {
 		return api.InvokeAgentOutput{}, err
 	}
@@ -202,6 +239,16 @@ func (s *Session) configSnapshot() api.SessionConfig {
 	return s.Config
 }
 
+func (s *Session) effectiveConfig() api.SessionConfig {
+	if s.State != nil {
+		s.Lock()
+		defer s.Unlock()
+	}
+	cfg := s.Config
+	cfg.Model = cmp.Or(s.turnOverride, cfg.Model)
+	return cfg
+}
+
 func (s *Session) childConfig() (api.SessionConfig, error) {
 	s.Lock()
 	defer s.Unlock()
@@ -224,7 +271,7 @@ func (s *Session) childConfig() (api.SessionConfig, error) {
 // "did you mean ...?" hints.
 func (s *Session) resolveSubagentModel(agentName, requested string) (string, error) {
 	requested = strings.TrimSpace(requested)
-	parentModel := strings.TrimSpace(s.configSnapshot().Model)
+	parentModel := strings.TrimSpace(s.effectiveConfig().Model)
 	parentProvider := models.ID(parentModel).Provider()
 
 	cat := s.workspace.Catalog()
@@ -456,6 +503,7 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 		Context:          s.bgCtx,
 		WaitGroup:        s.wg,
 		OnUpdate:         s.onUpdate,
+		OnDiscard:        s.onDiscard,
 		MCPCaller:        s.mcpCaller,
 	}
 
@@ -514,7 +562,7 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 	// differs from the child's configured model.
 	var hInput harness.Input
 	hInput.Message = cmdMsg
-	if targetModel != "" && !strings.EqualFold(targetModel, child.Config.Model) {
+	if targetModel != "" && !strings.EqualFold(targetModel, child.configSnapshot().Model) {
 		hInput.ModelOverride = targetModel
 	}
 
@@ -673,7 +721,7 @@ func (s *Session) listSubagentModels(in api.ManageAgentsInput) (api.ManageAgents
 		if err != nil || resolved == nil || resolved.Agent == nil {
 			return api.ManageAgentsOutput{}, fmt.Errorf("%w: unknown subagent %q", std.ErrInvalidArgument, agent)
 		}
-		parentModel := strings.TrimSpace(s.configSnapshot().Model)
+		parentModel := strings.TrimSpace(s.effectiveConfig().Model)
 		if len(resolved.Agent.Spec.Models) > 0 {
 			isAllowed = func(id string) bool {
 				effectiveParent := ""

@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/warp"
 )
@@ -67,12 +68,13 @@ func TestQuestionSessionResume(t *testing.T) {
 		}
 		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: uuid.NewString()}, Model: req.Model, Content: []message.Block{&message.TextBlock{Text: "finished"}}, Done: true}}, nil
 	}}
-	_, _, _, pub, mgr := setupTestEnv(t, provider)
+	_, _, _, pub, mgr := setupTwoModelEnv(t, provider)
 	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Questions"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+	const override = "fake/fast-model"
+	if err := sess.startTurn(harness.Input{Message: message.NewUserText("start"), ModelOverride: override}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -96,6 +98,11 @@ func TestQuestionSessionResume(t *testing.T) {
 	}
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatal(err)
+	}
+	for _, turn := range provider.recordedTurns() {
+		if turn.model != override {
+			t.Fatalf("interrupted turn resumed with model %q", turn.model)
+		}
 	}
 	allEntries, err := sess.Timeline.List(ctx)
 	if err != nil {
