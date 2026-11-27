@@ -20,15 +20,33 @@ transcripts, or the daemon belongs in `cli/components`.
 | `ActionMenu` | `trail.FC` | `Items []ActionMenuItem` (`ID`, `Label`, `Shortcut`, `Badge`, `BadgeStyle`), `InitialIndex`, `Selected *int`, `Numbered`, `Indent`, `Disabled`, `UnselectedStyle`, `OnChange`, `OnSelect` |
 | `ScrollViewer` | `trail.FCC` | `Header []trail.Node`, `HeaderMarginBottom`, `Meta []trail.Node`, `Markdown`, `EmptyText`, `InitialScroll`, `OnScroll`, `MaxHeight`, `OuterStyle`, `ViewportStyle`, `Disabled`, `FollowTail`, `ExtraDeps`, `Actions []ScrollViewerAction`, `Bindings`, `OnClose`, variadic `Children` |
 | `Autocomplete` | `trail.FC` | `State AutocompleteState`, `Views map[string]AutocompleteView`, `Bindings []KeyBinding` |
+| `OAuthPrompt` | `trail.FC` | `Title`, `AuthURL`, `Status`, `BrowserOnly`, `EscLabel`, `OnCopy`, `OnSubmit`, `OnClose`; handles clipboard and callback input without owning the flow |
 | `KeyboardHint` | `trail.FC` | `Bindings []KeyBinding`; renders `nil` when empty |
 | `Markdown` | `kitex.FC` | `Source`, `Style`, `PlainCodeBlocks`, `OnAttachmentClick func(refType, rawValue string)`, `IsDirectory func(path string) bool` |
 | `CodeBlock` | `kitex.FC` | `Code`, `Lang`, `Style`, `HideHeader`, `ShowLineNumbers`, `StartLine`, `Compact`, `Wrap`, `GutterMinWidth` |
 | `Button` | `kitex.FCC` | `Key`, `Variant`, `Color`, `Disabled`, `Active`, `OnClick` |
 
+Compose a top-bordered status panel without padding labels or duplicating shortcuts:
+
+```go
+return uicomponents.Panel(uicomponents.PanelProps{Title: "Daemon", Bindings: bindings},
+	uicomponents.KVList(uicomponents.KVListProps{Indent: 2, Items: []uicomponents.KVItem{
+		{Label: "Status", ValueNode: uicomponents.Badge(uicomponents.BadgeProps{
+			Icon: "●", Label: "Running", Tone: uicomponents.ToneSuccess,
+		})},
+		{Label: "Version", Value: version, OmitEmpty: true},
+	}}),
+)
+```
+
+`PanelProps.Header` replaces `Title` and `Subtitle`; `Notice` and `Error` follow the body.
+`KVList` measures visible labels in cells. `ValueNode` takes precedence over toned `Value`.
+
 Hooks and navigation helpers in `internal/ui/components`:
 
 | Helper | Signature / Purpose |
 | --- | --- |
+| `UseKeyMap` | `UseKeyMap([]KeyAction, isActive) []KeyBinding` — handles shortcuts and supplies `KeyboardHint`; inactive maps return nil |
 | `UseCursor` | `UseCursor(count, initial int) Cursor` — bounded list cursor (`Index`, `Set`, `Move`, `HandleKey` for `up`/`k`/`ctrl+p`, `down`/`j`/`ctrl+n`) |
 | `StepCursor` / `ClampCursor` | Stateless cursor bounds and key-step helpers for state structs (e.g. multi-step forms) |
 | `UseScroll` | `UseScroll(ScrollOptions) ScrollState` — vertical scroll state, `ScrollTo` layout sync, `FollowTail`, `PageOnly`, `ExtraDeps`, and `HandleKey` |

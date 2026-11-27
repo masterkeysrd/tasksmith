@@ -39,6 +39,20 @@ skill — this rule only states what must never be violated.
 6. **Every new or changed component ships a test that renders it**, using
    `internal/tui/testutils` (`Render`/`NewEnv`, or `NewApp` when the component needs the live
    runtime), asserting on rendered text or key-driven effects. Do not redefine a local helper.
-7. **Keys must be discoverable**: every entry in a view's `Keys` map needs a matching
+7. **Colocate `<component>Styles` with its component.** Use `styles.Use(new<Component>Styles)`
+   from `internal/ui/styles`, deriving from `styles.NewCommon(s)` with `s *theme.Scheme`; use `styles.UseCommon()`
+   alone for shared primitives. Format chained setters vertically. Tiny one- or two-style helpers
+   need not define a stylesheet.
+8. **Declare custom view shortcuts once.** Pass `uicomponents.UseKeyMap`'s bindings directly to
+   `KeyboardHint`; disable an action or deactivate the map when a child owns its keys.
+   **Picker keys must be discoverable**: every entry in a view's `Keys` map needs a matching
    `KeyBinding`, and `docs/reference/cli.md` must reflect the command, keys, and flags in the same
    change.
+9. Use `uicomponents.Panel` for headers, messages and hints, `uicomponents.KVList` for aligned
+   metadata, `uicomponents.Badge` for toned status text, and `uicomponents.TabBar` +
+   `uicomponents.TabKeyActions` for tabbed views. Pass plain labels, not padded strings.
+10. Use `flight.Stack` for list/detail navigation. Routes must be comparable, ID-only values;
+    resolve records from current data and call `flight.UseNavigation()` in a routed child.
+11. **Prefer declarative `kitex.If`, `kitex.Map`, and `kitex.Fragment`** over imperative
+    `var rows []trail.Node; rows = append(...)` builders when composing conditional children or
+    lists inside a `trail.Box`.

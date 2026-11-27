@@ -83,17 +83,14 @@ var SkillsBrowser = trail.FC("SkillsBrowser", func(slotID string) trail.Node {
 		}
 	}, []any{}) // []any{}, not nil — see the deps table in SKILL.md
 
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape"):
-			store.RemoveSlot(slotID)
-		case k.MatchString("up", "k"):
-			if cur := scrollPos(); cur > 0 {
-				setScrollPos(cur - 1)
-			}
-		}
-	})
-	// ...
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"esc", "escape"}, Label: "Close", OnPress: func() { store.RemoveSlot(slotID) }},
+		{
+			Keys: []string{"up", "k"}, Label: "Scroll up",
+			OnPress: func() { setScrollPos(max(0, scrollPos()-1)) },
+		},
+	}, true)
+	return uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{Bindings: bindings})
 })
 ```
 
@@ -102,10 +99,10 @@ Rules that matter here:
 - **Read daemon data through the store, never a fresh client.** `store.UseApp(selector)` subscribes
   the view, so a background refresh re-renders it. `store.Client()` is for issuing calls.
 - **Fetch in an effect, not the render body.** Render must stay pure.
-- **Keys go through `trail.UseInput` + `k.MatchString(...)`.** `MatchString` accepts the aliases a
-  user may actually press (`"esc", "escape"`, `"pgdown", "space", "f", "ctrl+d"`). Match on
-  semantics, not raw codes.
-- **Every view dismisses itself on `esc`** and calls `store.RemoveSlot(slotID)`.
+- **Use `UseKeyMap` for view shortcuts** and feed its return value to `KeyboardHint`. Group
+  aliases under `Keys`; `Hint` overrides their display. Use `Disabled` for unavailable actions
+  and an inactive map when the child owns all input.
+- **Escape closes the root view** with `store.RemoveSlot(slotID)`; in a nested inspector it pops the route.
 - Leave a paper trail: `store.AppendCommandOutput("/skills", "Exited /skills command")` on close,
   so the scrollback records what happened.
 - Reuse `Picker`/`OptionList` before hand-rolling navigation; hand-rolled key handling should still
@@ -116,11 +113,33 @@ Rules that matter here:
 
 ## 4. Two-pane browsers
 
-The established shape is: `Picker` for the list, and selecting or pressing `i` swaps the slot
-contents to an inspector view (scrollable via `up`/`k`, `down`/`j`, `pgup`/`b`/`ctrl+u`,
-`pgdown`/`space`/`f`/`ctrl+d`, `home`/`g`, `end`/`G`). Scrolling uses a `kitex.UseRef[dom.Element]`
-plus `kitex.UseLayoutEffect` calling `el.ScrollTo(0, pos)` with `[]any{pos}` deps — layout effects
-run before paint, so the scroll doesn't visibly jump.
+Use `flight.Stack` inside the slot. Put filters that must survive a pop above the stack.
+Route structs must be comparable and ID-only: never store an API record, map, or slice in one.
+Resolve details from live store data and handle records removed during a refresh.
+
+```go
+type subagentsListRoute struct{}
+type subagentDetailRoute struct{ ID string }
+
+return flight.Stack(flight.StackProps{
+	InitialRoute: subagentsListRoute{},
+	RenderRoute: func(route flight.Route) trail.Node {
+		if detail, ok := route.(subagentDetailRoute); ok {
+			return subagentDetailView(detail.ID)
+		}
+		return subagentsList(listProps)
+	},
+})
+```
+
+Call `nav := flight.UseNavigation()` **inside the routed component**, not in `RenderRoute`.
+Select with `nav.Push(subagentDetailRoute{ID: opt.Value})`; in the detail adapter pass
+`OnClose: nav.Pop` to the viewer. Escape returns to the list; only closing the root removes the slot.
+A directly mounted viewer can accept another `OnClose` without depending on a navigator.
+
+When a routed screen swaps between conditional branches (for example, an empty/loading state and a
+`Filterable: true` `Picker`), wrap both branches in a stable outer `trail.Box` so `flight.Stack`'s
+focus scope stays anchored to a mounted root element.
 
 ## 5. Async and long operations
 

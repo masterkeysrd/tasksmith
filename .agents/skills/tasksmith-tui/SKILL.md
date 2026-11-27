@@ -57,6 +57,10 @@ convention is to write `trail.Node` as the component return type.
   renders through it.
 - **Never import `kite/internal/**`.** It is not a public API.
 
+Use `Panel` for view chrome, `KVList` for aligned metadata and `Badge` for status text
+(see [components](references/components.md)). For list/detail views, use `flight.Stack`
+with comparable ID-only routes (see [views](references/views.md)).
+
 ## House component shape
 
 ```go
@@ -85,7 +89,11 @@ Conventions encoded above, all of them load-bearing:
 
 1. Exported component is a `var` named `PascalCase`; its props are a `<Name>Props` struct
    declared directly above it with a doc comment on both.
-2. `theme.UseTheme()` is the first line of the render body when anything is colored.
+2. Use `styles.UseCommon()` for shared primitives (for example `common.Accent`), or
+   `sheet := styles.Use(newInspectorStyles)` for a colocated stylesheet. Build it from
+   `styles.NewCommon(s)` inside `func newInspectorStyles(s *theme.Scheme) inspectorStyles`.
+   The hook tracks the scheme itself, not its name, so same-name color edits refresh styles.
+   A tiny helper with only one or two styles may read `theme.UseTheme()` directly.
    **Colors and borders come from the scheme, never literals.** Grep for a scheme field before
    inventing one.
 3. State is read through the **getter at render time** (`frame()`), never through a value
@@ -94,6 +102,17 @@ Conventions encoded above, all of them load-bearing:
    `.FlexDirection(style.FlexRow)`, `.WhiteSpace(style.WhiteSpacePre)`.
 5. Use `trail.SimpleFC` when there are no props, `trail.FCC` when the component takes children —
    and for `FCC` the props struct must have a field literally named `Children []trail.Node`.
+
+### Custom view shortcuts
+
+Declare keys and their hints together. Call the hook even when a child owns input:
+
+```go
+bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+	{Keys: []string{"esc", "escape"}, Label: "Close", OnPress: props.OnClose},
+}, !childActive)
+return uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{Bindings: bindings})
+```
 
 ### Hook rules
 
