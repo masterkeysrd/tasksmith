@@ -3,20 +3,17 @@ package command
 import (
 	"context"
 	"fmt"
-	"image/color"
 	"strings"
 	"time"
 
-	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
-	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 )
 
 func (r *Registry) registerDaemonCommands() {
@@ -200,37 +197,17 @@ var DaemonBrowser = trail.FC("DaemonBrowser", func(slotID string) trail.Node {
 		}()
 	}
 
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape", "q"):
-			store.RemoveSlot(slotID)
-		case k.MatchString("g"):
-			refreshHealth()
-		case k.MatchString("r"):
-			if status == store.DaemonDisconnected || health() == nil {
-				doStart()
-			} else {
-				doRestart()
-			}
-		case k.MatchString("s"):
-			if status == store.DaemonDisconnected || health() == nil {
-				doStart()
-			}
-		case k.MatchString("x"):
-			if status == store.DaemonConnected && health() != nil {
-				doStop()
-			}
-		}
-	})
-
-	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	boxStyle := style.S().
-		Border(border).
-		Width(style.Percent(100)).
-		FlexDirection(style.FlexColumn)
-
-	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
+	h := health()
+	running := status == store.DaemonConnected && h != nil
+	busy := status == store.DaemonRestarting || inProgress()
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"s", "r"}, Hint: "s/r", Label: "Start", Disabled: running || busy, OnPress: doStart},
+		{Keys: []string{"r"}, Label: "Restart", Disabled: !running || busy, OnPress: doRestart},
+		{Keys: []string{"x"}, Label: "Stop", Disabled: !running || busy, OnPress: doStop},
+		{Keys: []string{"g"}, Label: "Refresh", Disabled: busy, OnPress: refreshHealth},
+		{Keys: []string{"esc", "escape", "q"}, Label: "Close", OnPress: func() { store.RemoveSlot(slotID) }},
+	}, true)
+	sheet := styles.UseCommon()
 
 	sockPath := store.SocketPath()
 	if sockPath == "" {
@@ -239,96 +216,44 @@ var DaemonBrowser = trail.FC("DaemonBrowser", func(slotID string) trail.Node {
 		}
 	}
 
-	kvRow := func(label, value string, valColor color.Color) trail.Node {
-		return trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow).Width(style.Percent(100)),
-		},
-			trail.Span(trail.SpanProps{
-				Style: style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary),
-			}, trail.Text(label)),
-			trail.Span(trail.SpanProps{
-				Style: style.S().WhiteSpace(style.WhiteSpacePre).Foreground(valColor),
-			}, trail.Text(value)),
+	badge := uicomponents.BadgeProps{Icon: "○", Label: "Offline", Tone: uicomponents.ToneError}
+	notice := "  The background daemon is not running. Press s or r to start it."
+	if busy {
+		badge = uicomponents.BadgeProps{Icon: "↻", Label: "Restarting...", Tone: uicomponents.ToneWarning}
+		notice = "  Stopping existing daemon and spawning a new background process..."
+	} else if running {
+		badge = uicomponents.BadgeProps{Icon: "●", Label: "Running", Tone: uicomponents.ToneSuccess}
+		notice = ""
+	}
+	items := []uicomponents.KVItem{{Label: "Status", ValueNode: uicomponents.Badge(badge)}}
+	if running && !busy {
+		uptime := fmt.Sprintf("%s (started %s)",
+			format.Duration(time.Since(h.StartedAt)),
+			h.StartedAt.Format("2006-01-02 15:04:05"),
+		)
+		items = append(items,
+			uicomponents.KVItem{Label: "Version", Value: daemonDisplayVersion(h)},
+			uicomponents.KVItem{Label: "PID", Value: fmt.Sprint(h.PID)},
+			uicomponents.KVItem{Label: "Uptime", Value: uptime},
 		)
 	}
-
-	msgRow := func(msg string) trail.Node {
-		return trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow).Width(style.Percent(100)).Margin(0, 0, 1, 0),
-		},
-			trail.Span(trail.SpanProps{
-				Style: style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary),
-			}, trail.Text(msg)),
-		)
+	items = append(items, uicomponents.KVItem{Label: "Socket", Value: sockPath})
+	if running && !busy {
+		items = append(items, uicomponents.KVItem{
+			Label: "Workspaces",
+			ValueNode: trail.Box(trail.BoxProps{Style: sheet.Column},
+				trail.Span(trail.SpanProps{Style: sheet.Primary}, trail.Text(fmt.Sprintf("%d active", len(h.Workspaces)))),
+				kitex.Map(h.Workspaces, func(ws string, _ int) trail.Node {
+					return trail.Box(trail.BoxProps{Style: sheet.Row},
+						trail.Span(trail.SpanProps{Style: sheet.Secondary}, trail.Text("• "+ws)),
+					)
+				}),
+			),
+		})
 	}
-
-	var children []trail.Node
-	children = append(children, trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Brain Daemon")))
-
-	h := health()
-	isRestarting := status == store.DaemonRestarting || inProgress()
-
-	if isRestarting {
-		children = append(children,
-			kvRow("  Status:      ", "↻ Restarting...", scheme.Color.Text.Warning),
-			kvRow("  Socket:      ", sockPath, scheme.Color.Text.Primary),
-			msgRow("  Stopping existing daemon and spawning a new background process..."),
-			uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-				Bindings: []uicomponents.KeyBinding{
-					{Key: "esc", Label: "Close"},
-				},
-			}),
-		)
-	} else if status == store.DaemonConnected && h != nil {
-		durationStr := format.Duration(time.Since(h.StartedAt))
-		timeStr := h.StartedAt.Format("2006-01-02 15:04:05")
-
-		runningChildren := []trail.Node{
-			kvRow("  Status:      ", "● Running", scheme.Color.Text.Success),
-			kvRow("  Version:     ", daemonDisplayVersion(h), scheme.Color.Text.Primary),
-			kvRow("  PID:         ", fmt.Sprintf("%d", h.PID), scheme.Color.Text.Primary),
-			kvRow("  Uptime:      ", fmt.Sprintf("%s (started %s)", durationStr, timeStr), scheme.Color.Text.Primary),
-			kvRow("  Socket:      ", sockPath, scheme.Color.Text.Primary),
-			kvRow("  Workspaces:  ", fmt.Sprintf("%d active", len(h.Workspaces)), scheme.Color.Text.Primary),
-		}
-
-		for _, ws := range h.Workspaces {
-			runningChildren = append(runningChildren, trail.Box(trail.BoxProps{
-				Style: style.S().FlexDirection(style.FlexRow).Width(style.Percent(100)),
-			},
-				trail.Span(trail.SpanProps{
-					Style: style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary),
-				}, trail.Text(fmt.Sprintf("               • %s", ws))),
-			))
-		}
-
-		runningChildren = append(runningChildren, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-			Bindings: []uicomponents.KeyBinding{
-				{Key: "r", Label: "Restart"},
-				{Key: "x", Label: "Stop"},
-				{Key: "g", Label: "Refresh"},
-				{Key: "esc", Label: "Close"},
-			},
-		}))
-
-		children = append(children, runningChildren...)
-	} else {
-		// Offline
-		children = append(children,
-			kvRow("  Status:      ", "○ Offline", scheme.Color.Text.Error),
-			kvRow("  Socket:      ", sockPath, scheme.Color.Text.Primary),
-			msgRow("  The background daemon is not running. Press s or r to start it."),
-			uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-				Bindings: []uicomponents.KeyBinding{
-					{Key: "s/r", Label: "Start"},
-					{Key: "g", Label: "Refresh"},
-					{Key: "esc", Label: "Close"},
-				},
-			}),
-		)
-	}
-
-	return trail.Box(trail.BoxProps{Style: boxStyle}, children...)
+	return uicomponents.Panel(uicomponents.PanelProps{
+		Title: "Brain Daemon", Notice: notice, Bindings: bindings,
+	}, uicomponents.KVList(uicomponents.KVListProps{Items: items, Indent: 2}))
 })
 
 // daemonDisplayVersion renders the daemon build version from a health

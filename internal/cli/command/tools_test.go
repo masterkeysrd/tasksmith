@@ -9,6 +9,7 @@ import (
 
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
@@ -339,6 +340,28 @@ func TestToolsBrowserEmptyAndPopulatedRendering(t *testing.T) {
 	}
 }
 
+func TestToolsBrowserNavigation(t *testing.T) {
+	t.Cleanup(func() { store.SetWorkspaceTools(nil, "") })
+	tool := api.Tool{Name: "read", Enabled: true, InputSchema: map[string]any{"type": "object"}}
+	store.SetWorkspaceTools([]api.Tool{tool}, "")
+	app := testutils.NewApp(t, ToolsBrowser("tools"), 100, 30)
+	if out := app.Type("i"); !strings.Contains(out, "Tool: read") {
+		t.Fatal(out)
+	}
+	tool.Description = "refreshed description"
+	store.SetWorkspaceTools([]api.Tool{tool}, "")
+	app.WaitFor(func(out string) bool { return strings.Contains(out, tool.Description) })
+	if out := app.Press(key.Key{Code: key.KeyEscape}); !strings.Contains(out, "Tools (1 available)") {
+		t.Fatal(out)
+	}
+	app.Press(key.Key{Code: key.KeyEnter})
+	store.SetWorkspaceTools(nil, "")
+	app.WaitFor(func(out string) bool { return strings.Contains(out, "Tool no longer available.") })
+	if out := app.Press(key.Key{Code: key.KeyEscape}); !strings.Contains(out, "Tools (0 available)") {
+		t.Fatal(out)
+	}
+}
+
 func TestToolInspectorRendering(t *testing.T) {
 	tool := api.Tool{
 		Name:         "linter",
@@ -355,7 +378,6 @@ func TestToolInspectorRendering(t *testing.T) {
 	}
 
 	out := renderTestNode(t, toolInspector(toolInspectorProps{
-		slotID:  "slot-3",
 		tool:    tool,
 		onClose: func() {},
 	}))
@@ -391,7 +413,6 @@ func TestToolInspectorRendering(t *testing.T) {
 
 func TestToolInspectorWithoutSchemaOrCommand(t *testing.T) {
 	out := renderTestNode(t, toolInspector(toolInspectorProps{
-		slotID: "slot-4",
 		tool: api.Tool{
 			Name:        "view",
 			Description: "Read a file",

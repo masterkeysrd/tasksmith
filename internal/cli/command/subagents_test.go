@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
@@ -131,6 +132,22 @@ func TestSubagentsBrowserRendering(t *testing.T) {
 	got = renderNode(t, SubagentsBrowser("slot-1"))
 	if !strings.Contains(got, "Waiting Permission") || strings.Contains(got, "waiting_permission") {
 		t.Fatalf("expected 'waiting permission' without raw underscore, got %q", got)
+	}
+}
+
+func TestSubagentsBrowserNavigation(t *testing.T) {
+	store.ResetSession()
+	t.Cleanup(store.ResetSession)
+	store.UpsertSubagent(api.Session{ID: "idle", Status: api.StatusIdle})
+	app := testutils.NewApp(t, SubagentsBrowser("subagents"), 100, 30)
+	if out := app.Type("a"); !strings.Contains(out, "Subagents (all)") {
+		t.Fatal(out)
+	}
+	if out := app.Press(key.Key{Code: key.KeyEnter}); !strings.Contains(out, "esc Return") {
+		t.Fatal(out)
+	}
+	if out := app.Press(key.Key{Code: key.KeyEscape}); !strings.Contains(out, "Subagents (all)") {
+		t.Fatal(out)
 	}
 }
 

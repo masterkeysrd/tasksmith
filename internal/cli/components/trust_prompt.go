@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -33,11 +34,11 @@ type TrustPromptProps struct {
 }
 
 var inlineTrustPrompt = trail.FC("InlineTrustPrompt", func(status api.WorkspaceStatus) trail.Node {
-	scheme := theme.UseTheme()
+	sheet := styles.UseCommon()
 	failure, setFailure := kitex.UseState("")
 	return kitex.Fragment(
 		kitex.If(failure() != "", func() trail.Node {
-			return trail.Span(trail.SpanProps{Style: style.S().Foreground(scheme.Color.Text.Error)}, trail.Text(failure()))
+			return trail.Span(trail.SpanProps{Style: sheet.Error}, trail.Text(failure()))
 		}),
 		TrustPrompt(TrustPromptProps{
 			Status: toTrustStatus(status),
@@ -58,22 +59,35 @@ var inlineTrustPrompt = trail.FC("InlineTrustPrompt", func(status api.WorkspaceS
 	)
 })
 
+type trustPromptStyles struct {
+	styles.Common
+	section style.Style
+}
+
+func newTrustPromptStyles(s *theme.Scheme) trustPromptStyles {
+	common := styles.NewCommon(s)
+	return trustPromptStyles{
+		Common:  common,
+		section: common.Column.MarginBottom(1),
+	}
+}
+
 // TrustPrompt renders the interactive repository trust gate matching section 4.1.
 var TrustPrompt = trail.FC("TrustPrompt", func(props TrustPromptProps) trail.Node {
-	scheme := theme.UseTheme()
+	sheet := styles.Use(newTrustPromptStyles)
 
 	folderPath := props.Status.Path
 	parentPath := filepath.Dir(folderPath)
 
 	headerNodes := []trail.Node{
 		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexColumn).MarginBottom(1),
+			Style: sheet.section,
 		},
 			trail.Box(trail.BoxProps{
-				Style: style.S().FlexDirection(style.FlexRow).MarginBottom(0),
+				Style: sheet.Row,
 			},
 				trail.Span(trail.SpanProps{
-					Style: style.S().Bold(true).Foreground(scheme.Color.Text.Primary),
+					Style: sheet.Title,
 				}, trail.Text(folderPath)),
 			),
 		),
@@ -81,7 +95,7 @@ var TrustPrompt = trail.FC("TrustPrompt", func(props TrustPromptProps) trail.Nod
 
 	if props.Status.FingerprintChanged {
 		headerNodes = append(headerNodes, trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Warning),
+			Style: sheet.Warning,
 		}, trail.Text("Executable configuration changed since approval. Review it before trusting again.")))
 	}
 
@@ -89,48 +103,48 @@ var TrustPrompt = trail.FC("TrustPrompt", func(props TrustPromptProps) trail.Nod
 	if len(execs.MCPServers) > 0 || len(execs.CustomTools) > 0 || len(execs.Decisions) > 0 || execs.HasEnv {
 		var execLines []trail.Node
 		execLines = append(execLines, trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Secondary),
+			Style: sheet.Secondary,
 		}, trail.Text("This project ships executable configuration:")))
 
 		if len(execs.MCPServers) > 0 {
 			label := fmt.Sprintf("  ▸ %d MCP server(s)  %s", len(execs.MCPServers), strings.Join(execs.MCPServers, ", "))
 			execLines = append(execLines, trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Text.Muted),
+				Style: sheet.Muted,
 			}, trail.Text(label)))
 		}
 		if len(execs.CustomTools) > 0 {
 			label := fmt.Sprintf("  ▸ %d custom tool(s) %s", len(execs.CustomTools), strings.Join(execs.CustomTools, ", "))
 			execLines = append(execLines, trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Text.Muted),
+				Style: sheet.Muted,
 			}, trail.Text(label)))
 		}
 		if len(execs.Decisions) > 0 {
 			label := fmt.Sprintf("  ▸ %d decision(s)   %s", len(execs.Decisions), strings.Join(execs.Decisions, ", "))
 			execLines = append(execLines, trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Text.Muted),
+				Style: sheet.Muted,
 			}, trail.Text(label)))
 		}
 		if execs.HasEnv {
 			execLines = append(execLines, trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Text.Muted),
+				Style: sheet.Muted,
 			}, trail.Text("  ▸ .env               loaded into tool environments")))
 		}
 
 		headerNodes = append(headerNodes, trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexColumn).MarginBottom(1),
+			Style: sheet.section,
 		}, execLines...))
 	} else {
 		headerNodes = append(headerNodes, trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexColumn).MarginBottom(1),
+			Style: sheet.section,
 		},
 			trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Text.Muted),
+				Style: sheet.Muted,
 			}, trail.Text("No project tools or MCP servers found.")),
 		))
 	}
 
 	header := trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexColumn),
+		Style: sheet.Column,
 	}, headerNodes...)
 
 	options := []uicomponents.Option{

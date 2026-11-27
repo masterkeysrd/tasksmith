@@ -428,7 +428,7 @@ var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 	// and backs the F2 editor, so both read the same workspace report.
 	aliasState, setAliasState := kitex.UseState[[]api.AliasAssignment](nil)
 	showEditor, setShowEditor := kitex.UseState(false)
-	editorTarget := kitex.UseRef[api.Model](api.Model{})
+	editorTarget := kitex.UseRef(api.Model{})
 	kitex.UseEffect(func() {
 		if c == nil {
 			return

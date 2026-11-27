@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/flight"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -178,7 +179,6 @@ func toolColumnWidths(tools []api.Tool, termWidth int) (name, status, scope, ann
 }
 
 type toolInspectorProps struct {
-	slotID  string
 	tool    api.Tool
 	onClose func()
 }
@@ -299,53 +299,48 @@ type emptyToolsViewProps struct {
 }
 
 var emptyToolsView = trail.FC("EmptyToolsView", func(props emptyToolsViewProps) trail.Node {
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		if k.MatchString("esc", "escape") {
-			store.RemoveSlot(props.slotID)
-		} else if k.MatchString("r") {
-			if props.onReload != nil {
-				props.onReload()
-			}
-		}
-	})
-
-	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	boxStyle := style.S().
-		Border(border).
-		Width(style.Percent(100)).
-		FlexDirection(style.FlexColumn)
-	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
-	emptyStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
-
-	var children []trail.Node
-	children = append(children,
-		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Tools (0 available)")),
-		trail.Span(trail.SpanProps{Style: emptyStyle}, trail.Text("  No tools available in workspace.")),
-	)
-	if props.notice != "" {
-		children = append(children, trail.Span(trail.SpanProps{
-			Style: style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary),
-		}, trail.Text("  "+props.notice)))
-	}
-	children = append(children, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-		Bindings: []uicomponents.KeyBinding{
-			{Key: "r", Label: "Reload workspace"},
-			{Key: "esc", Label: "Close"},
-		},
-	}))
-
-	return trail.Box(trail.BoxProps{Style: boxStyle}, children...)
+	common := styles.UseCommon()
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"r"}, Label: "Reload workspace", OnPress: props.onReload},
+		{Keys: []string{"esc", "escape"}, Label: "Close", OnPress: func() { store.RemoveSlot(props.slotID) }},
+	}, true)
+	emptyStyle := common.Secondary.
+		WhiteSpace(style.WhiteSpacePreWrap).
+		MarginBottom(1)
+	return uicomponents.Panel(uicomponents.PanelProps{
+		Title: "Tools (0 available)", Notice: props.notice, Bindings: bindings,
+	}, trail.Span(trail.SpanProps{Style: emptyStyle}, trail.Text("  No tools available in workspace.")))
 })
+
+type toolsListRoute struct{}
+
+type toolDetailRoute struct{ Name string }
+
+type toolsScreenProps struct {
+	slotID string
+	route  flight.Route
+}
 
 // ToolsBrowser renders an interactive tool table and schema inspector inside <Slot />.
 var ToolsBrowser = trail.FC("ToolsBrowser", func(slotID string) trail.Node {
+	return flight.Stack(flight.StackProps{
+		InitialRoute: toolsListRoute{},
+		RenderRoute: func(route flight.Route) trail.Node {
+			return toolsScreen(toolsScreenProps{slotID: slotID, route: route})
+		},
+	})
+})
+
+var toolsScreen = trail.FC("ToolsScreen", func(props toolsScreenProps) trail.Node {
+	nav := flight.UseNavigation()
+	scheme := theme.UseTheme()
+	winSize := trail.UseWindowSize()
+	slotID := props.slotID
 	toolsPtr := store.UseApp(func(s store.AppState) *[]api.Tool { return s.Tools })
 	cachedAgent := store.UseApp(func(s store.AppState) string { return s.ToolsAgent })
 	toolsFetched := store.UseApp(func(s store.AppState) bool { return s.ToolsFetched })
 	defaultAgent := store.UseApp(func(s store.AppState) string { return s.DefaultAgent })
 	sessionAgent := store.UseSession(func(s store.SessionState) string { return s.Config.Agent })
-	selectedTool, setSelectedTool := kitex.UseState[*api.Tool](nil)
 	notice, setNotice := kitex.UseState("")
 	isReloading, setIsReloading := kitex.UseState(false)
 	toggling, setToggling := kitex.UseState("")
@@ -444,12 +439,8 @@ var ToolsBrowser = trail.FC("ToolsBrowser", func(slotID string) trail.Node {
 		})
 	}
 
-	if sel := selectedTool(); sel != nil {
-		return toolInspector(toolInspectorProps{
-			slotID:  slotID,
-			tool:    *sel,
-			onClose: func() { setSelectedTool(nil) },
-		})
+	if route, ok := props.route.(toolDetailRoute); ok {
+		return toolDetailView(toolDetailViewProps{Name: route.Name, Tools: tools, OnClose: nav.Pop})
 	}
 
 	if len(tools) == 0 {
@@ -474,9 +465,6 @@ var ToolsBrowser = trail.FC("ToolsBrowser", func(slotID string) trail.Node {
 		title = fmt.Sprintf("%s — %s", title, n)
 	}
 
-	scheme := theme.UseTheme()
-
-	winSize := trail.UseWindowSize()
 	nameCol, statusCol, scopeCol, annotationCol, availDescWidth := toolColumnWidths(tools, winSize.Width)
 
 	opts := make([]uicomponents.Option, len(tools))
@@ -524,12 +512,7 @@ var ToolsBrowser = trail.FC("ToolsBrowser", func(slotID string) trail.Node {
 	}
 
 	inspect := func(opt uicomponents.Option) {
-		for i := range tools {
-			if tools[i].Name == opt.Value {
-				setSelectedTool(&tools[i])
-				return
-			}
-		}
+		nav.Push(toolDetailRoute{Name: opt.Value})
 	}
 
 	pickerProps := components.NewPicker(title, opts, inspect)
@@ -561,4 +544,26 @@ var ToolsBrowser = trail.FC("ToolsBrowser", func(slotID string) trail.Node {
 	}
 
 	return components.Picker(pickerProps)
+})
+
+type toolDetailViewProps struct {
+	Name    string
+	Tools   []api.Tool
+	OnClose func()
+}
+
+var toolDetailView = trail.FC("ToolDetailView", func(props toolDetailViewProps) trail.Node {
+	for _, tool := range props.Tools {
+		if tool.Name == props.Name {
+			return toolInspector(toolInspectorProps{tool: tool, onClose: props.OnClose})
+		}
+	}
+	return missingToolView(props.OnClose)
+})
+
+var missingToolView = trail.FC("MissingToolView", func(onClose func()) trail.Node {
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"esc", "escape"}, Label: "Return to tools", OnPress: onClose},
+	}, true)
+	return uicomponents.Panel(uicomponents.PanelProps{Notice: "Tool no longer available.", Bindings: bindings})
 })

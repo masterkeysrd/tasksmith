@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/flight"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
@@ -18,6 +19,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -75,9 +77,34 @@ type SubagentViewerProps struct {
 	OnClose    func()
 }
 
+type subagentViewerStyles struct {
+	styles.Common
+	scheme *theme.Scheme
+	header style.Style
+	chat   style.Style
+}
+
+func newSubagentViewerStyles(s *theme.Scheme) subagentViewerStyles {
+	common := styles.NewCommon(s)
+	return subagentViewerStyles{
+		Common: common,
+		scheme: s,
+		header: common.Row.
+			Display(style.DisplayFlex).
+			Width(style.Percent(100)).
+			MarginBottom(1),
+		chat: common.Column.
+			MaxHeight(style.Cells(18)).
+			OverflowY(style.OverflowAuto).
+			ScrollbarY(true).
+			Width(style.Percent(100)).
+			MarginBottom(1),
+	}
+}
+
 // SubagentViewer renders a live, non-static, navigable chat view of a subagent session.
 var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) trail.Node {
-	scheme := theme.UseTheme()
+	sheet := styles.Use(newSubagentViewerStyles)
 	allSubs := store.UseSubagents()
 	var sub *api.Session
 	for i := range allSubs {
@@ -156,39 +183,28 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 	planReviewActive := len(reviews) > 0 && len(perms) == 0 && len(questions) == 0
 	hasPrompt := len(perms) > 0 || len(questions) > 0 || len(reviews) > 0
 
+	pageLabel := "Page"
+	if hasPrompt {
+		pageLabel = "Scroll chat"
+	}
+	pageKeys := []string{"pgup", "ctrl+u", "b", "ctrl+b", "pgdown", "ctrl+d", "f", "ctrl+f"}
 	trail.UseInput(func(input string, k event.KeyEvent) {
-		if planReviewActive {
-			return
-		}
-		if k.MatchString("esc", "escape") {
-			if props.OnClose != nil {
-				props.OnClose()
-			}
-			return
-		}
-
-		if !hasPrompt {
-			if scroll.HandleKey(input, k) {
-				return
-			}
-			if k.MatchString("x") && sub != nil && sub.Status != api.StatusIdle {
-				_ = store.KillSubagent(props.SubagentID)
-			}
-			return
-		}
-
-		if k.MatchString("pgup", "ctrl+u", "b", "ctrl+b", "pgdown", "ctrl+d", "f", "ctrl+f") {
+		if !hasPrompt || k.MatchString(pageKeys...) {
 			scroll.HandleKey(input, k)
 		}
-	})
+	}, trail.InputOptions{IsActive: !planReviewActive})
 
-	border := style.
-		SingleBorder().
-		Top(true).
-		Bottom(false).
-		Left(false).
-		Right(false).
-		Color(scheme.Color.Border.Default)
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Hint: "↑/↓ or j/k", Label: "Scroll", Disabled: hasPrompt},
+		{Keys: pageKeys, Hint: "pgup/pgdn", Label: pageLabel},
+		{Hint: "g/G", Label: "Top/Bottom", Disabled: hasPrompt},
+		{
+			Keys: []string{"x"}, Label: "Kill subagent",
+			Disabled: hasPrompt || sub == nil || sub.Status == api.StatusIdle,
+			OnPress:  func() { _ = store.KillSubagent(props.SubagentID) },
+		},
+		{Keys: []string{"esc", "escape"}, Label: "Return", OnPress: props.OnClose},
+	}, !planReviewActive)
 
 	agentName := "subagent"
 	title := props.SubagentID
@@ -212,36 +228,32 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 			}
 		}
 	}
-	agentColor := components.SubagentColor(scheme, agentName)
+	agentColor := components.SubagentColor(sheet.scheme, agentName)
 
 	headerChildren := []trail.Node{
 		trail.Span(trail.SpanProps{
-			Style: style.S().Bold(true).Foreground(agentColor),
+			Style: sheet.Title.Foreground(agentColor),
 		}, trail.Text("@"+agentName)),
 	}
 	if sub != nil {
-		headerChildren = append(headerChildren, components.SubagentModelBadge(scheme, *sub))
+		headerChildren = append(headerChildren, components.SubagentModelBadge(sheet.scheme, *sub))
 	}
 	headerChildren = append(headerChildren, trail.Span(trail.SpanProps{
-		Style: style.S().Bold(true).Foreground(scheme.Color.Text.Primary),
+		Style: sheet.Title,
 	}, trail.Text(" · "+title+" ("+formatSubagentStatus(status)+")")))
 	if isWorktree {
 		headerChildren = append(headerChildren, trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Secondary),
+			Style: sheet.Secondary,
 		}, trail.Text(" · worktree")))
 	}
 	if !scroll.AutoScroll && scroll.Pos > 0 {
 		headerChildren = append(headerChildren, trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Secondary),
+			Style: sheet.Secondary,
 		}, trail.Text(" [scrolled up]")))
 	}
 
 	headerNode := trail.Box(trail.BoxProps{
-		Style: style.S().
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexRow).
-			Width(style.Percent(100)).
-			Margin(0, 0, 1, 0),
+		Style: sheet.header,
 	}, headerChildren...)
 
 	chatChildren := make([]trail.Node, 0)
@@ -270,14 +282,8 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 	}
 
 	chatBox := trail.Box(trail.BoxProps{
-		Ref: scroll.Ref,
-		Style: style.S().
-			MaxHeight(style.Cells(18)).
-			OverflowY(style.OverflowAuto).
-			ScrollbarY(true).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn).
-			Margin(0, 0, 1, 0),
+		Ref:   scroll.Ref,
+		Style: sheet.chat,
 	}, chatChildren...)
 
 	var promptNode trail.Node
@@ -319,40 +325,9 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 		})
 	}
 
-	var mainChildren = []trail.Node{headerNode, chatBox}
-	if promptNode != nil {
-		mainChildren = append(mainChildren, promptNode)
-	}
-	if !planReviewActive {
-		var bindings []uicomponents.KeyBinding
-		if !hasPrompt {
-			bindings = append(bindings,
-				uicomponents.KeyBinding{Key: "↑/↓ or j/k", Label: "Scroll"},
-				uicomponents.KeyBinding{Key: "pgup/pgdn", Label: "Page"},
-				uicomponents.KeyBinding{Key: "g/G", Label: "Top/Bottom"},
-			)
-		} else {
-			bindings = append(bindings,
-				uicomponents.KeyBinding{Key: "pgup/pgdn", Label: "Scroll chat"},
-			)
-		}
-		if !hasPrompt && sub != nil && sub.Status != api.StatusIdle {
-			bindings = append(bindings, uicomponents.KeyBinding{Key: "x", Label: "Kill subagent"})
-		}
-		bindings = append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Return"})
-
-		hintBar := uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-			Bindings: bindings,
-		})
-		mainChildren = append(mainChildren, hintBar)
-	}
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	}, mainChildren...)
+	return uicomponents.Panel(uicomponents.PanelProps{
+		Header: headerNode, Bindings: bindings,
+	}, chatBox, promptNode)
 })
 
 type emptySubagentsViewProps struct {
@@ -365,50 +340,51 @@ type emptySubagentsViewProps struct {
 }
 
 var emptySubagentsView = trail.FC("EmptySubagentsView", func(props emptySubagentsViewProps) trail.Node {
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		if k.MatchString("esc", "escape") {
-			store.RemoveSlot(props.slotID)
-		} else if k.MatchString("a") {
-			if props.onToggle != nil {
-				props.onToggle()
-			}
-		}
-	})
-
-	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	boxStyle := style.S().
-		Border(border).
-		Width(style.Percent(100)).
-		FlexDirection(style.FlexColumn)
-	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
-	emptyStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
-
-	var bindings []uicomponents.KeyBinding
-	if props.hasAllSubagents {
-		bindings = append(bindings, uicomponents.KeyBinding{Key: "a", Label: props.toggleLabel})
-	}
-	bindings = append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Close"})
-
-	return trail.Box(trail.BoxProps{Style: boxStyle},
-		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(props.title)),
-		trail.Span(trail.SpanProps{Style: emptyStyle}, trail.Text(props.emptyMsg)),
-		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-			Bindings: bindings,
-		}),
-	)
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"a"}, Label: props.toggleLabel, Disabled: !props.hasAllSubagents, OnPress: props.onToggle},
+		{Keys: []string{"esc", "escape"}, Label: "Close", OnPress: func() { store.RemoveSlot(props.slotID) }},
+	}, true)
+	return uicomponents.Panel(uicomponents.PanelProps{Title: props.title, Notice: props.emptyMsg, Bindings: bindings})
 })
+
+type subagentsListRoute struct{}
+
+type subagentDetailRoute struct{ ID string }
+
+type subagentsListProps struct {
+	slotID   string
+	showAll  bool
+	onToggle func()
+}
 
 // SubagentsBrowser renders an interactive subagents list and inline live viewer inside <Slot />.
 var SubagentsBrowser = trail.FC("SubagentsBrowser", func(slotID string) trail.Node {
-	scheme := theme.UseTheme()
 	showAll, setShowAll := kitex.UseState(false)
+	return flight.Stack(flight.StackProps{
+		InitialRoute: subagentsListRoute{},
+		RenderRoute: func(route flight.Route) trail.Node {
+			if detail, ok := route.(subagentDetailRoute); ok {
+				return subagentDetailView(detail.ID)
+			}
+			return subagentsList(subagentsListProps{
+				slotID: slotID, showAll: showAll(), onToggle: func() { setShowAll(!showAll()) },
+			})
+		},
+	})
+})
+
+var subagentDetailView = trail.FC("SubagentDetailView", func(id string) trail.Node {
+	nav := flight.UseNavigation()
+	return SubagentViewer(SubagentViewerProps{SubagentID: id, OnClose: nav.Pop})
+})
+
+var subagentsList = trail.FC("SubagentsList", func(props subagentsListProps) trail.Node {
+	nav := flight.UseNavigation()
+	scheme := theme.UseTheme()
 	allSubs := store.UseSubagents()
 
-	selectedSubagentID, setSelectedSubagentID := kitex.UseState("")
-
 	var visibleSubs []api.Session
-	if showAll() {
+	if props.showAll {
 		visibleSubs = allSubs
 	} else {
 		for _, s := range allSubs {
@@ -419,40 +395,27 @@ var SubagentsBrowser = trail.FC("SubagentsBrowser", func(slotID string) trail.No
 	}
 
 	toggleLabel := "Show all"
-	if showAll() {
+	if props.showAll {
 		toggleLabel = "Hide idle"
 	}
 
 	title := "Subagents"
-	if showAll() {
+	if props.showAll {
 		title = "Subagents (all)"
-	}
-
-	if selID := selectedSubagentID(); selID != "" {
-		return SubagentViewer(SubagentViewerProps{
-			SubagentID: selID,
-			OnClose: func() {
-				setSelectedSubagentID("")
-			},
-		})
 	}
 
 	if len(visibleSubs) == 0 {
 		emptyMsg := "  No subagents."
-		if !showAll() && len(allSubs) > 0 {
+		if !props.showAll && len(allSubs) > 0 {
 			emptyMsg = "  No running subagents."
 		}
 		return emptySubagentsView(emptySubagentsViewProps{
-			slotID:          slotID,
+			slotID:          props.slotID,
 			title:           title,
 			emptyMsg:        emptyMsg,
 			toggleLabel:     toggleLabel,
-			hasAllSubagents: len(allSubs) > 0 || showAll(),
-			onToggle: func() {
-				if len(allSubs) > 0 || showAll() {
-					setShowAll(!showAll())
-				}
-			},
+			hasAllSubagents: len(allSubs) > 0 || props.showAll,
+			onToggle:        props.onToggle,
 		})
 	}
 
@@ -515,7 +478,7 @@ var SubagentsBrowser = trail.FC("SubagentsBrowser", func(slotID string) trail.No
 	)
 
 	pickerProps := components.NewPicker(title, opts, func(opt uicomponents.Option) {
-		setSelectedSubagentID(opt.Value)
+		nav.Push(subagentDetailRoute{ID: opt.Value})
 	})
 	pickerProps.Columns = []uicomponents.Column{
 		{Width: 0},
@@ -526,11 +489,11 @@ var SubagentsBrowser = trail.FC("SubagentsBrowser", func(slotID string) trail.No
 	pickerProps.Bindings = bindings
 	pickerProps.Keys = map[string]func(uicomponents.Option){
 		"a": func(_ uicomponents.Option) {
-			setShowAll(!showAll())
+			props.onToggle()
 		},
 	}
 	pickerProps.OnCancel = func() {
-		store.RemoveSlot(slotID)
+		store.RemoveSlot(props.slotID)
 		store.AppendCommandOutput("/subagents", "Exited /subagents command")
 	}
 	pickerProps.ConfirmActions = map[string]components.ConfirmAction{
