@@ -242,7 +242,6 @@ While browsing history, the composer's bottom border is replaced by a centered r
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `c` | MCP Authorization | Copies the authorization URL, shown as `Copied authorization URL to clipboard.` Works while the paste field is empty; `Ctrl+Y` copies at any time. |
 | `Ctrl+Y` | MCP Authorization | Copies the authorization URL regardless of what the paste field holds. |
 | `Enter` | MCP Authorization | Submits whatever the paste field holds to the waiting authorization. |
 | `Esc` | MCP Authorization | Stops reporting on the flow and returns to the server list, or closes the browser when `/mcp auth <name>` opened it. |
@@ -293,7 +292,7 @@ While browsing history, the composer's bottom border is replaced by a centered r
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `c` | Antigravity Sign-In | Copies the authorization URL. |
+| `Ctrl+Y` | Antigravity Sign-In | Copies the authorization URL. |
 | `Enter` | Antigravity Sign-In | Submits whatever the paste field holds (full address-bar URL, bare query string, or authorization code alone) to the waiting flow. |
 | `Esc` | Provider Sign-In | Dismisses the screen while the daemon's flow continues. |
 
@@ -323,7 +322,7 @@ While browsing history, the composer's bottom border is replaced by a centered r
 | :--- | :--- |
 | `←` / `→` / `Tab` / `Shift+Tab` / `1` `2` `3` `4` | Switch tab. |
 | `↑` / `↓` / `Ctrl+P` / `Ctrl+N` / `PgUp` / `PgDn` / `Ctrl+B` / `Ctrl+F` | Scroll long views. |
-| `m` `p` `a` `u` `i` `d` | Group Workspace and Global tabs by model, provider, agent, purpose, pricing tier, or day (the busiest day is marked with `*`). On the Quotas tab, `m` expands or collapses the full model list for each shared pool. |
+| `g` / `m` `p` `a` `u` `i` `d` | Cycle or directly select the Workspace and Global grouping by model, provider, agent, purpose, pricing tier, or day (the busiest day is marked with `*`). On the Quotas tab, `m` expands or collapses the full model list for each shared pool. |
 | `t` | Cycle the range: last 24 hours, 7 days, 30 days, all time (default 30 days). |
 | `r` | Refresh. |
 | `Esc` / `q` | Close. |

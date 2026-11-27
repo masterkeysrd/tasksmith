@@ -218,7 +218,7 @@ Authenticating with sentry…
 
 ✻ A browser window will open for authentication
 
-If your browser doesn't open automatically, copy this URL manually (c to copy)
+If your browser doesn't open automatically, copy this URL manually:
 https://auth.example.com/authorize?client_id=…&redirect_uri=http%3A%2F%2Flocalhost%3A56014%2Fcallback…
 
 If the redirect page shows a connection error, paste the URL from your browser's address bar:
@@ -227,7 +227,7 @@ URL >
 Return here after authenticating in your browser. Press Esc to go back.
 ```
 
-[Keyboard shortcuts](./keybindings.md#mcp-authentication).
+Press `Ctrl+Y` to copy the authorization URL without changing the paste field. See [keyboard shortcuts](./keybindings.md#mcp-authentication).
 
 The paste field is the escape hatch for a browser that cannot reach the daemon's loopback callback — a browser on another machine, a blocked `localhost`, or a redirect page that simply failed to load. It accepts the full address-bar URL, a bare query string, or an authorization code alone, and the waiting flow receives the code exactly as if the browser had reached the daemon.
 

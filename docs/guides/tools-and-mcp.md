@@ -181,7 +181,7 @@ For `auth.type: oauth2`, select the server in `/mcp` and press `a`, or run:
 ```
 
 1. Check the server name on the authorization screen. Complete sign-in in
-   the browser, or press `c` to copy the URL to a browser you can access.
+   the browser, or press `Ctrl+Y` to copy the URL to a browser you can access.
 2. If the loopback redirect can't reach the daemon, paste the final URL,
    query string or authorization code into the screen and press `Enter`.
 3. Look for `connected` and the outcome in the timeline. `Esc` dismisses
