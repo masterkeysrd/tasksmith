@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/masterkeysrd/kite/event"
@@ -15,6 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -51,21 +54,6 @@ func init() {
 			},
 		})
 	})
-}
-
-func formatSubagentDuration(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	if d < time.Minute {
-		return fmt.Sprintf("%.1fs", d.Seconds())
-	}
-	min := int(d.Minutes())
-	sec := int(d.Seconds()) % 60
-	return fmt.Sprintf("%dm%02ds", min, sec)
 }
 
 func formatSubagentStatus(s api.SessionStatus) string {
@@ -109,6 +97,12 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 	}, []any{props.SubagentID})
 
 	rev, setRev := kitex.UseState(0)
+	revCounter := kitex.UseMemo(func() *atomic.Int64 {
+		return &atomic.Int64{}
+	}, []any{props.SubagentID})
+	bumpRev := func() {
+		setRev(int(revCounter.Add(1)))
+	}
 	scroll := uicomponents.UseScroll(uicomponents.ScrollOptions{
 		FollowTail: true,
 		ExtraDeps:  []any{rev()},
@@ -121,7 +115,6 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 			return cancel
 		}
 		go func() {
-			localRev := 0
 			if loaded, err := c.GetSession(ctx, props.SubagentID); err == nil && loaded != nil {
 				setSubSession(loaded)
 				if tl, err := c.Timeline(ctx, props.SubagentID); err == nil {
@@ -131,16 +124,14 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 					conv.SeedPermissions(loaded.PendingPermissions)
 				}
 				conv.ReconcileStreamStatus(loaded)
-				localRev++
-				setRev(localRev)
+				bumpRev()
 			}
 			for ev, err := range c.Watch(ctx, "", api.SessionStreamTopic(props.SubagentID)) {
 				if err != nil {
 					break
 				}
 				conv.ApplyEvent(ev)
-				localRev++
-				setRev(localRev)
+				bumpRev()
 			}
 		}()
 		return cancel
@@ -158,9 +149,17 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 	if len(questions) == 0 {
 		questions = conv.PendingQuestions()
 	}
-	hasPrompt := len(perms) > 0 || len(questions) > 0
+	reviews := conv.PendingPlanReviews()
+	if sub != nil && len(sub.PendingPlanReviews) > 0 {
+		reviews = sub.PendingPlanReviews
+	}
+	planReviewActive := len(reviews) > 0 && len(perms) == 0 && len(questions) == 0
+	hasPrompt := len(perms) > 0 || len(questions) > 0 || len(reviews) > 0
 
 	trail.UseInput(func(input string, k event.KeyEvent) {
+		if planReviewActive {
+			return
+		}
 		if k.MatchString("esc", "escape") {
 			if props.OnClose != nil {
 				props.OnClose()
@@ -298,34 +297,55 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 				store.SubmitSubagentQuestion(props.SubagentID, req, resp, done)
 			},
 		})
+	} else if len(reviews) > 0 {
+		promptNode = components.PlanReviewPrompt(components.PlanReviewPromptProps{
+			Request: reviews[0],
+			OnSubmit: func(req api.PlanReviewRequest, dec api.PlanReviewDecision, done func(error)) {
+				store.SubmitSubagentPlanReview(props.SubagentID, req, dec, func(err error) {
+					if err == nil {
+						conv.RemovePlanReview(req.ID)
+						if cur := subSession(); cur != nil && len(cur.PendingPlanReviews) > 0 {
+							cp := *cur
+							cp.PendingPlanReviews = slices.DeleteFunc(slices.Clone(cp.PendingPlanReviews), func(p api.PlanReviewRequest) bool {
+								return p.ID == req.ID
+							})
+							setSubSession(&cp)
+						}
+						bumpRev()
+					}
+					done(err)
+				})
+			},
+		})
 	}
 
-	var bindings []uicomponents.KeyBinding
-	if !hasPrompt {
-		bindings = append(bindings,
-			uicomponents.KeyBinding{Key: "↑/↓ or j/k", Label: "Scroll"},
-			uicomponents.KeyBinding{Key: "pgup/pgdn", Label: "Page"},
-			uicomponents.KeyBinding{Key: "g/G", Label: "Top/Bottom"},
-		)
-	} else {
-		bindings = append(bindings,
-			uicomponents.KeyBinding{Key: "pgup/pgdn", Label: "Scroll chat"},
-		)
-	}
-	if sub != nil && sub.Status != api.StatusIdle {
-		bindings = append(bindings, uicomponents.KeyBinding{Key: "x", Label: "Kill subagent"})
-	}
-	bindings = append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Return"})
-
-	hintBar := uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-		Bindings: bindings,
-	})
-
-	mainChildren := []trail.Node{headerNode, chatBox}
+	var mainChildren = []trail.Node{headerNode, chatBox}
 	if promptNode != nil {
 		mainChildren = append(mainChildren, promptNode)
 	}
-	mainChildren = append(mainChildren, hintBar)
+	if !planReviewActive {
+		var bindings []uicomponents.KeyBinding
+		if !hasPrompt {
+			bindings = append(bindings,
+				uicomponents.KeyBinding{Key: "↑/↓ or j/k", Label: "Scroll"},
+				uicomponents.KeyBinding{Key: "pgup/pgdn", Label: "Page"},
+				uicomponents.KeyBinding{Key: "g/G", Label: "Top/Bottom"},
+			)
+		} else {
+			bindings = append(bindings,
+				uicomponents.KeyBinding{Key: "pgup/pgdn", Label: "Scroll chat"},
+			)
+		}
+		if !hasPrompt && sub != nil && sub.Status != api.StatusIdle {
+			bindings = append(bindings, uicomponents.KeyBinding{Key: "x", Label: "Kill subagent"})
+		}
+		bindings = append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Return"})
+
+		hintBar := uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
+			Bindings: bindings,
+		})
+		mainChildren = append(mainChildren, hintBar)
+	}
 
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
@@ -459,9 +479,9 @@ var SubagentsBrowser = trail.FC("SubagentsBrowser", func(slotID string) trail.No
 		if s.CreatedAt.IsZero() {
 			durStr = "-"
 		} else if s.Status != api.StatusIdle {
-			durStr = formatSubagentDuration(time.Since(s.CreatedAt))
+			durStr = format.Duration(time.Since(s.CreatedAt))
 		} else if !s.UpdatedAt.IsZero() {
-			durStr = formatSubagentDuration(s.UpdatedAt.Sub(s.CreatedAt))
+			durStr = format.Duration(s.UpdatedAt.Sub(s.CreatedAt))
 		} else {
 			durStr = "-"
 		}

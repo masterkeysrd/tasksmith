@@ -7,7 +7,19 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
+
+func TestPlanReviewAlert(t *testing.T) {
+	store.ResetSession()
+	t.Cleanup(store.ResetSession)
+	store.ClearSlot()
+	store.UpsertSubagent(api.Session{ID: "child", Status: api.StatusWaitingPlanReview})
+	out := testutils.Render(t, SubagentAlert(), 100, 24)
+	if !strings.Contains(out, "needs a plan review") || !strings.Contains(out, "ctrl+g") {
+		t.Fatal(out)
+	}
+}
 
 func TestInvokeAgentToolWidget(t *testing.T) {
 	call := &api.ToolCall{

@@ -7,7 +7,21 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
+
+func TestChildPlanReviewPrompt(t *testing.T) {
+	store.ResetSession()
+	t.Cleanup(store.ResetSession)
+	store.UpsertSubagent(api.Session{ID: "child", Status: api.StatusWaitingPlanReview, PendingPlanReviews: []api.PlanReviewRequest{{ID: "review", Path: "plans/update.md"}}})
+	out := testutils.Render(t, SubagentViewer(SubagentViewerProps{SubagentID: "child"}), 100, 30)
+	if !strings.Contains(out, "plans/update.md") || !strings.Contains(out, "Keep planning") {
+		t.Fatal(out)
+	}
+	if strings.Contains(out, "Kill subagent") || strings.Contains(out, "Return") {
+		t.Fatalf("expected SubagentViewer hint bar hidden while PlanReviewPrompt owns keys:\n%s", out)
+	}
+}
 
 func TestSubagentCommandRegistration(t *testing.T) {
 	reg := NewRegistry()

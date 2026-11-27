@@ -249,6 +249,20 @@ func TestPlanReviewEventsHydrationAndSubmit(t *testing.T) {
 	if got.PlanReview == nil || got.PlanReview.RequestID != pr.ID || got.PlanReview.ToolCallID != pr.ToolCallID || !got.PlanReview.Approved || got.PlanReview.Mode != api.ModeAuto {
 		t.Fatalf("unexpected payload: %+v", got.PlanReview)
 	}
+	UpsertSubagent(api.Session{ID: "child", Status: api.StatusWaitingPlanReview, PendingPlanReviews: []api.PlanReviewRequest{pr}})
+	SubmitSubagentPlanReview("child", pr, api.PlanReviewDecision{Approved: true}, func(err error) { done <- err })
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("child submission timed out")
+	}
+	child := <-payload
+	if child.PlanReview == nil || child.PlanReview.RequestID != pr.ID || child.PlanReview.ToolCallID != pr.ToolCallID || len(GetWaitingSubagents()) != 0 {
+		t.Fatal(child)
+	}
 	if GetSlot().Active != nil {
 		t.Fatal("successful submission did not remove slot")
 	}

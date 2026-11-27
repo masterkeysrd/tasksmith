@@ -286,6 +286,67 @@ func SubmitSubagentQuestion(subagentID string, req api.QuestionRequest, resp api
 	})
 }
 
+func SubmitSubagentPlanReview(id string, req api.PlanReviewRequest, decision api.PlanReviewDecision, done func(error)) {
+	sessMu.Lock()
+	c := activeClient
+	lc := ensureLifecycleLocked()
+	sessMu.Unlock()
+	if c == nil || id == "" || req.ID == "" {
+		if done != nil {
+			done(errors.New("repl: no active client or plan review"))
+		}
+		return
+	}
+	decision.RequestID, decision.ToolCallID = req.ID, req.ToolCallID
+	lc.goRun(func(ctx context.Context) {
+		err := c.Send(ctx, id, api.SendRequest{PlanReview: &decision})
+		if err == nil && ctx.Err() == nil {
+			session.Set(func(s SessionState) SessionState {
+				if s.Subagents == nil {
+					return s
+				}
+				subs := slices.Clone(*s.Subagents)
+				for i := range subs {
+					sub := &subs[i]
+					if sub.ID != id {
+						continue
+					}
+					sub.PendingPlanReviews = slices.DeleteFunc(slices.Clone(sub.PendingPlanReviews), func(p api.PlanReviewRequest) bool {
+						return p.ID == req.ID
+					})
+
+					if len(sub.PendingPlanReviews) == 0 && sub.Status == api.StatusWaitingPlanReview {
+						sub.Status = api.StatusExecuting
+					}
+					s.Subagents = &subs
+					if s.Session != nil {
+						parent := *s.Session
+						parent.Subagents = subs
+						s.Session = &parent
+					}
+					break
+				}
+				return s
+			})
+		}
+		if done != nil {
+			done(err)
+		}
+	})
+}
+
+func (s *SubagentConversation) PendingPlanReviews() []api.PlanReviewRequest {
+	s.acc.mu.Lock()
+	defer s.acc.mu.Unlock()
+	return slices.Clone(s.acc.planReviews)
+}
+
+func (s *SubagentConversation) RemovePlanReview(id string) {
+	s.acc.mu.Lock()
+	defer s.acc.mu.Unlock()
+	s.acc.removePlanReviewLocked(id)
+}
+
 // SubagentConversation maintains an isolated conversation stream for a subagent session.
 type SubagentConversation struct {
 	acc *conversationAccumulator
@@ -358,7 +419,12 @@ func (s *SubagentConversation) SessionStatus() api.SessionStatus {
 func (s *SubagentConversation) IsStreaming() bool {
 	s.acc.mu.Lock()
 	defer s.acc.mu.Unlock()
-	return s.acc.status == StreamRunning || s.acc.status == StreamWaitingPermission || s.acc.status == StreamWaitingQuestion || s.acc.status == StreamWaitingPlanReview || s.acc.pendingUser != nil || (s.acc.draft >= 0 && s.acc.status != StreamIdle && s.acc.status != StreamCompleted && s.acc.status != StreamFailed)
+	return s.acc.status == StreamRunning ||
+		s.acc.status == StreamWaitingPermission ||
+		s.acc.status == StreamWaitingQuestion ||
+		s.acc.status == StreamWaitingPlanReview ||
+		s.acc.pendingUser != nil ||
+		(s.acc.draft >= 0 && s.acc.status != StreamIdle && s.acc.status != StreamCompleted && s.acc.status != StreamFailed)
 }
 
 // Todos returns a snapshot of active checklist items for the subagent.

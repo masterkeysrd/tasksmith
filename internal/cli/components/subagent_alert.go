@@ -97,7 +97,11 @@ var SubagentAlert = trail.SimpleFC("SubagentAlert", func() trail.Node {
 				Style: style.S().Foreground(scheme.Color.Text.Secondary),
 			}, trail.Text(actionHint)),
 		))
-	} else if len(sub.PendingQuestions) > 0 || sub.Status == api.StatusWaitingQuestion {
+	} else if len(sub.PendingQuestions) > 0 || sub.Status == api.StatusWaitingQuestion || len(sub.PendingPlanReviews) > 0 || sub.Status == api.StatusWaitingPlanReview {
+		message := "is waiting for an answer"
+		if len(sub.PendingPlanReviews) > 0 || sub.Status == api.StatusWaitingPlanReview {
+			message = "needs a plan review"
+		}
 		// Line 1: ⚠ Subagent @<agent> (<title>) is waiting for an answer
 		lines = append(lines, trail.Box(trail.BoxProps{Style: headerStyle},
 			trail.Span(trail.SpanProps{
@@ -108,7 +112,7 @@ var SubagentAlert = trail.SimpleFC("SubagentAlert", func() trail.Node {
 			}, trail.Text("@"+agentName)),
 			trail.Span(trail.SpanProps{
 				Style: style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary),
-			}, trail.Text(fmt.Sprintf(" (%s) is waiting for an answer", title))),
+			}, trail.Text(fmt.Sprintf(" (%s) %s", title, message))),
 		))
 
 		// Line 2: ctrl+g manage subagent (+N more waiting)
