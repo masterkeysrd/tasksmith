@@ -9,7 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@rspress/core": "^2.0.0",
+    "@rspress/core": "^2.1.4",
     "mermaid": "^11.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
