@@ -1,6 +1,7 @@
 package components
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,7 +13,8 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
-	"github.com/masterkeysrd/tasksmith/internal/ui/components"
+	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -115,24 +117,7 @@ func nextSandboxMode(current api.SandboxMode, effective api.SandboxMode) api.San
 	}
 }
 
-// sandboxTabStrip renders the bracketed tab strip and optional scope/saving
-// suffix, mirroring the /usage tab bar conventions while letting the scope
-// indicator wrap onto a second line on narrow terminals instead of clipping.
-func sandboxTabStrip(active sandboxEditorTab, scopeTitle string, excludedCount int, saving bool) (tabs string, meta string) {
-	labels := []string{
-		"1 Policy",
-		fmt.Sprintf("2 Exclusions (%d)", excludedCount),
-		"3 Effective",
-	}
-	parts := make([]string, len(labels))
-	for i, label := range labels {
-		if sandboxEditorTab(i) == active {
-			label = "[" + label + "]"
-		}
-		parts[i] = label
-	}
-	tabs = strings.Join(parts, "  ")
-
+func sandboxTabMeta(active sandboxEditorTab, scopeTitle string, saving bool) string {
 	var metaParts []string
 	if active != sandboxTabResolved {
 		projectLabel, globalLabel := "Project", "[Global]"
@@ -144,8 +129,7 @@ func sandboxTabStrip(active sandboxEditorTab, scopeTitle string, excludedCount i
 	if saving {
 		metaParts = append(metaParts, "saving…")
 	}
-	meta = strings.Join(metaParts, "  · ")
-	return tabs, meta
+	return strings.Join(metaParts, "  · ")
 }
 
 // windowIndex returns the half-open [start, end) slice of count rows that a
@@ -163,7 +147,7 @@ func windowIndex(cur, count, size int) (start, end int) {
 
 // SandboxConfigEditor is a 3-tab interactive sandbox.json configuration manager.
 var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConfigEditorProps) trail.Node {
-	scheme := theme.UseTheme()
+	sheet := styles.Use(newSandboxEditorStyles)
 	winSize := trail.UseWindowSize()
 
 	tab, setTab := kitex.UseState(sandboxTabPolicy)
@@ -203,7 +187,7 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 	if tab() == sandboxTabExcluded {
 		maxRows = len(excluded)
 	}
-	cursor := components.UseCursor(maxRows, 0)
+	cursor := uicomponents.UseCursor(maxRows, 0)
 	cur := cursor.Index
 
 	var resolvedContent []sandboxLine
@@ -225,160 +209,100 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 		}
 	}
 
-	trail.UseInput(func(input string, k event.KeyEvent) {
-		if inInput() {
-			return
-		}
-
-		switch {
-		case k.MatchString("shift+tab"), k.MatchString("left"):
-			if tab() > sandboxTabPolicy {
-				setTab(tab() - 1)
-			} else {
-				setTab(sandboxTabResolved)
-			}
-			cursor.Set(0)
-			setOffset(0)
-			clearError()
-		case k.MatchString("tab", "right"):
-			if tab() < sandboxTabResolved {
-				setTab(tab() + 1)
-			} else {
-				setTab(sandboxTabPolicy)
-			}
-			cursor.Set(0)
-			setOffset(0)
-			clearError()
-		case k.MatchString("1"):
-			setTab(sandboxTabPolicy)
-			cursor.Set(0)
-			setOffset(0)
-			clearError()
-		case k.MatchString("2"):
-			setTab(sandboxTabExcluded)
-			cursor.Set(0)
-			setOffset(0)
-			clearError()
-		case k.MatchString("3"):
-			setTab(sandboxTabResolved)
-			cursor.Set(0)
-			setOffset(0)
-			clearError()
-		case tab() != sandboxTabResolved && k.MatchString("s"):
-			if scopeIndex() == 0 {
-				setScopeIndex(1)
-			} else {
-				setScopeIndex(0)
-			}
+	tabs := []uicomponents.TabItem{
+		{Label: "Policy"},
+		{Label: fmt.Sprintf("Exclusions (%d)", len(excluded))},
+		{Label: "Effective"},
+	}
+	switchTab := func(i int) {
+		setTab(sandboxEditorTab(i))
+		cursor.Set(0)
+		setOffset(0)
+		clearError()
+	}
+	actions := uicomponents.TabKeyActions(len(tabs), int(tab()), switchTab, inInput())
+	actions[0].Keys = append(actions[0].Keys, "right")
+	actions[0].Hint = "←/→"
+	actions[0].Label = "Tab"
+	actions[1].Keys = append(actions[1].Keys, "left")
+	actions = append(actions, uicomponents.KeyAction{
+		Keys:     []string{"s"},
+		Label:    "Scope",
+		Disabled: tab() == sandboxTabResolved,
+		OnPress: func() {
+			setScopeIndex(1 - scopeIndex())
 			cursor.Set(0)
 			clearError()
-		case k.MatchString("up", "k", "ctrl+p"):
-			if tab() == sandboxTabResolved {
-				setOffset(max(0, pos-1))
-			} else {
-				cursor.HandleKey(k)
-			}
-		case k.MatchString("down", "j", "ctrl+n"):
-			if tab() == sandboxTabResolved {
-				setOffset(min(maxOffset, pos+1))
-			} else {
-				cursor.HandleKey(k)
-			}
-		case tab() == sandboxTabResolved && k.MatchString("pgup"):
-			setOffset(max(0, pos-viewport))
-		case tab() == sandboxTabResolved && k.MatchString("pgdown", "space"):
-			setOffset(min(maxOffset, pos+viewport))
-		case tab() == sandboxTabResolved && input == "g":
-			setOffset(0)
-		case tab() == sandboxTabResolved && input == "G":
-			setOffset(maxOffset)
-		case k.MatchString("esc", "escape"):
-			if props.OnClose != nil {
-				props.OnClose()
-			}
-		}
-
-		switch tab() {
-		case sandboxTabPolicy:
-			switch {
-			case k.MatchString("enter", "t", "space"):
-				if cur < 0 || cur >= len(policyRows) {
-					return
-				}
-				row := policyRows[cur]
-				if row.knob == "" {
-					if props.OnSetMode != nil {
-						props.OnSetMode(activeScope, nextSandboxMode(scopeSettings.Mode, props.Response.Effective.Mode))
+		},
+	})
+	move := cursor.Move
+	moveLabel := "Move"
+	if tab() == sandboxTabResolved {
+		moveLabel = "Scroll"
+		move = func(delta int) { setOffset(max(0, min(maxOffset, pos+delta))) }
+	}
+	actions = append(actions, []uicomponents.KeyAction{
+		{Keys: []string{"up", "k", "ctrl+p"}, Hint: "↑/↓", Label: moveLabel, OnPress: func() { move(-1) }},
+		{Keys: []string{"down", "j", "ctrl+n"}, OnPress: func() { move(1) }},
+	}...)
+	switch tab() {
+	case sandboxTabPolicy:
+		row := policyRows[cur]
+		update := func(reset bool) {
+			if row.knob == "" {
+				if props.OnSetMode != nil {
+					var mode api.SandboxMode
+					if !reset {
+						mode = nextSandboxMode(scopeSettings.Mode, props.Response.Effective.Mode)
 					}
-					return
+					props.OnSetMode(activeScope, mode)
 				}
-				if activeLocked[row.knob] != "" || props.OnToggleKnob == nil {
-					return
-				}
-				// Flip the scope's own value when set; an unset override
-				// flips the effective value, which is what writing an
-				// explicit value will actually change.
-				base := knobValue(scopeSettings, row.knob)
+				return
+			}
+			if activeLocked[row.knob] != "" || props.OnToggleKnob == nil {
+				return
+			}
+			var value *bool
+			if !reset {
+				base := cmp.Or(knobValue(scopeSettings, row.knob), knobValue(props.Response.Effective, row.knob))
 				if base == nil {
-					base = knobValue(props.Response.Effective, row.knob)
-				}
-				if base != nil {
-					next := !*base
-					props.OnToggleKnob(activeScope, row.knob, &next)
-				}
-			case input == "x" || input == "X" || k.MatchString("x", "backspace", "delete"):
-				if cur < 0 || cur >= len(policyRows) {
 					return
 				}
-				row := policyRows[cur]
-				if row.knob == "" {
-					if props.OnSetMode != nil {
-						props.OnSetMode(activeScope, "")
-					}
-					return
-				}
-				if activeLocked[row.knob] == "" && props.OnToggleKnob != nil {
-					props.OnToggleKnob(activeScope, row.knob, nil)
-				}
+				next := !*base
+				value = &next
 			}
-
-		case sandboxTabExcluded:
-			switch {
-			case input == "a" || input == "A" || k.MatchString("a"):
-				setEditing("")
-				setInInput(true)
-				setInputText("")
-				clearError()
-			case input == "e" || input == "E" || k.MatchString("e"):
-				if len(excluded) > 0 && cur < len(excluded) {
-					setEditing(excluded[cur])
-					setInInput(true)
-					setInputText(excluded[cur])
-					clearError()
-				}
-			case input == "d" || input == "D" || k.MatchString("d", "backspace", "delete"):
-				if len(excluded) > 0 && cur < len(excluded) && props.OnRemoveExcluded != nil {
+			props.OnToggleKnob(activeScope, row.knob, value)
+		}
+		actions = append(actions, []uicomponents.KeyAction{
+			{Keys: []string{"space", "enter", "t"}, Label: "Toggle", OnPress: func() { update(false) }},
+			{Keys: []string{"x", "X", "backspace", "delete"}, Label: "Reset", OnPress: func() { update(true) }},
+		}...)
+	case sandboxTabExcluded:
+		open := func(pattern string) {
+			setEditing(pattern)
+			setInputText(pattern)
+			setInInput(true)
+			clearError()
+		}
+		actions = append(actions, []uicomponents.KeyAction{
+			{Keys: []string{"a", "A"}, Label: "Add", OnPress: func() { open("") }},
+			{Keys: []string{"e", "E"}, Label: "Edit", Disabled: len(excluded) == 0, OnPress: func() { open(excluded[cur]) }},
+			{Keys: []string{"d", "D", "backspace", "delete"}, Label: "Delete", Disabled: len(excluded) == 0, OnPress: func() {
+				if props.OnRemoveExcluded != nil {
 					props.OnRemoveExcluded(activeScope, excluded[cur])
 				}
-			}
-		}
-	})
-
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Icon.Primary)
-	barStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
-	primaryStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
-	textPrimaryStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)
-	secondaryStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
-	mutedStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Muted)
-	accentStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Accent)
-	textSuccessStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Success)
-	textWarnStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Warning)
-	textErrorStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Error)
-	errorStyle := style.S().Foreground(scheme.Color.Text.Error)
-	successStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Success)
-	warnStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Warning)
-	wrapStyle := style.S().Foreground(scheme.Color.Text.Muted).OverflowWrap(style.OverflowWrapAnywhere)
+			}},
+		}...)
+	case sandboxTabResolved:
+		actions = append(actions, []uicomponents.KeyAction{
+			{Keys: []string{"pgup"}, Hint: "pgup/pgdn", Label: "Page", OnPress: func() { move(-viewport) }},
+			{Keys: []string{"pgdown", "space"}, OnPress: func() { move(viewport) }},
+			{Keys: []string{"g"}, OnPress: func() { setOffset(0) }},
+			{Keys: []string{"G", "shift+g"}, OnPress: func() { setOffset(maxOffset) }},
+		}...)
+	}
+	actions = append(actions, uicomponents.KeyAction{Keys: []string{"esc", "escape"}, Label: "Close", OnPress: props.OnClose})
+	bindings := uicomponents.UseKeyMap(actions, !inInput())
 
 	var contentWidth int
 	if winSize.Width > 0 {
@@ -398,36 +322,10 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 		return trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{Style: st}, trail.Text(truncate(text))))
 	}
 
-	var children []trail.Node
-
-	// Fixed header: title + wrapping tab/scope strip (scope chrome and saving
-	// status live inline on wide screens and wrap cleanly onto a second line on
-	// narrow panes instead of clipping).
-	tabsText, metaText := sandboxTabStrip(tab(), scopeTitle, len(excluded), props.Saving)
-	barChildren := []trail.Node{
-		trail.Span(trail.SpanProps{Style: barStyle.Flex(0, 0)}, trail.Text(truncate(tabsText))),
-	}
-	if metaText != "" {
-		barChildren = append(barChildren,
-			trail.Span(trail.SpanProps{Style: barStyle.Flex(0, 0)}, trail.Text(truncate(metaText))),
-		)
-	}
-	children = append(children,
-		row(titleStyle, "Sandbox"),
-		trail.Box(trail.BoxProps{
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexRow).
-				FlexWrap(style.FlexWrapOn).
-				Gap(0, 4).
-				Width(style.Percent(100)),
-		}, barChildren...),
-		row(mutedStyle, ""),
-	)
-
+	var body trail.Node
 	switch tab() {
 	case sandboxTabPolicy:
-		children = append(children, policyTabNodes(policyTabParams{
+		body = policyTabNodes(policyTabParams{
 			scopeTitle:    scopeTitle,
 			scopeSettings: scopeSettings,
 			effective:     props.Response.Effective,
@@ -436,25 +334,19 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 			restricted:    props.Response.Restricted,
 			locked:        activeLocked,
 			cursor:        cur,
-			styles: editorStyles{
-				primary:   primaryStyle,
-				secondary: secondaryStyle,
-				muted:     mutedStyle,
-				success:   successStyle,
-				warn:      warnStyle,
-			},
-			row: row,
+			styles:        sheet.editorStyles,
+			row:           row,
 			wrapColumn: func(text string, indent int) trail.Node {
 				return trail.Box(trail.BoxProps{
-					Style: style.S().FlexDirection(style.FlexColumn).Width(style.Percent(100)).PaddingLeft(indent),
-				}, trail.Span(trail.SpanProps{Style: wrapStyle}, trail.Text(text)))
+					Style: sheet.column.PaddingLeft(indent),
+				}, trail.Span(trail.SpanProps{Style: sheet.wrap}, trail.Text(text)))
 			},
-		})...)
+		})
 
 	case sandboxTabExcluded:
 		listHeight := max(winSize.Height-12, 5)
 		start, end := windowIndex(cur, len(excluded), listHeight)
-		children = append(children, excludedTabNodes(excludedTabParams{
+		body = excludedTabNodes(excludedTabParams{
 			scopeTitle:  scopeTitle,
 			excluded:    excluded,
 			inherited:   inherited,
@@ -463,51 +355,31 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 			start:       start,
 			end:         end,
 			warnOff:     effExclusionsOff,
-			styles: editorStyles{
-				primary:   primaryStyle,
-				secondary: secondaryStyle,
-				muted:     mutedStyle,
-				warn:      warnStyle,
-			},
-			row: row,
-		})...)
+			styles:      sheet.editorStyles,
+			row:         row,
+		})
 
 	case sandboxTabResolved:
-		children = append(children, resolvedTabNodes(resolvedTabParams{
+		body = resolvedTabNodes(resolvedTabParams{
 			lines:        resolvedContent,
 			pos:          pos,
 			end:          min(len(resolvedContent), pos+viewport),
 			total:        len(resolvedContent),
 			contentWidth: contentWidth,
-			styles: resolvedStyles{
-				heading:     primaryStyle,
-				primaryText: textPrimaryStyle,
-				secondary:   secondaryStyle,
-				muted:       mutedStyle,
-				accent:      accentStyle,
-				success:     textSuccessStyle,
-				warn:        textWarnStyle,
-				danger:      textErrorStyle,
-			},
-			row: row,
-		})...)
+			styles:       sheet.resolvedStyles,
+			row:          row,
+		})
 	}
 
-	errText := localError()
-	if errText == "" && props.ErrorMessage != "" {
-		errText = props.ErrorMessage
-	}
-	if errText != "" {
-		children = append(children, row(errorStyle, errText))
-	}
-
+	var prompt trail.Node
 	if inInput() {
+		bindings = []uicomponents.KeyBinding{{Key: "enter", Label: "Save"}, {Key: "esc", Label: "Cancel"}}
 		inputTitle := fmt.Sprintf("Add excluded command pattern (%s):", scopeTitle)
 		if editing() != "" {
 			inputTitle = fmt.Sprintf("Edit excluded command pattern (%s):", scopeTitle)
 		}
-		children = append(children,
-			trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(inputTitle))),
+		prompt = kitex.Fragment(
+			trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{Style: sheet.primary}, trail.Text(inputTitle))),
 			trail.Box(trail.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
@@ -515,7 +387,7 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 					AlignItems(style.AlignCenter).
 					Width(style.Percent(100)),
 			},
-				trail.Span(trail.SpanProps{Style: primaryStyle}, trail.Text("❯ ")),
+				trail.Span(trail.SpanProps{Style: sheet.primary}, trail.Text("❯ ")),
 				kitex.Input(kitex.InputProps{
 					Ref:   inputRef,
 					Value: inputText(),
@@ -577,52 +449,18 @@ var SandboxConfigEditor = trail.FC("SandboxConfigEditor", func(props SandboxConf
 					},
 				}),
 			),
-			trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{Style: mutedStyle},
+			trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{Style: sheet.editorStyles.muted},
 				trail.Text("Examples: git commit *, docker build *, make release"))),
-			components.KeyboardHint(components.KeyboardHintProps{Bindings: []components.KeyBinding{
-				{Key: "enter", Label: "Save"},
-				{Key: "esc", Label: "Cancel"},
-			}}),
 		)
-	} else {
-		var bindings []components.KeyBinding
-		switch tab() {
-		case sandboxTabPolicy:
-			bindings = []components.KeyBinding{
-				{Key: "←/→", Label: "Tab"},
-				{Key: "s", Label: "Scope"},
-				{Key: "↑/↓", Label: "Move"},
-				{Key: "space", Label: "Toggle"},
-				{Key: "x", Label: "Reset"},
-				{Key: "esc", Label: "Close"},
-			}
-		case sandboxTabExcluded:
-			bindings = []components.KeyBinding{
-				{Key: "←/→", Label: "Tab"},
-				{Key: "s", Label: "Scope"},
-				{Key: "↑/↓", Label: "Move"},
-				{Key: "a", Label: "Add"},
-				{Key: "e", Label: "Edit"},
-				{Key: "d", Label: "Delete"},
-				{Key: "esc", Label: "Close"},
-			}
-		case sandboxTabResolved:
-			bindings = []components.KeyBinding{
-				{Key: "←/→", Label: "Tab"},
-				{Key: "↑/↓", Label: "Scroll"},
-				{Key: "pgup/pgdn", Label: "Page"},
-				{Key: "esc", Label: "Close"},
-			}
-		}
-		children = append(children, components.KeyboardHint(components.KeyboardHintProps{Bindings: bindings}))
 	}
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	}, children...)
+	return uicomponents.Panel(uicomponents.PanelProps{
+		Header:   row(sheet.primary, "Sandbox"),
+		Error:    cmp.Or(localError(), props.ErrorMessage),
+		Bindings: bindings,
+	}, uicomponents.TabBar(uicomponents.TabBarProps{
+		Tabs: tabs, Active: int(tab()), Numbered: true,
+		Meta: sandboxTabMeta(tab(), scopeTitle, props.Saving), MarginBottom: 1,
+	}), body, prompt)
 })
 
 func containsPattern(patterns []string, pattern string) bool {
@@ -633,8 +471,36 @@ type editorStyles struct {
 	primary   style.Style
 	secondary style.Style
 	muted     style.Style
-	success   style.Style
 	warn      style.Style
+}
+
+type sandboxEditorStyles struct {
+	editorStyles
+	resolvedStyles
+	column, wrap style.Style
+}
+
+func newSandboxEditorStyles(s *theme.Scheme) sandboxEditorStyles {
+	c := styles.NewCommon(s)
+	pre := style.WhiteSpacePre
+	heading := style.S().Foreground(s.Color.Icon.Primary).
+		Bold(true).
+		WhiteSpace(pre)
+	muted, secondary := c.Muted.WhiteSpace(pre), c.Secondary.WhiteSpace(pre)
+	return sandboxEditorStyles{
+		editorStyles: editorStyles{primary: heading, secondary: secondary, muted: muted, warn: c.Warning.Bold(true)},
+		resolvedStyles: resolvedStyles{
+			heading:     heading,
+			primaryText: c.Primary.WhiteSpace(pre),
+			secondary:   secondary,
+			muted:       muted,
+			accent:      c.Accent.WhiteSpace(pre),
+			success:     c.Success.WhiteSpace(pre),
+			warn:        c.Warning.WhiteSpace(pre),
+			danger:      c.Error.WhiteSpace(pre),
+		},
+		column: c.Column.Width(style.Percent(100)), wrap: c.Muted.OverflowWrap(style.OverflowWrapAnywhere),
+	}
 }
 
 type policyTabParams struct {
@@ -658,109 +524,81 @@ func policyRowText(label, effective, override string) string {
 	return fmt.Sprintf("%-*s%-14s%s", policyLabelCol, label, effective, override)
 }
 
-func policyTabNodes(p policyTabParams) []trail.Node {
-	var nodes []trail.Node
-
-	// Live runtime status banner.
-	sessionLine := "Active session:    none"
+func policyTabNodes(p policyTabParams) trail.Node {
+	session := "none"
 	if p.sessionMode != "" {
-		sessionLine = fmt.Sprintf("Active session:    %s sandbox (mode edits apply to new sessions)", p.sessionMode)
+		session = fmt.Sprintf("%s sandbox (mode edits apply to new sessions)", p.sessionMode)
 	}
-	nodes = append(nodes, p.row(p.styles.secondary, sessionLine))
-
-	backendLine := "Host backend:      ⚠ unavailable — sessions run with local isolation"
-	backendStyle := p.styles.warn
+	backend := uicomponents.KVItem{Label: "Host backend", Value: "⚠ unavailable — sessions run with local isolation", Tone: uicomponents.ToneWarning}
 	if p.availability.Available {
-		backendLine = fmt.Sprintf("Host backend:      ✔ %s available", p.availability.Backend)
-		backendStyle = p.styles.success
+		backend.Value = "✔ " + p.availability.Backend + " available"
+		backend.Tone = uicomponents.ToneSuccess
 	} else if p.availability.Backend != "" {
-		backendLine = fmt.Sprintf("Host backend:      ⚠ %s unavailable", p.availability.Backend)
+		backend.Value = "⚠ " + p.availability.Backend + " unavailable"
 	}
-	nodes = append(nodes, p.row(backendStyle, backendLine))
-	if !p.availability.Available {
-		if p.availability.Error != "" {
-			nodes = append(nodes, p.row(p.styles.muted, "  error: "+p.availability.Error))
-		}
-		if p.availability.Remediation != "" {
-			// Remediation carries the exact command to run, so it must never
-			// be truncated away; it wraps across lines instead.
-			nodes = append(nodes, p.wrapColumn("Fix: "+p.availability.Remediation, 0))
-		}
-	}
-
-	trustLine := "Workspace trust:   ✔ trusted"
-	trustStyle := p.styles.success
+	trust := uicomponents.KVItem{Label: "Workspace trust", Value: "✔ trusted", Tone: uicomponents.ToneSuccess}
 	if p.restricted {
-		trustLine = "Workspace trust:   ⚠ untrusted (unsandboxed execution disabled)"
-		trustStyle = p.styles.warn
+		trust.Value = "⚠ untrusted (unsandboxed execution disabled)"
+		trust.Tone = uicomponents.ToneWarning
 	}
-	nodes = append(nodes, p.row(trustStyle, trustLine))
-
-	nodes = append(nodes, p.row(p.styles.muted, ""))
-
-	// Aligned 3-column settings table.
-	overrideCol := fmt.Sprintf("%s override", p.scopeTitle)
-	nodes = append(nodes, p.row(p.styles.muted, policyRowText("Setting", "Effective", overrideCol)))
 	rows := sandboxPolicyRows()
-	for i, r := range rows {
-		selected := p.cursor == i
-		rowStyle := p.styles.secondary
-		if selected {
-			rowStyle = p.styles.primary
-		}
+	selectedRow := rows[p.cursor]
+	detail := p.row(p.styles.muted, "  key: "+selectedRow.key)
+	if p.locked[selectedRow.knob] != "" {
+		detail = p.wrapColumn("key: "+selectedRow.key+" · locked: edit that scope (s) or its pinning setting to change this", 2)
+	}
+	return kitex.Fragment(
+		uicomponents.KVList(uicomponents.KVListProps{MinLabelWidth: 17, Items: []uicomponents.KVItem{{Label: "Active session", Value: session}, backend}}),
+		kitex.If(!p.availability.Available && p.availability.Error != "", func() trail.Node { return p.row(p.styles.muted, "  error: "+p.availability.Error) }),
+		kitex.If(!p.availability.Available && p.availability.Remediation != "", func() trail.Node { return p.wrapColumn("Fix: "+p.availability.Remediation, 0) }),
+		uicomponents.KVList(uicomponents.KVListProps{MinLabelWidth: 17, Items: []uicomponents.KVItem{trust}}),
+		p.row(p.styles.muted, ""),
+		p.row(p.styles.muted, policyRowText("Setting", "Effective", p.scopeTitle+" override")),
+		kitex.Map(rows, func(r sandboxPolicyRow, i int) trail.Node {
+			selected := p.cursor == i
+			rowStyle := p.styles.secondary
+			if selected {
+				rowStyle = p.styles.primary
+			}
 
-		var effectiveCell, overrideCell string
-		if r.knob == "" {
-			effMode := p.effective.Mode
-			if effMode == "" {
-				effMode = api.SandboxLocal
+			var effectiveCell, overrideCell string
+			if r.knob == "" {
+				effMode := p.effective.Mode
+				if effMode == "" {
+					effMode = api.SandboxLocal
+				}
+				effectiveCell = "● " + string(effMode)
+			} else {
+				eff := knobValue(p.effective, r.knob)
+				effectiveCell = "○ off"
+				if eff != nil && *eff {
+					effectiveCell = "● on"
+				}
 			}
-			effectiveCell = "● " + string(effMode)
-		} else {
-			eff := knobValue(p.effective, r.knob)
-			effectiveCell = "○ off"
-			if eff != nil && *eff {
-				effectiveCell = "● on"
-			}
-		}
-		if reason, locked := p.locked[r.knob]; locked {
-			overrideCell = "🔒 locked (" + reason + ")"
-		} else if r.knob == "" {
-			if p.scopeSettings.Mode != "" {
-				overrideCell = string(p.scopeSettings.Mode)
+			if reason, locked := p.locked[r.knob]; locked {
+				overrideCell = "🔒 locked (" + reason + ")"
+			} else if r.knob == "" {
+				if p.scopeSettings.Mode != "" {
+					overrideCell = string(p.scopeSettings.Mode)
+				} else {
+					overrideCell = "inherited"
+				}
+			} else if val := knobValue(p.scopeSettings, r.knob); val != nil {
+				overrideCell = fmt.Sprintf("%v", *val)
 			} else {
 				overrideCell = "inherited"
 			}
-		} else if val := knobValue(p.scopeSettings, r.knob); val != nil {
-			overrideCell = fmt.Sprintf("%v", *val)
-		} else {
-			overrideCell = "inherited"
-		}
 
-		mark := "  "
-		if selected {
-			mark = "❯ "
-		}
-		nodes = append(nodes, p.row(rowStyle, mark+policyRowText(r.label, effectiveCell, overrideCell)))
-	}
-
-	// Fixed detail footer: description and JSON key for the highlighted row
-	// plus lock guidance when the knob is pinned. Key usage itself comes from
-	// the KeyboardHint below. It never inserts or collapses rows inside the
-	// table.
-	if p.cursor >= 0 && p.cursor < len(rows) {
-		r := rows[p.cursor]
-		nodes = append(nodes, p.row(p.styles.muted, ""))
-		nodes = append(nodes, p.wrapColumn(r.desc, 2))
-		if lockReason := p.locked[r.knob]; lockReason != "" {
-			nodes = append(nodes, p.wrapColumn(
-				fmt.Sprintf("key: %s · locked: edit that scope (s) or its pinning setting to change this", r.key), 2))
-		} else {
-			nodes = append(nodes, p.row(p.styles.muted, "  key: "+r.key))
-		}
-	}
-
-	return nodes
+			mark := "  "
+			if selected {
+				mark = "❯ "
+			}
+			return p.row(rowStyle, mark+policyRowText(r.label, effectiveCell, overrideCell))
+		}),
+		p.row(p.styles.muted, ""),
+		p.wrapColumn(selectedRow.desc, 2),
+		detail,
+	)
 }
 
 type excludedTabParams struct {
@@ -776,43 +614,35 @@ type excludedTabParams struct {
 	row         func(style.Style, string) trail.Node
 }
 
-func excludedTabNodes(p excludedTabParams) []trail.Node {
-	var nodes []trail.Node
-	if p.warnOff {
-		nodes = append(nodes, p.row(p.styles.warn,
-			"⚠ Inactive: \"Allow unsandboxed\" is off, so excluded commands still run sandboxed."))
-	}
-	nodes = append(nodes, p.row(p.styles.secondary, fmt.Sprintf("Excluded commands — %s (%d)", p.scopeTitle, len(p.excluded))))
-	if len(p.excluded) == 0 {
-		nodes = append(nodes, p.row(p.styles.secondary, "No excluded commands. Press a to add one (e.g. \"git commit *\")."))
-	} else {
-		if p.start > 0 {
-			nodes = append(nodes, p.row(p.styles.muted, fmt.Sprintf("  ↑ %d more", p.start)))
-		}
-		for i := p.start; i < p.end && i < len(p.excluded); i++ {
-			styleRow := p.styles.secondary
-			if i == p.cursor {
-				styleRow = p.styles.primary
+func excludedTabNodes(p excludedTabParams) trail.Node {
+	return kitex.Fragment(
+		kitex.If(p.warnOff, func() trail.Node {
+			return p.row(p.styles.warn, `⚠ Inactive: "Allow unsandboxed" is off, so excluded commands still run sandboxed.`)
+		}),
+		p.row(p.styles.secondary, fmt.Sprintf("Excluded commands — %s (%d)", p.scopeTitle, len(p.excluded))),
+		kitex.If(len(p.excluded) == 0, func() trail.Node {
+			return p.row(p.styles.secondary, `No excluded commands. Press a to add one (e.g. "git commit *").`)
+		}),
+		kitex.If(p.start > 0, func() trail.Node {
+			return p.row(p.styles.muted, fmt.Sprintf("  ↑ %d more", p.start))
+		}),
+		kitex.Map(p.excluded[p.start:p.end], func(pattern string, i int) trail.Node {
+			if p.start+i == p.cursor {
+				return p.row(p.styles.primary, "❯ "+pattern)
 			}
-			mark := "  "
-			if i == p.cursor {
-				mark = "❯ "
-			}
-			nodes = append(nodes, p.row(styleRow, mark+p.excluded[i]))
-		}
-		if p.end < len(p.excluded) {
-			nodes = append(nodes, p.row(p.styles.muted, fmt.Sprintf("  ↓ %d more", len(p.excluded)-p.end)))
-		}
-	}
-	if p.showInherit {
-		nodes = append(nodes, p.row(p.styles.muted, ""))
-		nodes = append(nodes, p.row(p.styles.muted,
-			fmt.Sprintf("Inherited from Global (%d) — press s to edit Global", len(p.inherited))))
-		for _, pattern := range p.inherited {
-			nodes = append(nodes, p.row(p.styles.muted, "  "+pattern))
-		}
-	}
-	return nodes
+			return p.row(p.styles.secondary, "  "+pattern)
+		}),
+		kitex.If(p.end < len(p.excluded), func() trail.Node {
+			return p.row(p.styles.muted, fmt.Sprintf("  ↓ %d more", len(p.excluded)-p.end))
+		}),
+		kitex.If(p.showInherit, func() trail.Node {
+			return kitex.Fragment(
+				p.row(p.styles.muted, ""),
+				p.row(p.styles.muted, fmt.Sprintf("Inherited from Global (%d) — press s to edit Global", len(p.inherited))),
+				kitex.Map(p.inherited, func(pattern string, _ int) trail.Node { return p.row(p.styles.muted, "  "+pattern) }),
+			)
+		}),
+	)
 }
 
 type sandboxLineRole int
@@ -1029,25 +859,18 @@ type resolvedTabParams struct {
 	row          func(style.Style, string) trail.Node
 }
 
-func resolvedTabNodes(p resolvedTabParams) []trail.Node {
-	var nodes []trail.Node
-	for _, l := range p.lines[p.pos:p.end] {
-		if len(l.spans) == 0 {
-			nodes = append(nodes, p.row(p.styles.muted, ""))
-			continue
-		}
-		spans := truncateSandboxSpans(l.spans, p.contentWidth)
-		children := make([]trail.Node, 0, len(spans))
-		for _, sp := range spans {
-			children = append(children, trail.Span(trail.SpanProps{
-				Style: p.styles.styleFor(sp.role),
-			}, trail.Text(sp.text)))
-		}
-		nodes = append(nodes, trail.Box(trail.BoxProps{}, children...))
-	}
-	if p.total > p.end-p.pos {
-		nodes = append(nodes, p.row(p.styles.muted,
-			fmt.Sprintf("lines %d-%d of %d", p.pos+1, p.end, p.total)))
-	}
-	return nodes
+func resolvedTabNodes(p resolvedTabParams) trail.Node {
+	return kitex.Fragment(
+		kitex.Map(p.lines[p.pos:p.end], func(line sandboxLine, _ int) trail.Node {
+			if len(line.spans) == 0 {
+				return p.row(p.styles.muted, "")
+			}
+			return trail.Box(trail.BoxProps{}, kitex.Map(truncateSandboxSpans(line.spans, p.contentWidth), func(span sandboxSpan, _ int) trail.Node {
+				return trail.Span(trail.SpanProps{Style: p.styles.styleFor(span.role)}, trail.Text(span.text))
+			}))
+		}),
+		kitex.If(p.total > p.end-p.pos, func() trail.Node {
+			return p.row(p.styles.muted, fmt.Sprintf("lines %d-%d of %d", p.pos+1, p.end, p.total))
+		}),
+	)
 }

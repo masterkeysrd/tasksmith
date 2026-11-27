@@ -1,6 +1,7 @@
 package components
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 
@@ -10,7 +11,8 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/ui/components"
+	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -33,14 +35,38 @@ const (
 	stepInput
 )
 
+type permissionEditorStyles struct {
+	styles.Common
+	selected, normal style.Style
+}
+
+func newPermissionEditorStyles(s *theme.Scheme) permissionEditorStyles {
+	c := styles.NewCommon(s)
+	return permissionEditorStyles{
+		Common:   c,
+		selected: c.Title.WhiteSpace(style.WhiteSpacePre),
+		normal:   c.Secondary.WhiteSpace(style.WhiteSpacePre),
+	}
+}
+
+func (s permissionEditorStyles) list(items []string, cursor int) trail.Node {
+	return kitex.Map(items, func(item string, i int) trail.Node {
+		face, prefix := s.normal, "  "
+		if i == cursor {
+			face, prefix = s.selected, "❯ "
+		}
+		return trail.Box(trail.BoxProps{Style: s.Row}, trail.Span(trail.SpanProps{Style: face}, trail.Text(prefix+item)))
+	})
+}
+
 // PermissionConfigEditor is a 3-screen interactive permission rule configuration manager.
 var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props PermissionConfigEditorProps) trail.Node {
-	scheme := theme.UseTheme()
+	sheet := styles.Use(newPermissionEditorStyles)
 
 	step, setStep := kitex.UseState(stepScope)
 	scopeIndex, setScopeIndex := kitex.UseState(0) // 0: Project, 1: Global
-	activeEffect, setActiveEffect := kitex.UseState(api.EffectAllow)
-	ruleCursor, setRuleCursor := kitex.UseState(0)
+	tab, setTab := kitex.UseState(0)
+
 	isEdit, setIsEdit := kitex.UseState(false)
 	editTarget, setEditTarget := kitex.UseState("")
 	inputText, setInputText := kitex.UseState("")
@@ -65,275 +91,124 @@ var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props Permi
 		scopePerms = props.Permissions.Global
 	}
 
-	rules := scopePerms.Allow
-	if activeEffect() == api.EffectDeny {
-		rules = scopePerms.Deny
+	rules, effect, listName := scopePerms.Allow, api.EffectAllow, "allowlist"
+	if tab() == 1 {
+		rules, effect, listName = scopePerms.Deny, api.EffectDeny, "denylist"
 	}
-
-	curRule := ruleCursor()
-	if curRule >= len(rules) {
-		curRule = len(rules) - 1
-	}
-	if curRule < 0 {
-		curRule = 0
-	}
-
-	trail.UseInput(func(input string, k event.KeyEvent) {
-		if step() == stepInput {
-			return
+	cursor := uicomponents.UseCursor(len(rules), 0)
+	clearError := func() {
+		setLocalError("")
+		if props.OnClearError != nil {
+			props.OnClearError()
 		}
-
-		switch step() {
-		case stepScope:
-			switch {
-			case k.MatchString("up", "k", "ctrl+p"):
-				if scopeIndex() > 0 {
-					setScopeIndex(0)
-				}
-			case k.MatchString("down", "j", "ctrl+n"):
-				if scopeIndex() < 1 {
-					setScopeIndex(1)
-				}
-			case k.MatchString("enter"):
-				setStep(stepRules)
-				setRuleCursor(0)
-				if props.OnClearError != nil {
-					props.OnClearError()
-				}
-			case k.MatchString("esc", "escape"):
-				if props.OnClose != nil {
-					props.OnClose()
-				}
-			}
-
-		case stepRules:
-			switch {
-			case k.MatchString("tab", "right", "l"):
-				if activeEffect() == api.EffectAllow {
-					setActiveEffect(api.EffectDeny)
-				} else {
-					setActiveEffect(api.EffectAllow)
-				}
-				setRuleCursor(0)
-				if props.OnClearError != nil {
-					props.OnClearError()
-				}
-
-			case k.MatchString("left", "h"):
-				if activeEffect() == api.EffectDeny {
-					setActiveEffect(api.EffectAllow)
-				} else {
-					setActiveEffect(api.EffectDeny)
-				}
-				setRuleCursor(0)
-				if props.OnClearError != nil {
-					props.OnClearError()
-				}
-
-			case k.MatchString("up", "k", "ctrl+p"):
-				if curRule > 0 {
-					setRuleCursor(curRule - 1)
-				}
-
-			case k.MatchString("down", "j", "ctrl+n"):
-				if curRule < len(rules)-1 {
-					setRuleCursor(curRule + 1)
-				}
-
-			case input == "a" || input == "A" || k.MatchString("a"):
-				setIsEdit(false)
-				setEditTarget("")
-				setInputText("")
-				setLocalError("")
-				if props.OnClearError != nil {
-					props.OnClearError()
-				}
-				setStep(stepInput)
-
-			case input == "e" || input == "E" || k.MatchString("e"):
-				if len(rules) > 0 {
-					setIsEdit(true)
-					setEditTarget(rules[curRule])
-					setInputText(rules[curRule])
-					setLocalError("")
-					if props.OnClearError != nil {
-						props.OnClearError()
-					}
-					setStep(stepInput)
-				}
-
-			case input == "d" || input == "D" || k.MatchString("d", "backspace", "delete"):
-				if len(rules) > 0 && props.OnRemoveRule != nil {
-					props.OnRemoveRule(activeScope, activeEffect(), rules[curRule])
-				}
-
-			case k.MatchString("esc", "escape"):
-				setStep(stepScope)
-				if props.OnClearError != nil {
-					props.OnClearError()
-				}
-			}
+	}
+	switchTab := func(i int) {
+		setTab(i)
+		cursor.Set(0)
+		clearError()
+	}
+	openInput := func(edit bool) {
+		pattern := ""
+		if edit {
+			pattern = rules[cursor.Index]
 		}
-	})
-
-	// Styles
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Agent.Permission)
-	primaryStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
-	secondaryStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
-	hintStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Muted)
-	errorStyle := style.S().Foreground(scheme.Color.Text.Error)
-	activeTabStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
-	inactiveTabStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
-
-	var children []trail.Node
-
+		setIsEdit(edit)
+		setEditTarget(pattern)
+		setInputText(pattern)
+		clearError()
+		setStep(stepInput)
+	}
+	tabs := []uicomponents.TabItem{
+		{Label: fmt.Sprintf("allowlist (%d)", len(scopePerms.Allow))},
+		{Label: fmt.Sprintf("denylist (%d)", len(scopePerms.Deny))},
+	}
+	var actions []uicomponents.KeyAction
 	switch step() {
 	case stepScope:
-		children = append(children,
-			trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Permission Config Editor")),
-			trail.Newline(1),
-			trail.Span(trail.SpanProps{Style: secondaryStyle}, trail.Text("Select a config scope to edit:")),
-			trail.Newline(1),
-		)
-
-		scopeItems := []struct {
-			name string
-			desc string
-		}{
-			{name: "Project", desc: "Rules that apply only to this project (highest priority)"},
-			{name: "Global", desc: "Rules that apply across all projects"},
+		actions = []uicomponents.KeyAction{
+			{Keys: []string{"up", "k", "ctrl+p"}, Hint: "↑/↓", Label: "Navigate", OnPress: func() { setScopeIndex(0) }},
+			{Keys: []string{"down", "j", "ctrl+n"}, OnPress: func() { setScopeIndex(1) }},
+			{Keys: []string{"enter"}, Label: "Select", OnPress: func() {
+				setStep(stepRules)
+				cursor.Set(0)
+				clearError()
+			}},
+			{Keys: []string{"esc", "escape"}, Label: "Close", OnPress: props.OnClose},
 		}
-
-		for i, item := range scopeItems {
-			prefix := "  "
-			itemStyle := secondaryStyle
-			if i == scopeIndex() {
-				prefix = "❯ "
-				itemStyle = primaryStyle
-			}
-			children = append(children, trail.Box(trail.BoxProps{
-				Style: style.S().FlexDirection(style.FlexRow),
-			},
-				trail.Span(trail.SpanProps{Style: itemStyle}, trail.Text(prefix+item.name)),
-			))
-		}
-
-		children = append(children,
-			trail.Newline(1),
-			trail.Box(trail.BoxProps{
-				Style: style.S().FlexDirection(style.FlexRow),
-			},
-				trail.Span(trail.SpanProps{Style: hintStyle}, trail.Text("  "+scopeItems[scopeIndex()].desc)),
-			),
-			components.KeyboardHint(components.KeyboardHintProps{
-				Bindings: []components.KeyBinding{
-					{Key: "↑/↓", Label: "Navigate"},
-					{Key: "enter", Label: "Select"},
-					{Key: "esc", Label: "Close"},
-				},
-			}),
-		)
-
 	case stepRules:
-		children = append(children,
-			trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(fmt.Sprintf("Permissions — %s", scopeTitle))),
-		)
-
-		var allowTab, denyTab style.Style
-		if activeEffect() == api.EffectAllow {
-			allowTab = activeTabStyle
-			denyTab = inactiveTabStyle
-		} else {
-			allowTab = inactiveTabStyle
-			denyTab = activeTabStyle
-		}
-
-		children = append(children,
-			trail.Box(trail.BoxProps{
-				Style: style.S().FlexDirection(style.FlexRow),
-			},
-				trail.Span(trail.SpanProps{Style: allowTab}, trail.Text(fmt.Sprintf("allowlist (%d)", len(scopePerms.Allow)))),
-				trail.Span(trail.SpanProps{Style: inactiveTabStyle}, trail.Text("    ")),
-				trail.Span(trail.SpanProps{Style: denyTab}, trail.Text(fmt.Sprintf("denylist (%d)", len(scopePerms.Deny)))),
-			),
-			trail.Newline(1),
-		)
-
-		if len(rules) == 0 {
-			emptyText := "No allowlist rules."
-			if activeEffect() == api.EffectDeny {
-				emptyText = "No denylist rules."
-			}
-			children = append(children, trail.Box(trail.BoxProps{
-				Style: style.S().FlexDirection(style.FlexRow),
-			},
-				trail.Span(trail.SpanProps{Style: secondaryStyle}, trail.Text(emptyText)),
-			))
-		} else {
-			for i, r := range rules {
-				prefix := "  "
-				rStyle := secondaryStyle
-				if i == curRule {
-					prefix = "❯ "
-					rStyle = primaryStyle
+		actions = uicomponents.TabKeyActions(len(tabs), tab(), switchTab, false)
+		actions[0].Keys = append(actions[0].Keys, "right", "l")
+		actions[0].Hint = "←/→"
+		actions[0].Label = "Switch View"
+		actions[1].Keys = append(actions[1].Keys, "left", "h")
+		actions = append(actions, []uicomponents.KeyAction{
+			{Keys: []string{"up", "k", "ctrl+p"}, Hint: "↑/↓", Label: "Navigate", OnPress: func() { cursor.Move(-1) }},
+			{Keys: []string{"down", "j", "ctrl+n"}, OnPress: func() { cursor.Move(1) }},
+			{Keys: []string{"a", "A"}, Label: "Add rule", OnPress: func() { openInput(false) }},
+			{Keys: []string{"e", "E"}, Label: "Edit rule", Disabled: len(rules) == 0, OnPress: func() { openInput(true) }},
+			{Keys: []string{"d", "D", "backspace", "delete"}, Hint: "d/⌫", Label: "Delete rule", Disabled: len(rules) == 0, OnPress: func() {
+				if props.OnRemoveRule != nil {
+					props.OnRemoveRule(activeScope, effect, rules[cursor.Index])
 				}
-				children = append(children, trail.Box(trail.BoxProps{
-					Style: style.S().FlexDirection(style.FlexRow),
-				},
-					trail.Span(trail.SpanProps{Style: rStyle}, trail.Text(prefix+r)),
-				))
-			}
+			}},
+			{Keys: []string{"esc", "escape"}, Label: "Back", OnPress: func() {
+				setStep(stepScope)
+				clearError()
+			}},
+		}...)
+	}
+	bindings := uicomponents.UseKeyMap(actions, step() != stepInput)
+	switch step() {
+	case stepScope:
+		notice := "Rules that apply only to this project (highest priority)"
+		if scopeIndex() == 1 {
+			notice = "Rules that apply across all projects"
 		}
-
-		if props.ErrorMessage != "" {
-			children = append(children,
-				trail.Newline(1),
-				trail.Box(trail.BoxProps{
-					Style: style.S().FlexDirection(style.FlexRow),
-				},
-					trail.Span(trail.SpanProps{Style: errorStyle}, trail.Text(props.ErrorMessage)),
-				),
-			)
-		}
-
-		children = append(children,
-			components.KeyboardHint(components.KeyboardHintProps{
-				Bindings: []components.KeyBinding{
-					{Key: "↑/↓", Label: "Navigate"},
-					{Key: "←/→", Label: "Switch View"},
-					{Key: "a", Label: "Add rule"},
-					{Key: "e", Label: "Edit rule"},
-					{Key: "d/⌫", Label: "Delete rule"},
-					{Key: "esc", Label: "Back"},
-				},
-			}),
-		)
-
-	case stepInput:
-		listName := "allowlist"
-		if activeEffect() == api.EffectDeny {
-			listName = "denylist"
-		}
-
-		inputTitle := fmt.Sprintf("Add Rule — %s — %s", scopeTitle, listName)
-		if isEdit() {
-			inputTitle = fmt.Sprintf("Edit Rule — %s — %s", scopeTitle, listName)
-		}
-
-		children = append(children,
-			trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(inputTitle)),
-			trail.Newline(1),
-			trail.Span(trail.SpanProps{Style: secondaryStyle}, trail.Text("Enter a permission rule:")),
-			trail.Newline(1),
-			trail.Box(trail.BoxProps{
-				Style: style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexRow).
-					AlignItems(style.AlignCenter).
-					Width(style.Percent(100)),
+		return uicomponents.Panel(
+			uicomponents.PanelProps{
+				Title:    "Permission Config Editor",
+				Notice:   notice,
+				Bindings: bindings,
 			},
-				trail.Span(trail.SpanProps{Style: primaryStyle}, trail.Text("❯ ")),
+			trail.Span(trail.SpanProps{Style: sheet.Secondary}, trail.Text("Select a config scope to edit:")),
+			sheet.list([]string{"Project", "Global"}, scopeIndex()),
+		)
+	case stepRules:
+		return uicomponents.Panel(
+			uicomponents.PanelProps{
+				Title:    "Permissions — " + scopeTitle,
+				Error:    props.ErrorMessage,
+				Bindings: bindings,
+			},
+			uicomponents.TabBar(uicomponents.TabBarProps{
+				Tabs:         tabs,
+				Active:       tab(),
+				Numbered:     true,
+				MarginBottom: 1,
+			}),
+			kitex.If(len(rules) == 0, func() trail.Node {
+				return trail.Span(trail.SpanProps{Style: sheet.Secondary}, trail.Text("No "+listName+" rules."))
+			}),
+			sheet.list(rules, cursor.Index),
+		)
+	default:
+		verb := "Add"
+		if isEdit() {
+			verb = "Edit"
+		}
+		return uicomponents.Panel(
+			uicomponents.PanelProps{
+				Title:  fmt.Sprintf("%s Rule — %s — %s", verb, scopeTitle, listName),
+				Notice: "Format: tool(pattern)",
+				Error:  cmp.Or(localError(), props.ErrorMessage),
+				Bindings: []uicomponents.KeyBinding{
+					{Key: "enter", Label: "Save"},
+					{Key: "esc", Label: "Cancel"},
+				},
+			},
+			trail.Span(trail.SpanProps{Style: sheet.Secondary}, trail.Text("Enter a permission rule:")),
+			trail.Box(trail.BoxProps{Style: sheet.Row},
+				trail.Span(trail.SpanProps{Style: sheet.selected}, trail.Text("❯ ")),
 				kitex.Input(kitex.InputProps{
 					Ref:   inputRef,
 					Value: inputText(),
@@ -364,11 +239,11 @@ var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props Permi
 								setLocalError("")
 								if isEdit() {
 									if props.OnEditRule != nil && rule != editTarget() {
-										props.OnEditRule(activeScope, activeEffect(), editTarget(), rule)
+										props.OnEditRule(activeScope, effect, editTarget(), rule)
 									}
 								} else {
 									if props.OnAddRule != nil {
-										props.OnAddRule(activeScope, activeEffect(), rule)
+										props.OnAddRule(activeScope, effect, rule)
 									}
 								}
 								setStep(stepRules)
@@ -385,40 +260,6 @@ var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props Permi
 						}
 					},
 				}),
-			),
-		)
-
-		errText := localError()
-		if errText == "" && props.ErrorMessage != "" {
-			errText = props.ErrorMessage
-		}
-		if errText != "" {
-			children = append(children,
-				trail.Newline(1),
-				trail.Box(trail.BoxProps{
-					Style: style.S().FlexDirection(style.FlexRow),
-				},
-					trail.Span(trail.SpanProps{Style: errorStyle}, trail.Text(errText)),
-				),
-			)
-		}
-
-		children = append(children,
-			trail.Newline(1),
-			trail.Span(trail.SpanProps{Style: hintStyle}, trail.Text("Format: tool(pattern)")),
-			components.KeyboardHint(components.KeyboardHintProps{
-				Bindings: []components.KeyBinding{
-					{Key: "enter", Label: "Save"},
-					{Key: "esc", Label: "Cancel"},
-				},
-			}),
-		)
+			))
 	}
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	}, children...)
 })

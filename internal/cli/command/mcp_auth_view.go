@@ -1,6 +1,7 @@
 package command
 
 import (
+	"cmp"
 	"context"
 	"strings"
 	"time"
@@ -12,10 +13,10 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
-	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/clipboard"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 )
 
 // The authorization screen says a browser is about to open rather than that it has,
@@ -209,24 +210,6 @@ func (f *mcpAuthFlow) submit(ctx context.Context, callbackURL string) {
 	})
 }
 
-// mcpCopyToClipboard publishes text to the system clipboard and reports whether it
-// was accepted. It is a variable so a test can capture what a copy produced instead
-// of racing a clipboard that headless environments do not provide.
-var mcpCopyToClipboard = func(doc dom.Document, text string) bool {
-	if doc == nil || strings.TrimSpace(text) == "" {
-		return false
-	}
-	clipboard := doc.Clipboard()
-	if clipboard == nil {
-		return false
-	}
-	// The write is asynchronous and the terminal gives no signal of its own, so the
-	// screen confirms it optimistically; a clipboard the terminal cannot reach would
-	// fail silently for every other copy in the app too.
-	clipboard.WriteText(text)
-	return true
-}
-
 // mcpAuthCopyKey reports whether a key press should copy the authorization URL. The
 // ctrl+y chord always does. A bare `c` does only while the paste field holds nothing
 // but that keystroke: the terminal writes a printable key into the focused field
@@ -261,21 +244,11 @@ type mcpAuthPaneProps struct {
 	onBack   func()
 }
 
-// mcpAuthServerName names the server an authorization screen is about. The flow
-// knows it, and the browser's pane state knows it, but neither is guaranteed to be
-// populated when the other is, since the pane opens before the flow starts.
-func mcpAuthServerName(server *api.MCPServer, state mcpAuthState) string {
-	if server != nil && strings.TrimSpace(server.Name) != "" {
-		return server.Name
-	}
-	return state.server
-}
-
 // mcpAuthPane shows an authorization in progress: the page to open, a way to copy it
 // when no browser appeared, and a field to paste the redirect back when the browser
 // could not reach the daemon's callback listener.
 var mcpAuthPane = trail.FC("MCPServerAuth", func(props mcpAuthPaneProps) trail.Node {
-	scheme := theme.UseTheme()
+	common := styles.UseCommon()
 	doc := kitex.UseDocument()
 	winSize := trail.UseWindowSize()
 	value, setValue := kitex.UseState("")
@@ -283,132 +256,62 @@ var mcpAuthPane = trail.FC("MCPServerAuth", func(props mcpAuthPaneProps) trail.N
 	trail.UseFocus(inputRef, trail.FocusOptions{AutoFocus: true, IsActive: !props.browserOnly})
 
 	state := kites.Use(props.state, func(s mcpAuthState) mcpAuthState { return s })
-	server := strings.TrimSpace(props.server)
-	if server == "" {
-		server = state.server
-	}
-
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape"):
-			if props.onBack != nil {
-				props.onBack()
-			}
-		case !props.browserOnly && k.MatchString("enter"):
-			pasted := strings.TrimSpace(value())
-			if pasted == "" || props.onSubmit == nil {
-				return
-			}
-			setValue("")
-			props.onSubmit(pasted)
-		case !props.browserOnly && mcpAuthCopyKey(k, value()):
-			if !mcpCopyToClipboard(doc(), state.authURL) {
-				return
-			}
-			// The paste field has focus, so the "c" that copies can also land in
-			// it. Dropping it keeps the field ready for a pasted URL.
-			if strings.TrimSpace(value()) == "c" {
-				setValue("")
-			}
-			if props.onCopy != nil {
-				props.onCopy()
-			}
-		}
-	})
-
-	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
-	reportStyle := style.S().Foreground(scheme.Color.Text.Warning)
-	labelStyle := style.S().Foreground(scheme.Color.Text.Secondary)
-	urlStyle := style.S().Foreground(scheme.Color.Text.Accent)
-	mutedStyle := style.S().Foreground(scheme.Color.Text.Muted)
-
+	server := cmp.Or(strings.TrimSpace(props.server), state.server)
 	width := winSize.Width - mcpCardIndent
-	title := strings.TrimSpace(props.title)
-	if title == "" {
-		title = "Authenticating with " + server + "…"
-	}
-	rows := []trail.Node{
-		mcpDetailLine(trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(title))),
-		blankRow(),
-		mcpDetailLine(trail.Span(trail.SpanProps{Style: labelStyle},
-			trail.Text(mcpAuthSpinner+" "+mcpAuthNotice))),
-	}
-
-	report := strings.TrimSpace(props.notice)
-	if report == "" {
-		report = strings.TrimSpace(state.report)
-	}
-	if report != "" {
-		rows = append(rows, blankRow())
-		for _, line := range mcpWrapText(report, width, 0) {
-			rows = append(rows, mcpDetailLine(trail.Span(trail.SpanProps{
-				Style: reportStyle.WhiteSpace(style.WhiteSpacePre),
-			}, trail.Text(line))))
+	title := cmp.Or(strings.TrimSpace(props.title), "Authenticating with "+server+"…")
+	report := cmp.Or(strings.TrimSpace(props.notice), strings.TrimSpace(state.report))
+	trail.UseInput(func(_ string, k event.KeyEvent) {
+		if !mcpAuthCopyKey(k, value()) || !clipboard.WriteText(doc(), state.authURL) {
+			return
 		}
-	}
-
-	if !props.browserOnly {
-		rows = append(rows,
-			blankRow(),
-			mcpDetailLine(trail.Span(trail.SpanProps{Style: labelStyle}, trail.Text(mcpAuthCopyHint))),
-		)
-		if state.authURL == "" {
-			rows = append(rows, mcpDetailLine(trail.Span(trail.SpanProps{Style: mutedStyle},
-				trail.Text("Waiting for the authorization URL…"))))
-		} else {
-			for _, line := range mcpWrapText(state.authURL, width, 0) {
-				rows = append(rows, mcpDetailLine(trail.Span(trail.SpanProps{
-					Style: urlStyle.WhiteSpace(style.WhiteSpacePre),
-				}, trail.Text(line))))
+		if strings.TrimSpace(value()) == "c" {
+			setValue("")
+		}
+		if props.onCopy != nil {
+			props.onCopy()
+		}
+	}, trail.InputOptions{IsActive: !props.browserOnly})
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Hint: "c", Label: "Copy URL", Disabled: props.browserOnly},
+		{Keys: []string{"enter"}, Label: "Submit pasted URL", Disabled: props.browserOnly, OnPress: func() {
+			if pasted := strings.TrimSpace(value()); pasted != "" && props.onSubmit != nil {
+				setValue("")
+				props.onSubmit(pasted)
 			}
-		}
-
-		rows = append(rows,
+		}},
+		{Keys: []string{"esc", "escape"}, Label: cmp.Or(strings.TrimSpace(props.escLabel), "Back"), OnPress: props.onBack},
+	}, true)
+	return uicomponents.Panel(uicomponents.PanelProps{Bindings: bindings},
+		trail.Box(trail.BoxProps{Style: common.Column.MarginLeft(mcpCardIndent)},
+			sectionHeading(common.Title, title),
 			blankRow(),
-			mcpDetailLine(trail.Span(trail.SpanProps{Style: labelStyle}, trail.Text(mcpAuthPasteHint))),
-			trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow)},
-				trail.Span(trail.SpanProps{Style: labelStyle}, trail.Text("URL > ")),
-				kitex.Input(kitex.InputProps{
-					Ref:   inputRef,
-					Value: value(),
-					Style: style.S().Flex(1),
-					OnChange: func(e event.Event) {
-						if ie, ok := e.(*event.InputEvent); ok {
-							setValue(ie.Value)
-						}
-					},
-				}),
-			),
-			blankRow(),
-			mcpDetailLine(trail.Span(trail.SpanProps{Style: mutedStyle}, trail.Text(mcpAuthReturnHint))),
-		)
-	}
-
-	escLabel := strings.TrimSpace(props.escLabel)
-	if escLabel == "" {
-		escLabel = "Back"
-	}
-	bindings := []uicomponents.KeyBinding{{Key: "esc", Label: escLabel}}
-	if !props.browserOnly {
-		bindings = []uicomponents.KeyBinding{
-			{Key: "c", Label: "Copy URL"},
-			{Key: "enter", Label: "Submit pasted URL"},
-			{Key: "esc", Label: escLabel},
-		}
-	}
-
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	},
-		trail.Box(trail.BoxProps{
-			Style: style.S().MarginLeft(mcpCardIndent).FlexDirection(style.FlexColumn),
-		}, rows...),
-		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{Bindings: bindings}),
-	)
+			sectionHeading(common.Secondary, mcpAuthSpinner+" "+mcpAuthNotice),
+			kitex.If(report != "", func() trail.Node {
+				return kitex.Fragment(blankRow(), mcpWrappedLines(common.Warning, report, width))
+			}),
+			kitex.If(!props.browserOnly, func() trail.Node {
+				url := sectionHeading(common.Muted, "Waiting for the authorization URL…")
+				if state.authURL != "" {
+					url = mcpWrappedLines(common.Accent, state.authURL, width)
+				}
+				return kitex.Fragment(blankRow(), sectionHeading(common.Secondary, mcpAuthCopyHint), url,
+					blankRow(), sectionHeading(common.Secondary, mcpAuthPasteHint),
+					trail.Box(trail.BoxProps{Style: common.Row},
+						trail.Span(trail.SpanProps{Style: common.Secondary}, trail.Text("URL > ")),
+						kitex.Input(kitex.InputProps{
+							Ref:   inputRef,
+							Value: value(),
+							Style: style.S().Flex(1),
+							OnChange: func(e event.Event) {
+								if ie, ok := e.(*event.InputEvent); ok {
+									setValue(ie.Value)
+								}
+							},
+						}),
+					),
+					blankRow(), sectionHeading(common.Muted, mcpAuthReturnHint))
+			}),
+		))
 })
 
 // mcpAuthTimelineReport records how an authorization ended in the conversation

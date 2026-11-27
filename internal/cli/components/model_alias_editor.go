@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -68,7 +69,6 @@ type ModelAliasEditorProps struct {
 // aliasEditorRow is one staged checklist row.
 type aliasEditorRow struct {
 	alias   string // bare alias, no "@"
-	kind    string // "standard" or "custom"
 	role    string // standard-alias role text shown beside the name
 	state   string // live assignment state text
 	warn    bool   // state renders as a warning
@@ -86,11 +86,37 @@ type aliasEditorStaged struct {
 	notice    string
 }
 
+type modelAliasEditorStyles struct {
+	styles.Common
+	row, gutter, name, state, warning style.Style
+}
+
+func newModelAliasEditorStyles(s *theme.Scheme) modelAliasEditorStyles {
+	c := styles.NewCommon(s)
+	return modelAliasEditorStyles{
+		Common: c,
+		row: c.Row.Width(style.Percent(100)).
+			Overflow(style.OverflowHidden),
+		gutter: c.Muted.WhiteSpace(style.WhiteSpacePre).
+			Flex(0, 0),
+		name: c.Primary.WhiteSpace(style.WhiteSpacePre).
+			Flex(1, 1).
+			MinWidth(style.Cells(0)).
+			Overflow(style.OverflowHidden),
+		warning: c.Warning.Flex(0, 0).
+			WhiteSpace(style.WhiteSpacePre).
+			Overflow(style.OverflowHidden),
+		state: c.Muted.Flex(0, 0).
+			WhiteSpace(style.WhiteSpacePre).
+			Overflow(style.OverflowHidden),
+	}
+}
+
 // ModelAliasEditor renders the inline alias checklist card shared by /model
 // and /providers. Space toggles a row, n adds a custom alias, Enter saves the
 // staged set to the owning manifest, Esc cancels.
 var ModelAliasEditor = trail.FC("ModelAliasEditor", func(props ModelAliasEditorProps) trail.Node {
-	scheme := theme.UseTheme()
+	sheet := styles.Use(newModelAliasEditorStyles)
 	staged, setStaged := kitex.UseState(aliasEditorStaged{toggles: map[string]bool{}})
 	cursor, setCursor := kitex.UseState(0)
 	inputRef := kitex.UseRef[dom.Element](nil)
@@ -138,7 +164,7 @@ var ModelAliasEditor = trail.FC("ModelAliasEditor", func(props ModelAliasEditorP
 	buildRows := func(st aliasEditorStaged) []aliasEditorRow {
 		rows := make([]aliasEditorRow, 0, len(StandardModelAliases)+4)
 		for _, std := range StandardModelAliases {
-			row := aliasEditorRow{alias: std.Name, kind: "standard", role: std.Role}
+			row := aliasEditorRow{alias: std.Name, role: std.Role}
 			a, assigned := byAlias[std.Name]
 			if std.Name == "default" {
 				owned := defaultHere
@@ -215,7 +241,7 @@ var ModelAliasEditor = trail.FC("ModelAliasEditor", func(props ModelAliasEditorP
 			if touched, ok := st.toggles[a.Alias]; ok {
 				checked = touched
 			}
-			row := aliasEditorRow{alias: a.Alias, kind: "custom", checked: checked, state: "assigned to this model"}
+			row := aliasEditorRow{alias: a.Alias, checked: checked, state: "assigned to this model"}
 			if a.WorkspaceDefault {
 				row.state = "⚠ WORKSPACE.md overrides @" + a.Alias
 				row.warn = true
@@ -233,26 +259,22 @@ var ModelAliasEditor = trail.FC("ModelAliasEditor", func(props ModelAliasEditorP
 				continue
 			}
 			seen[name] = true
-			row := aliasEditorRow{alias: name, kind: "custom", checked: true, state: "new alias"}
+			checked, touched := st.toggles[name]
+			row := aliasEditorRow{alias: name, checked: !touched || checked, state: "new alias"}
 			if a, ok := byAlias[name]; ok && a.Provider != "" {
 				// A typed alias owned elsewhere stages as a move; unchecking it
 				// leaves it with the current owner.
-				checked := true
-				if touched, okT := st.toggles[name]; okT {
-					checked = touched
-				}
-				row.checked = checked
 				switch {
 				case a.WorkspaceDefault:
 					row.state = "⚠ WORKSPACE.md overrides @" + name
 					row.warn = true
-				case checked:
+				case row.checked:
 					row.state = "moves from " + a.Provider + "/" + a.Model
 				default:
 					row.state = "currently " + a.Provider + "/" + a.Model
 				}
 				if dup := duplicateText(a); dup != "" && !a.WorkspaceDefault {
-					if checked {
+					if row.checked {
 						dup += " — saving assigns only here"
 					}
 					row.state = dup
@@ -309,181 +331,128 @@ var ModelAliasEditor = trail.FC("ModelAliasEditor", func(props ModelAliasEditorP
 		})
 	}
 
-	trail.UseInput(func(inputChar string, k event.KeyEvent) {
-		st := staged()
-		if st.inputOpen {
-			switch {
-			case k.MatchString("enter"):
-				name := strings.TrimPrefix(strings.TrimSpace(st.inputVal), "@")
-				next := aliasEditorStaged{toggles: map[string]bool{}, notice: ""}
-				maps.Copy(next.toggles, st.toggles)
-				current := byAlias[name]
-				onThisModel := ownerHere(current)
-				switch {
-				case !customAliasPattern.MatchString(name):
-					next.notice = "Custom aliases must be lowercase letters, digits, '-' or '_'."
-				case slices.Contains(st.added, name) || onThisModel:
-					next.toggles[name] = true
-				case IsStandardModelAlias(name):
-					next.notice = "@" + name + " is a standard alias — toggle it above instead."
-				case current.Provider != "":
-					// Aliasing another model's entry stages the one-step move:
-					// the row appears checked as "moves from …".
-					if !slices.Contains(st.added, name) {
-						next.added = append(slices.Clone(st.added), name)
-					}
-					next.toggles[name] = true
-				default:
-					next.added = append(slices.Clone(st.added), name)
-					next.toggles[name] = true
-				}
-				setStaged(next)
-			case k.MatchString("esc", "escape"):
-				next := st
+	addAlias := func() {
+		next := staged()
+		name := strings.TrimPrefix(strings.TrimSpace(next.inputVal), "@")
+		next.inputOpen = false
+		next.inputVal = ""
+		next.notice = ""
+		next.toggles = maps.Clone(next.toggles)
+		switch {
+		case !customAliasPattern.MatchString(name):
+			next.notice = "Custom aliases must be lowercase letters, digits, '-' or '_'."
+		case slices.Contains(next.added, name) || ownerHere(byAlias[name]):
+			next.toggles[name] = true
+		case IsStandardModelAlias(name):
+			next.notice = "@" + name + " is a standard alias — toggle it above instead."
+		default:
+			next.added = append(slices.Clone(next.added), name)
+			next.toggles[name] = true
+		}
+		setStaged(next)
+	}
+	actions := []uicomponents.KeyAction{
+		{Keys: []string{"up", "ctrl+p", "k"}, Hint: "↑/↓", Label: "Select", OnPress: func() { setCursor(max(0, cur-1)) }},
+		{Keys: []string{"down", "ctrl+n", "j"}, OnPress: func() { setCursor(min(len(rows)-1, cur+1)) }},
+		{Keys: []string{"space"}, Label: "Toggle", Disabled: props.Saving, OnPress: func() { toggle(cur) }},
+		{Keys: []string{"n"}, Label: "Add custom alias…", Disabled: props.Saving || props.Loading, OnPress: func() {
+			next := staged()
+			next.inputOpen = true
+			next.notice = ""
+			setStaged(next)
+		}},
+		{Keys: []string{"enter"}, Label: "Save", Disabled: props.Saving, OnPress: submit},
+		{Keys: []string{"esc", "escape"}, Label: "Cancel", OnPress: props.OnCancel},
+	}
+	if staged().inputOpen {
+		actions = []uicomponents.KeyAction{
+			{Keys: []string{"enter"}, Label: "Add", OnPress: addAlias},
+			{Keys: []string{"esc", "escape"}, Label: "Cancel", OnPress: func() {
+				next := staged()
 				next.inputOpen = false
 				next.inputVal = ""
 				setStaged(next)
-			}
-			return
+			}},
 		}
-		switch {
-		case k.MatchString("esc", "escape"):
-			if props.OnCancel != nil {
-				props.OnCancel()
-			}
-		case k.MatchString("space") || inputChar == " ":
-			toggle(cur)
-		case k.MatchString("n") && !props.Saving:
-			setStaged(aliasEditorStaged{
-				toggles:   staged().toggles,
-				added:     staged().added,
-				inputOpen: true,
-				inputVal:  "",
-			})
-		case k.MatchString("up", "ctrl+p", "k"):
-			setCursor(max(0, cur-1))
-		case k.MatchString("down", "ctrl+n", "j"):
-			setCursor(min(len(rows)-1, cur+1))
-		case k.MatchString("enter"):
-			submit()
-		}
-	})
-
-	border := style.SingleBorder().Top(true).Bottom(true).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
-	muted := style.S().Foreground(scheme.Color.Text.Muted)
-
-	var body []trail.Node
-	badge := style.S().Bold(true).Foreground(scheme.Color.Text.Success)
+	}
+	bindings := uicomponents.UseKeyMap(actions, true)
+	tone := uicomponents.ToneSuccess
 	if strings.EqualFold(props.Scope, "Workspace") {
-		badge = style.S().Bold(true).Foreground(scheme.Color.Text.Info)
+		tone = uicomponents.ToneAccent
 	}
-	body = append(body, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow)},
-		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Model aliases · "+props.Provider+"/"+props.ModelName)),
-		trail.Span(trail.SpanProps{Style: badge}, trail.Text(" ["+props.Scope+"]")),
-	))
-	if props.ManifestPath != "" {
-		body = append(body, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow)},
-			trail.Span(trail.SpanProps{Style: muted}, trail.Text(props.ManifestPath))))
-	}
-
-	if props.Loading {
-		body = append(body, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow)},
-			trail.Span(trail.SpanProps{Style: muted}, trail.Text("Loading alias assignments…"))))
-	} else {
-		body = append(body, aliasChecklistSection(scheme, "Standard aliases", rows, "standard", cur))
-		body = append(body, aliasChecklistSection(scheme, "Custom aliases", rows, "custom", cur))
-		if !staged().inputOpen {
-			body = append(body, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 0, 2)},
-				trail.Span(trail.SpanProps{Style: muted}, trail.Text("n  Add custom alias…"))))
-		} else {
-			body = append(body, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow)},
-				trail.Span(trail.SpanProps{Style: titleStyle.WhiteSpace(style.WhiteSpacePre)}, trail.Text("  @")),
-				kitex.Input(kitex.InputProps{
-					Ref:   inputRef,
-					Value: staged().inputVal,
-					Style: style.S().Flex(1),
-					OnChange: func(e event.Event) {
-						if ie, ok := e.(*event.InputEvent); ok {
-							next := staged()
-							next.inputVal = ie.Value
-							setStaged(next)
-						}
-					},
+	return uicomponents.Panel(uicomponents.PanelProps{
+		Header: trail.Box(trail.BoxProps{Style: sheet.Row.Gap(0, 1)},
+			trail.Span(trail.SpanProps{Style: sheet.Title}, trail.Text("Model aliases · "+props.Provider+"/"+props.ModelName)),
+			uicomponents.Badge(uicomponents.BadgeProps{Label: "[" + props.Scope + "]", Tone: tone}),
+		),
+		Error:    props.ErrorMessage,
+		Notice:   staged().notice,
+		Bindings: bindings,
+	},
+		uicomponents.KVList(uicomponents.KVListProps{Items: []uicomponents.KVItem{
+			{Label: "Manifest", Value: props.ManifestPath, Tone: uicomponents.ToneMuted, OmitEmpty: true},
+		}}),
+		kitex.If(props.Loading, func() trail.Node {
+			return trail.Span(trail.SpanProps{Style: sheet.Muted}, trail.Text("Loading alias assignments…"))
+		}),
+		kitex.If(!props.Loading, func() trail.Node {
+			return kitex.Fragment(
+				aliasChecklistSection(sheet, "Standard aliases", rows[:len(StandardModelAliases)], cur),
+				aliasChecklistSection(sheet, "Custom aliases", rows[len(StandardModelAliases):], cur-len(StandardModelAliases)),
+				kitex.If(staged().inputOpen, func() trail.Node {
+					return trail.Box(trail.BoxProps{Style: sheet.Row},
+						trail.Span(trail.SpanProps{Style: sheet.Title.WhiteSpace(style.WhiteSpacePre)}, trail.Text("  @")),
+						kitex.Input(kitex.InputProps{
+							Ref:   inputRef,
+							Value: staged().inputVal,
+							Style: style.S().Flex(1),
+							OnChange: func(e event.Event) {
+								if ie, ok := e.(*event.InputEvent); ok {
+									next := staged()
+									next.inputVal = ie.Value
+									setStaged(next)
+								}
+							},
+						}),
+					)
 				}),
-			))
-		}
-	}
-
-	if notice := staged().notice; notice != "" {
-		body = append(body, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow)},
-			trail.Span(trail.SpanProps{Style: style.S().Foreground(scheme.Color.Text.Warning)}, trail.Text(notice))))
-	}
-	if props.ErrorMessage != "" {
-		body = append(body, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow)},
-			trail.Span(trail.SpanProps{Style: style.S().Foreground(scheme.Color.Text.Error)}, trail.Text(props.ErrorMessage))))
-	}
-	if props.Saving {
-		body = append(body, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow)},
-			trail.Span(trail.SpanProps{Style: muted}, trail.Text("Saving…"))))
-	}
-
-	body = append(body, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-		Bindings: []uicomponents.KeyBinding{
-			{Key: "↑/↓", Label: "Select"},
-			{Key: "space", Label: "Toggle"},
-			{Key: "n", Label: "Add custom"},
-			{Key: "enter", Label: "Save"},
-			{Key: "esc", Label: "Cancel"},
-		},
-	}))
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().Border(border).Width(style.Percent(100)).FlexDirection(style.FlexColumn).Padding(0, 0, 0, 1),
-	}, body...)
+			)
+		}),
+		kitex.If(props.Saving, func() trail.Node {
+			return trail.Span(trail.SpanProps{Style: sheet.Muted}, trail.Text("Saving…"))
+		}),
+	)
 })
 
-// aliasChecklistSection renders one titled group of the checklist. The cursor
-// marker is shared across groups, so only the row at the global index is
-// highlighted even though each group is rendered separately.
-func aliasChecklistSection(scheme *theme.Scheme, title string, rows []aliasEditorRow, kind string, cursor int) trail.Node {
-	var nodes []trail.Node
-	nodes = append(nodes, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow).Margin(1, 0, 0, 0)},
-		trail.Span(trail.SpanProps{Style: style.S().Bold(true).Foreground(scheme.Color.Text.Secondary)}, trail.Text(title))))
-	shown := 0
-	for i, row := range rows {
-		if row.kind != kind {
-			continue
-		}
-		shown++
-		box := "[x]"
-		if !row.checked {
-			box = "[ ]"
-		}
-		stateStyle := style.S().Foreground(scheme.Color.Text.Muted)
-		if row.warn {
-			stateStyle = style.S().Foreground(scheme.Color.Text.Warning)
-		}
-		gutter := "  "
-		nameStyle := style.S().Foreground(scheme.Color.Text.Primary)
-		if i == cursor {
-			gutter = "▸ "
-			nameStyle = nameStyle.Bold(true)
-		}
-		label := box + " @" + row.alias
-		if row.role != "" {
-			label += " · " + row.role
-		}
-		nodes = append(nodes, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow).Width(style.Percent(100)).Overflow(style.OverflowHidden)},
-			trail.Span(trail.SpanProps{Style: style.S().Foreground(scheme.Color.Text.Muted).WhiteSpace(style.WhiteSpacePre).Flex(0, 0)}, trail.Text(gutter)),
-			trail.Span(trail.SpanProps{Style: nameStyle.WhiteSpace(style.WhiteSpacePre).Flex(1, 1).MinWidth(style.Cells(0)).Overflow(style.OverflowHidden)}, trail.Text(label)),
-			trail.Span(trail.SpanProps{Style: style.S().Foreground(scheme.Color.Text.Muted).WhiteSpace(style.WhiteSpacePre).Flex(0, 0)}, trail.Text("  ")),
-			trail.Span(trail.SpanProps{Style: stateStyle.Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Overflow(style.OverflowHidden)}, trail.Text(row.state)),
-		))
-	}
-	if shown == 0 {
-		nodes = append(nodes, trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexRow)},
-			trail.Span(trail.SpanProps{Style: style.S().Foreground(scheme.Color.Text.Muted)}, trail.Text("  none"))))
-	}
-	return trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexColumn)}, nodes...)
+func aliasChecklistSection(s modelAliasEditorStyles, title string, rows []aliasEditorRow, cursor int) trail.Node {
+	return trail.Box(trail.BoxProps{Style: s.Column.MarginTop(1)},
+		trail.Span(trail.SpanProps{Style: s.Subtitle}, trail.Text(title)),
+		kitex.Map(rows, func(row aliasEditorRow, i int) trail.Node {
+			mark := "[ ]"
+			if row.checked {
+				mark = "[x]"
+			}
+			label := mark + " @" + row.alias
+			if row.role != "" {
+				label += " · " + row.role
+			}
+			gutter := "  "
+			if i == cursor {
+				gutter = "▸ "
+			}
+			state := s.state
+			if row.warn {
+				state = s.warning
+			}
+			return trail.Box(trail.BoxProps{Style: s.row},
+				trail.Span(trail.SpanProps{Style: s.gutter}, trail.Text(gutter)),
+				trail.Span(trail.SpanProps{Style: s.name.Bold(i == cursor)}, trail.Text(label)),
+				trail.Span(trail.SpanProps{Style: s.gutter}, trail.Text("  ")),
+				trail.Span(trail.SpanProps{Style: state}, trail.Text(row.state)),
+			)
+		}),
+		kitex.If(len(rows) == 0, func() trail.Node {
+			return trail.Span(trail.SpanProps{Style: s.Muted}, trail.Text("  none"))
+		}),
+	)
 }

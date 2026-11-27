@@ -9,13 +9,14 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 )
 
 // mcpToolName renders the name a discovered tool is called by, preferring the
@@ -27,17 +28,12 @@ func mcpToolName(tool api.MCPToolSummary) string {
 	return tool.Name
 }
 
-// mcpToolIcon renders the policy glyph for a tool: permitted tools are green, a
-// prohibited one is red, because that verdict is what decides whether the user
-// can act on the tool at all.
-func mcpToolIcon(scheme *theme.Scheme, allowed bool) trail.Node {
-	color := scheme.Color.Text.Success
-	if !allowed {
-		color = scheme.Color.Text.Error
+func mcpPolicyBadge(label string, allowed bool) trail.Node {
+	tone := uicomponents.ToneError
+	if allowed {
+		tone = uicomponents.ToneSuccess
 	}
-	return trail.Span(trail.SpanProps{
-		Style: style.S().WhiteSpace(style.WhiteSpacePre).Foreground(color),
-	}, trail.Text(map[bool]string{true: "✔", false: "✘"}[allowed]))
+	return uicomponents.Badge(uicomponents.BadgeProps{Label: label, Tone: tone})
 }
 
 type mcpToolListProps struct {
@@ -51,7 +47,6 @@ type mcpToolListProps struct {
 // mcpToolList lists one server's discovered tools. It stays filterable because a
 // server can expose dozens of tools and their names are the only handle on them.
 var mcpToolList = trail.FC("MCPToolList", func(props mcpToolListProps) trail.Node {
-	scheme := theme.UseTheme()
 	tools := props.server.Tools
 
 	pickerProps := components.NewPicker(
@@ -73,10 +68,10 @@ var mcpToolList = trail.FC("MCPToolList", func(props mcpToolListProps) trail.Nod
 			Label:       mcpToolName(tool),
 			Description: format.CompactSingleLine(tool.Description, 60),
 			Cells:       []string{mcpToolName(tool), mcpToolBadge(tool)},
-			Icon:        mcpToolIcon(scheme, tool.Allowed),
+			Icon:        mcpPolicyBadge(map[bool]string{true: "✔", false: "✘"}[tool.Allowed], tool.Allowed),
 			CellNodes: []trail.Node{
 				nil,
-				mcpBadgeNode(mcpToolBadge(tool), mcpAllowedColor(scheme, tool.Allowed)),
+				mcpPolicyBadge(mcpToolBadge(tool), tool.Allowed),
 			},
 		}
 	}
@@ -142,90 +137,49 @@ type mcpToolDetailProps struct {
 // mcpToolDetailView shows everything known about one discovered tool, including
 // the input schema it expects and, for a prohibited tool, the way to permit it.
 var mcpToolDetailView = trail.FC("MCPToolDetail", func(props mcpToolDetailProps) trail.Node {
-	scheme := theme.UseTheme()
-	winSize := trail.UseWindowSize()
-
-	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
-	headingStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
-	mutedStyle := style.S().Foreground(scheme.Color.Text.Muted)
-	metaStyle := style.S().Foreground(scheme.Color.Text.Secondary)
-	noticeStyle := style.S().Foreground(scheme.Color.Text.Warning)
-
-	policyColor := mcpAllowedColor(scheme, props.tool.Allowed)
-
-	// The label column hugs this view's own short labels, so the card does not
-	// reserve the wider column the server overview needs for "Config location:".
-	fields := []mcpCardField{
-		mcpCardTextField("Tool name", mcpToolName(props.tool), metaStyle),
-		mcpCardTextField("Full name", props.tool.Name, metaStyle),
-		mcpCardTextField("Policy", mcpToolPolicyLine(props.tool), policyColor),
-	}
-	labelWidth := mcpCardLabelWidthFor(fields, 0)
-	valueWidth := winSize.Width - mcpCardIndent - labelWidth - 1
-
-	rows := []trail.Node{
-		mcpDetailLine(trail.Span(trail.SpanProps{Style: titleStyle},
-			trail.Text(mcpToolName(props.tool)))),
-		mcpDetailLine(trail.Span(trail.SpanProps{Style: mutedStyle},
-			trail.Text(props.server.Name))),
-	}
-	if notice := strings.TrimSpace(props.notice); notice != "" {
-		// The reason a manifest edit failed is the one thing the user needs to read in
-		// full, so it wraps across lines instead of running off the terminal edge.
-		for _, line := range mcpWrapText(notice, winSize.Width-mcpCardIndent, 0) {
-			rows = append(rows, mcpDetailLine(trail.Span(trail.SpanProps{
-				Style: noticeStyle.WhiteSpace(style.WhiteSpacePre),
-			}, trail.Text(line))))
-		}
-	}
-	rows = append(rows, mcpDetailLine(trail.Span(trail.SpanProps{}, trail.Text(""))))
-
-	for _, field := range fields {
-		rows = append(rows, mcpCardFieldRow(field, labelWidth, valueWidth, metaStyle))
-	}
-
-	// The description is a section rather than an aligned row because server tool
-	// descriptions run to sentences that would wrap awkwardly inside a value column.
-	if description := strings.TrimSpace(props.tool.Description); description != "" {
-		rows = append(rows, blankRow(), sectionHeading(headingStyle, "Description:"))
-		for _, line := range mcpWrapText(description, winSize.Width-mcpCardIndent, 0) {
-			rows = append(rows, mcpDetailLine(trail.Span(trail.SpanProps{
-				Style: metaStyle.WhiteSpace(style.WhiteSpacePre),
-			}, trail.Text(line))))
-		}
-	}
-
-	if params := mcpToolParameters(props.tool); len(params) > 0 {
-		rows = append(rows, blankRow(), sectionHeading(headingStyle, "Parameters:"))
-		for _, param := range params {
-			rows = append(rows, mcpDetailLine(trail.Span(trail.SpanProps{
-				Style: metaStyle.WhiteSpace(style.WhiteSpacePre),
-			}, trail.Text(param))))
-		}
-	}
-
-	bindings := []uicomponents.KeyBinding{{Key: "↑/↓", Label: "Scroll"}}
-	var actions []uicomponents.ScrollViewerAction
-	if props.onEnable != nil {
-		bindings = append(bindings, uicomponents.KeyBinding{Key: "e", Label: "Enable in manifest"})
-		actions = append(actions, uicomponents.ScrollViewerAction{
-			Keys:    []string{"e"},
-			Handler: props.onEnable,
-		})
-	}
-	bindings = append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Back to tools"})
-
-	outerStyle := style.S().Border(
-		style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default),
-	)
-
+	common := styles.UseCommon()
+	size := trail.UseWindowSize()
+	width := size.Width - mcpCardIndent
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Hint: "↑/↓", Label: "Scroll"},
+		{Keys: []string{"e"}, Label: "Enable in manifest", OnPress: props.onEnable, Disabled: props.onEnable == nil},
+		{Keys: []string{"esc", "escape"}, Label: "Back to tools", OnPress: props.onBack},
+	}, true)
+	params := mcpToolParameters(props.tool)
+	description := strings.TrimSpace(props.tool.Description)
 	return uicomponents.ScrollViewer(uicomponents.ScrollViewerProps{
-		MaxHeight:  mcpInspectorHeight(winSize.Height),
-		OuterStyle: &outerStyle,
-		OnClose:    props.onBack,
-		Actions:    actions,
+		MaxHeight:  mcpInspectorHeight(size.Height),
+		OuterStyle: &common.Panel,
 		Bindings:   bindings,
-	}, rows...)
+	},
+		sectionHeading(common.Title, mcpToolName(props.tool)),
+		sectionHeading(common.Muted, props.server.Name),
+		kitex.If(props.notice != "", func() trail.Node {
+			return mcpWrappedLines(common.Warning, props.notice, width)
+		}),
+		blankRow(),
+		uicomponents.KVList(uicomponents.KVListProps{
+			Indent:        mcpCardIndent,
+			MinLabelWidth: len("Tool name:"),
+			Items: []uicomponents.KVItem{
+				mcpCardTextField("Tool name", mcpToolName(props.tool), common.Secondary),
+				mcpCardTextField("Full name", props.tool.Name, common.Secondary),
+				{Label: "Policy", ValueNode: mcpPolicyBadge(mcpToolPolicyLine(props.tool), props.tool.Allowed)},
+			},
+		}),
+		kitex.If(description != "", func() trail.Node {
+			return kitex.Fragment(
+				blankRow(), sectionHeading(common.Title, "Description:"),
+				mcpWrappedLines(common.Secondary, description, width),
+			)
+		}),
+		kitex.If(len(params) > 0, func() trail.Node {
+			return kitex.Fragment(blankRow(), sectionHeading(common.Title, "Parameters:"),
+				kitex.Map(params, func(param string, _ int) trail.Node {
+					return sectionHeading(common.Secondary.WhiteSpace(style.WhiteSpacePre), param)
+				}))
+		}),
+	)
 })
 
 // mcpToolParameters renders a tool's input schema as parameter rows, required

@@ -1,6 +1,7 @@
 package command
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/flight"
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -20,6 +22,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -335,13 +338,10 @@ func mcpItemCell(target mcpTarget) string {
 	return target.label()
 }
 
-// mcpAllowedColor styles an [Allowed] badge green and a [Prohibited] badge red.
-func mcpAllowedColor(scheme *theme.Scheme, allowed bool) style.Style {
-	base := style.S().Bold(true)
-	if allowed {
-		return base.Foreground(scheme.Color.Text.Success)
-	}
-	return base.Foreground(scheme.Color.Text.Error)
+func mcpWrappedLines(face style.Style, text string, width int) trail.Node {
+	return kitex.Map(mcpWrapText(text, width, 0), func(line string, _ int) trail.Node {
+		return sectionHeading(face.WhiteSpace(style.WhiteSpacePre), line)
+	})
 }
 
 // mcpBadgeNode wraps a badge in a clipping flex row so a narrow column cannot
@@ -424,45 +424,12 @@ const (
 	mcpCardLabelWidth = 18
 )
 
-// mcpCardField is one aligned `Key: Value` row of the server overview card.
-type mcpCardField struct {
-	Label string
-	// Nodes holds the already-styled value, because a status row colors its glyph
-	// and words together while a config path keeps its scope badge a different
-	// color from the path itself.
-	Nodes []trail.Node
-	// Text and ValueStyle carry the same value as plain text, which is what a
-	// value too long for one line is rendered from so its continuation lines can
-	// be styled to match.
-	Text       string
-	ValueStyle style.Style
-}
-
-// mcpCardTextField builds a field whose value is one run of identically styled
-// text, which is the common case and the only one that ever needs wrapping.
-func mcpCardTextField(label, text string, sty style.Style) mcpCardField {
-	return mcpCardField{
-		Label: label,
-		Nodes: []trail.Node{trail.Span(trail.SpanProps{
-			Style: sty.WhiteSpace(style.WhiteSpacePre),
-		}, trail.Text(text))},
-		Text:       text,
-		ValueStyle: sty,
+func mcpCardTextField(label, text string, face style.Style) uicomponents.KVItem {
+	return uicomponents.KVItem{
+		Label:     label,
+		Value:     text,
+		ValueNode: trail.Span(trail.SpanProps{Style: face.WhiteSpace(style.WhiteSpacePreWrap)}, trail.Text(text)),
 	}
-}
-
-// mcpCardLabelWidthFor returns the column card values start in: wide enough for the
-// longest label plus its colon and two separating spaces, but never narrower than
-// minimum so a card whose labels are all short still reads as a table rather than a
-// ragged list.
-func mcpCardLabelWidthFor(fields []mcpCardField, minimum int) int {
-	width := minimum
-	for _, field := range fields {
-		if n := len(field.Label) + 3; n > width {
-			width = n
-		}
-	}
-	return width
 }
 
 // mcpWrapText breaks text at width on spaces. A word that cannot fit a line on
@@ -531,20 +498,12 @@ func mcpWrapText(text string, width, indent int) []string {
 // omitted rather than shown as an em dash when it says nothing: a stdio server
 // has no URL, a server with no authentication has no auth row, and a server that
 // connected cleanly has no error row.
-func mcpOverviewFields(scheme *theme.Scheme, server api.MCPServer) []mcpCardField {
+func mcpOverviewFields(scheme *theme.Scheme, server api.MCPServer) []uicomponents.KVItem {
 	metaStyle := style.S().Foreground(scheme.Color.Text.Secondary)
 	scopeStyle := style.S().Bold(true).Foreground(scheme.Color.Icon.Primary)
 
-	fields := []mcpCardField{{
-		Label: "Status",
-		Nodes: []trail.Node{
-			trail.Span(trail.SpanProps{
-				Style: mcpStatusIconColor(scheme, server.Status).WhiteSpace(style.WhiteSpacePre),
-			}, trail.Text(mcpStatusIcon(server.Status)+" "+mcpStatusLabel(server.Status))),
-		},
-		Text:       mcpStatusIcon(server.Status) + " " + mcpStatusLabel(server.Status),
-		ValueStyle: mcpStatusIconColor(scheme, server.Status),
-	}}
+	status := mcpStatusIcon(server.Status) + " " + mcpStatusLabel(server.Status)
+	fields := []uicomponents.KVItem{mcpCardTextField("Status", status, mcpStatusIconColor(scheme, server.Status))}
 
 	if !server.Enabled {
 		fields = append(fields, mcpCardTextField("Availability", "[Disabled] "+mcpDisabledReason(server),
@@ -565,17 +524,10 @@ func mcpOverviewFields(scheme *theme.Scheme, server api.MCPServer) []mcpCardFiel
 
 	if config := strings.TrimSpace(server.Path); config != "" {
 		location := components.ShortenHomePath(filepath.FromSlash(filepath.ToSlash(config)))
-		fields = append(fields, mcpCardField{
-			Label: "Config location",
-			Nodes: []trail.Node{
-				trail.Span(trail.SpanProps{
-					Style: metaStyle.WhiteSpace(style.WhiteSpacePre),
-				}, trail.Text(location)),
-				trail.Span(trail.SpanProps{Style: scopeStyle}, trail.Text(" "+mcpScope(server))),
-			},
-			Text:       location + " " + mcpScope(server),
-			ValueStyle: metaStyle,
-		})
+		fields = append(fields, uicomponents.KVItem{Label: "Config location", Value: location + " " + mcpScope(server), ValueNode: mcpDetailLine(
+			trail.Span(trail.SpanProps{Style: metaStyle.WhiteSpace(style.WhiteSpacePreWrap)}, trail.Text(location)),
+			trail.Span(trail.SpanProps{Style: scopeStyle}, trail.Text(" "+mcpScope(server))),
+		)})
 	}
 
 	fields = append(fields, mcpCardTextField("Capabilities", mcpCapabilityKinds(server), metaStyle))
@@ -601,7 +553,7 @@ func mcpOverviewFields(scheme *theme.Scheme, server api.MCPServer) []mcpCardFiel
 // called out with a warning glyph, a satisfied one with a check, and a static
 // scheme just names itself. The caller only asks for this row when there is an
 // auth scheme to report or an authorization still outstanding.
-func mcpOverviewAuthField(scheme *theme.Scheme, server api.MCPServer, authType string) mcpCardField {
+func mcpOverviewAuthField(scheme *theme.Scheme, server api.MCPServer, authType string) uicomponents.KVItem {
 	switch server.Status {
 	case api.MCPStatusAuthRequired:
 		text := "not authenticated"
@@ -650,61 +602,21 @@ func mcpCountSummary(total, allowed int, singular, plural string) string {
 
 // mcpCardRows renders the overview card: the server title, its description when
 // it declares one, and the aligned metadata rows.
-func mcpCardRows(scheme *theme.Scheme, server api.MCPServer, termWidth int) []trail.Node {
-	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
-	metaStyle := style.S().Foreground(scheme.Color.Text.Secondary)
-	mutedStyle := style.S().Foreground(scheme.Color.Text.Muted)
-
-	fields := mcpOverviewFields(scheme, server)
-	labelWidth := mcpCardLabelWidthFor(fields, mcpCardLabelWidth)
-	valueWidth := termWidth - mcpCardIndent - labelWidth - 1
-
-	rows := []trail.Node{
-		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
-		}, trail.Span(trail.SpanProps{Style: titleStyle},
-			trail.Text(mcpServerName(server)+" MCP Server"))),
+func mcpCardRows(scheme *theme.Scheme, server api.MCPServer) []trail.Node {
+	common := styles.NewCommon(scheme)
+	return []trail.Node{
+		trail.Box(trail.BoxProps{Style: common.Row.MarginBottom(1)},
+			trail.Span(trail.SpanProps{Style: common.Title}, trail.Text(mcpServerName(server)+" MCP Server")),
+		),
+		kitex.If(strings.TrimSpace(server.Description) != "", func() trail.Node {
+			return sectionHeading(common.Muted, "  "+server.Description)
+		}),
+		uicomponents.KVList(uicomponents.KVListProps{
+			Items:         mcpOverviewFields(scheme, server),
+			Indent:        mcpCardIndent,
+			MinLabelWidth: mcpCardLabelWidth - 2,
+		}),
 	}
-	if description := strings.TrimSpace(server.Description); description != "" {
-		rows = append(rows, mcpDetailLine(trail.Span(trail.SpanProps{
-			Style: mutedStyle.WhiteSpace(style.WhiteSpacePre),
-		}, trail.Text(strings.Repeat(" ", mcpCardIndent)+description))))
-	}
-
-	for _, field := range fields {
-		rows = append(rows, mcpCardFieldRow(field, labelWidth, valueWidth, metaStyle))
-	}
-	return rows
-}
-
-// mcpCardFieldRow renders one card row. A value that cannot fit the terminal is
-// wrapped under its own first line rather than clipped, because the failure
-// reason is the one row a user must be able to read in full.
-func mcpCardFieldRow(field mcpCardField, labelWidth, valueWidth int, metaStyle style.Style) trail.Node {
-	label := fmt.Sprintf("%-*s", labelWidth, field.Label+":")
-	lead := trail.Span(trail.SpanProps{
-		Style: metaStyle.WhiteSpace(style.WhiteSpacePre),
-	}, trail.Text(strings.Repeat(" ", mcpCardIndent)+label))
-
-	// The value's spans sit in the same flex row as the label: nesting them in a
-	// box of their own makes that box claim the whole row and pushes the value onto
-	// the line below the label.
-	lines := mcpWrapText(field.Text, valueWidth, mcpCardIndent+labelWidth)
-	if field.Text == "" || len(lines) <= 1 {
-		return mcpDetailLine(append([]trail.Node{lead}, field.Nodes...)...)
-	}
-
-	rows := []trail.Node{mcpDetailLine(lead, trail.Span(trail.SpanProps{
-		Style: field.ValueStyle.WhiteSpace(style.WhiteSpacePre),
-	}, trail.Text(lines[0])))}
-	for _, line := range lines[1:] {
-		rows = append(rows, mcpDetailLine(trail.Span(trail.SpanProps{
-			Style: field.ValueStyle.WhiteSpace(style.WhiteSpacePre),
-		}, trail.Text(line))))
-	}
-	return trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexColumn),
-	}, rows...)
 }
 
 // mcpMenuAction is what selecting a menu entry does.
@@ -851,6 +763,19 @@ type mcpInspectorProps struct {
 	onToggle    func()
 }
 
+type mcpInspectorStyles struct {
+	styles.Common
+	viewport style.Style
+}
+
+func newMCPInspectorStyles(s *theme.Scheme) mcpInspectorStyles {
+	common := styles.NewCommon(s)
+	return mcpInspectorStyles{Common: common, viewport: common.Column.
+		Width(style.Percent(100)).
+		OverflowY(style.OverflowAuto).
+		ScrollbarY(true)}
+}
+
 // mcpInspector renders one server's metadata and everything discovered on it.
 var mcpInspector = trail.FC("MCPServerInspector", func(props mcpInspectorProps) trail.Node {
 	scroll := uicomponents.UseScroll(uicomponents.ScrollOptions{PageOnly: true})
@@ -884,43 +809,20 @@ var mcpInspector = trail.FC("MCPServerInspector", func(props mcpInspectorProps) 
 		scroll.HandleKey(input, k)
 	})
 
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	unselectedStyle := style.S().Foreground(scheme.Color.Text.Secondary)
-
-	children := mcpCardRows(scheme, props.server, winSize.Width)
-	children = append(children, blankRow(), uicomponents.ActionMenu(uicomponents.ActionMenuProps{
-		Items:           menuItems,
-		Numbered:        true,
-		Indent:          mcpCardIndent,
-		UnselectedStyle: &unselectedStyle,
-		OnSelect: func(index int, _ uicomponents.ActionMenuItem) {
-			if index >= 0 && index < len(items) {
-				actions.run(items[index].Action)
-			}
-		},
-	}))
-
-	children = append(children, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-		Bindings: mcpInspectorBindings(items, winSize.Width),
-	}))
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	},
-		trail.Box(trail.BoxProps{
-			Ref: scroll.Ref,
-			Style: style.S().
-				Width(style.Percent(100)).
-				MaxHeight(style.Cells(mcpInspectorHeight(winSize.Height))).
-				OverflowY(style.OverflowAuto).
-				ScrollbarY(true),
-		}, trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexColumn),
-		}, children...)),
-	)
+	st := styles.Use(newMCPInspectorStyles)
+	return uicomponents.Panel(uicomponents.PanelProps{},
+		trail.Box(trail.BoxProps{Ref: scroll.Ref, Style: st.viewport.MaxHeight(style.Cells(mcpInspectorHeight(winSize.Height)))},
+			kitex.Fragment(mcpCardRows(scheme, props.server)...), blankRow(),
+			uicomponents.ActionMenu(uicomponents.ActionMenuProps{
+				Items: menuItems, Numbered: true, Indent: mcpCardIndent, UnselectedStyle: &st.Secondary,
+				OnSelect: func(index int, _ uicomponents.ActionMenuItem) {
+					if index >= 0 && index < len(items) {
+						actions.run(items[index].Action)
+					}
+				},
+			}),
+			uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{Bindings: mcpInspectorBindings(items, winSize.Width)}),
+		))
 })
 
 // mcpMenuHint names a menu action for the shortcut hint row, where the full menu
@@ -1103,13 +1005,9 @@ var mcpArgsPrompt = trail.FC("mcpArgsPrompt", func(props mcpArgsPromptProps) tra
 	inputRef := kitex.UseRef[dom.Element](nil)
 	trail.UseFocus(inputRef, trail.FocusOptions{AutoFocus: true, IsActive: true})
 
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape"):
-			if props.onCancel != nil {
-				props.onCancel()
-			}
-		case k.MatchString("enter"):
+	common := styles.UseCommon()
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"enter"}, Label: "Run prompt", OnPress: func() {
 			args, err := parseMCPPromptArgs(props.target, value())
 			if err != nil {
 				store.AppendError("MCP", err.Error())
@@ -1118,29 +1016,11 @@ var mcpArgsPrompt = trail.FC("mcpArgsPrompt", func(props mcpArgsPromptProps) tra
 			if props.onSubmit != nil {
 				props.onSubmit(args)
 			}
-		}
-	})
-
-	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	},
-		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
-		}, trail.Span(trail.SpanProps{
-			Style: style.S().Bold(true).Foreground(scheme.Color.Text.Primary),
-		}, trail.Text("Arguments for "+props.target.ref()))),
-		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow),
-		},
-			trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Text.Secondary),
-			}, trail.Text("> ")),
+		}},
+		{Keys: []string{"esc", "escape"}, Label: "Cancel", OnPress: props.onCancel},
+	}, true)
+	return uicomponents.Panel(uicomponents.PanelProps{Title: "Arguments for " + props.target.ref(), Bindings: bindings},
+		trail.Box(trail.BoxProps{Style: common.Row}, trail.Span(trail.SpanProps{Style: common.Secondary}, trail.Text("> ")),
 			kitex.Input(kitex.InputProps{
 				Ref:   inputRef,
 				Value: value(),
@@ -1152,17 +1032,7 @@ var mcpArgsPrompt = trail.FC("mcpArgsPrompt", func(props mcpArgsPromptProps) tra
 				},
 			}),
 		),
-		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
-		}, trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Muted),
-		}, trail.Text("  "+mcpPromptArgsDescription(props.target)))),
-		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-			Bindings: []uicomponents.KeyBinding{
-				{Key: "enter", Label: "Run prompt"},
-				{Key: "esc", Label: "Cancel"},
-			},
-		}),
+		sectionHeading(common.Muted, "  "+mcpPromptArgsDescription(props.target)),
 	)
 })
 
@@ -1181,7 +1051,6 @@ type mcpItemPickerProps struct {
 // one, routing prohibited items through the Option B confirmation. It is
 // searchable, which is what makes a server with dozens of items usable.
 var mcpItemPicker = trail.FC("mcpItemPicker", func(props mcpItemPickerProps) trail.Node {
-	scheme := theme.UseTheme()
 	noun := "prompts"
 	if props.kind == mcpTargetResource {
 		noun = "resources"
@@ -1239,7 +1108,7 @@ var mcpItemPicker = trail.FC("mcpItemPicker", func(props mcpItemPickerProps) tra
 			Label:       target.label(),
 			Description: descriptions[key],
 			Cells:       []string{mcpItemCell(target), badge},
-			CellNodes:   []trail.Node{nil, mcpBadgeNode(badge, mcpAllowedColor(scheme, target.allowed))},
+			CellNodes:   []trail.Node{nil, mcpPolicyBadge(badge, target.allowed)},
 		}
 	}
 
@@ -1294,57 +1163,13 @@ type mcpEmptyNoticeProps struct {
 
 // mcpEmptyNotice reports an empty list with a way back.
 var mcpEmptyNotice = trail.FC("mcpEmptyNotice", func(props mcpEmptyNoticeProps) trail.Node {
-	scheme := theme.UseTheme()
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape") && props.action != nil:
-			props.action()
-		case k.MatchString("R", "ctrl+r") && props.onReload != nil:
-			props.onReload()
-		case k.MatchString("a", "n") && props.onAdd != nil:
-			props.onAdd()
-		}
-	})
-
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	},
-		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
-		}, trail.Span(trail.SpanProps{
-			Style: style.S().Bold(true).Foreground(scheme.Color.Text.Primary),
-		}, trail.Text(props.title))),
-		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow),
-		}, trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Secondary),
-		}, trail.Text("  "+props.message))),
-		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-			Bindings: mcpEmptyNoticeBindings(props.onReload != nil, props.onAdd != nil, props.addLabel),
-		}),
-	)
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"R", "ctrl+r"}, Hint: "R / ctrl+r", Label: "Reload workspace", Disabled: props.onReload == nil, OnPress: props.onReload},
+		{Keys: []string{"a", "n"}, Label: cmp.Or(props.addLabel, "Add"), Disabled: props.onAdd == nil, OnPress: props.onAdd},
+		{Keys: []string{"esc", "escape"}, Label: "Back", OnPress: props.action},
+	}, true)
+	return uicomponents.Panel(uicomponents.PanelProps{Title: props.title, Notice: props.message, Bindings: bindings})
 })
-
-// mcpEmptyNoticeBindings keeps the hint honest: reload and add are only
-// advertised where they are actually handled.
-func mcpEmptyNoticeBindings(canReload, canAdd bool, addLabel string) []uicomponents.KeyBinding {
-	bindings := []uicomponents.KeyBinding{}
-	if canReload {
-		bindings = append(bindings, uicomponents.KeyBinding{Key: "R / ctrl+r", Label: "Reload workspace"})
-	}
-	if canAdd {
-		if addLabel == "" {
-			addLabel = "Add"
-		}
-		bindings = append(bindings, uicomponents.KeyBinding{Key: "a", Label: addLabel})
-	}
-	return append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Back"})
-}
 
 type mcpBrowserProps struct {
 	slotID        string
@@ -1372,18 +1197,33 @@ const (
 	mcpPaneAuth
 )
 
-type mcpBrowserState struct {
+type mcpRoute struct {
 	pane   mcpPane
-	server *api.MCPServer
-	target mcpTarget
-	// tool is the discovered tool the tools detail pane shows.
-	tool api.MCPToolSummary
+	server string
+	item   string
+}
+
+type mcpScreenProps struct {
+	mcpBrowserProps
+	route mcpRoute
 }
 
 var emptyMCPNoticeStore = kites.Create("")
 
 // mcpBrowser renders the interactive MCP server browser inside <Slot />.
 var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
+	common := styles.UseCommon()
+	return flight.Stack(flight.StackProps{
+		InitialRoute: mcpRoute{},
+		RenderRoute: func(r flight.Route) trail.Node {
+			return trail.Box(trail.BoxProps{Style: common.Column}, mcpScreen(mcpScreenProps{props, r.(mcpRoute)}))
+		},
+	})
+})
+
+var mcpScreen = trail.FC("MCPScreen", func(props mcpScreenProps) trail.Node {
+	nav := flight.UseNavigation()
+	current := props.route
 	serversPtr := store.UseApp(func(s store.AppState) *[]api.MCPServer { return s.MCPServers })
 	activeNoticeStore := props.noticeStore
 	if activeNoticeStore == nil {
@@ -1398,7 +1238,6 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 		return sharedNotice
 	}
 	busy, setBusy := kitex.UseState("")
-	state, setState := kitex.UseState(mcpBrowserState{})
 	// toolNotice reports the outcome of an action taken inside the tool detail view,
 	// which has no title of its own to carry it.
 	toolNotice, setToolNotice := kitex.UseState("")
@@ -1543,7 +1382,7 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 		setNotice("")
 		setAuthCopyNotice("")
 		setAuthReported(false)
-		setState(mcpBrowserState{pane: mcpPaneAuth, server: &api.MCPServer{Name: name}})
+		nav.Push(mcpRoute{pane: mcpPaneAuth, server: name})
 		if flowRef.Current != nil {
 			flowRef.Current.cancel()
 		}
@@ -1565,7 +1404,7 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 			store.RemoveSlot(props.slotID)
 			return
 		}
-		setState(mcpBrowserState{})
+		nav.Reset(mcpRoute{})
 	}
 
 	// An authorization that finishes while the browser is open reports itself once in
@@ -1618,33 +1457,33 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 	// closes before the turn is submitted.
 	useTarget := func(target mcpTarget) {
 		if target.kind == mcpTargetPrompt && mcpPromptNeedsArgs(target) {
-			server := target.server
-			setState(mcpBrowserState{pane: mcpPaneArgs, server: &server, target: target})
+			nav.Push(mcpRoute{pane: mcpPaneArgs, server: target.server.Name, item: target.name})
 			return
 		}
 		store.RemoveSlot(props.slotID)
 		confirmMCPSubmission(target, "")
 	}
 
-	current := state()
-
-	// liveServer re-resolves the pane's server by name, because the listing
-	// refreshes underneath and a pane must show live discovery, not the snapshot
-	// taken when it opened.
-	liveServer := func(server *api.MCPServer) api.MCPServer {
-		snapshot := *server
-		for _, candidate := range servers {
-			if candidate.Name == snapshot.Name {
-				return candidate
-			}
+	server, found := findMCPServer(servers, current.server)
+	if current.server != "" && !found && (current.pane != mcpPaneAuth || props.initialAuthServer == "") {
+		back := func() { nav.Reset(mcpRoute{}) }
+		if current.pane == mcpPaneAuth {
+			back = leaveAuth
 		}
-		return snapshot
+		return mcpEmptyNotice(mcpEmptyNoticeProps{
+			title:   current.server,
+			message: "This server is no longer configured.",
+			action:  back,
+		})
 	}
-
+	open := func(pane mcpPane) {
+		setNotice("")
+		nav.Push(mcpRoute{pane: pane, server: current.server})
+	}
 	switch current.pane {
 	case mcpPaneAuth:
 		return mcpAuthPane(mcpAuthPaneProps{
-			server: mcpAuthServerName(current.server, authState),
+			server: current.server,
 			state:  authStore,
 			notice: authCopyNotice(),
 			onCopy: func() { setAuthCopyNotice(mcpAuthCopiedNotice) },
@@ -1657,104 +1496,78 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 			onBack: leaveAuth,
 		})
 	case mcpPaneArgs:
+		target, found := mcpTargetFor(servers, current.server, mcpTargetPrompt, current.item)
+		if !found {
+			return mcpEmptyNotice(mcpEmptyNoticeProps{title: current.item, message: "This prompt is no longer available.", action: nav.Pop})
+		}
 		return mcpArgsPrompt(mcpArgsPromptProps{
-			target: current.target,
+			target: target,
 			onSubmit: func(args map[string]string) {
-				target := current.target
-				target.args = args
+				submission := target
+				submission.args = args
 				store.RemoveSlot(props.slotID)
-				confirmMCPSubmission(target, "")
+				confirmMCPSubmission(submission, "")
 			},
-			onCancel: func() {
-				setState(mcpBrowserState{pane: mcpPanePrompts, server: current.server})
-			},
+			onCancel: nav.Pop,
 		})
 	case mcpPanePrompts, mcpPaneResources:
-		if current.server == nil {
-			break
-		}
 		kind := mcpTargetPrompt
 		if current.pane == mcpPaneResources {
 			kind = mcpTargetResource
 		}
 		return mcpItemPicker(mcpItemPickerProps{
-			server: *current.server,
+			server: server,
 			kind:   kind,
-			onBack: func() { setState(mcpBrowserState{pane: mcpPaneInspector, server: current.server}) },
+			onBack: nav.Pop,
 			// Routing through useTarget lets a prompt that declares arguments
 			// collect them before it runs.
 			onSelect: useTarget,
 		})
 	case mcpPaneTools:
-		if current.server == nil {
-			break
-		}
 		return mcpToolList(mcpToolListProps{
-			server: liveServer(current.server),
-			onBack: func() { setState(mcpBrowserState{pane: mcpPaneInspector, server: current.server}) },
+			server: server,
+			onBack: nav.Pop,
 			onSelect: func(tool api.MCPToolSummary) {
 				// A notice left over from another tool must not follow the user in here.
 				setToolNotice("")
-				setState(mcpBrowserState{pane: mcpPaneToolDetail, server: current.server, tool: tool})
+				nav.Push(mcpRoute{pane: mcpPaneToolDetail, server: current.server, item: tool.Name})
 			},
 		})
 	case mcpPaneToolDetail:
-		if current.server == nil {
-			break
+		idx := slices.IndexFunc(server.Tools, func(tool api.MCPToolSummary) bool { return tool.Name == current.item })
+		if idx < 0 {
+			return mcpEmptyNotice(mcpEmptyNoticeProps{title: current.item, message: "This tool is no longer available.", action: nav.Pop})
 		}
-		live := liveServer(current.server)
-		// The listing refreshes underneath, so show the tool's current policy rather
-		// than the one read when the pane opened; that is what makes `e` visibly take
-		// effect without leaving the view.
-		tool := current.tool
-		for _, candidate := range live.Tools {
-			if candidate.Name == tool.Name {
-				tool = candidate
-				break
-			}
-		}
+		tool := server.Tools[idx]
 		// A prohibited tool can be permitted only where the manifest can be rewritten,
 		// so the shortcut appears exactly when pressing it would do something.
 		var onEnable func()
-		if !tool.Allowed && mcpEnableManifestReason(live) == "" {
-			onEnable = func() { enableTool(live, tool) }
+		if !tool.Allowed && mcpEnableManifestReason(server) == "" {
+			onEnable = func() { enableTool(server, tool) }
 		}
 		return mcpToolDetailView(mcpToolDetailProps{
-			server:   live,
+			server:   server,
 			tool:     tool,
 			notice:   toolNotice(),
 			onEnable: onEnable,
 			onBack: func() {
 				setToolNotice("")
-				setState(mcpBrowserState{pane: mcpPaneTools, server: current.server})
+				nav.Pop()
 			},
 		})
 	case mcpPaneInspector:
-		if current.server == nil {
-			break
-		}
-		server := liveServer(current.server)
 		return mcpInspector(mcpInspectorProps{
 			server: server,
 			onBack: func() {
 				setNotice("")
-				setState(mcpBrowserState{})
+				nav.Reset(mcpRoute{})
 			},
-			onTools: func() {
-				setNotice("")
-				setState(mcpBrowserState{pane: mcpPaneTools, server: current.server})
-			},
-			onPrompts: func() {
-				setNotice("")
-				setState(mcpBrowserState{pane: mcpPanePrompts, server: current.server})
-			},
-			onResources: func() {
-				setNotice("")
-				setState(mcpBrowserState{pane: mcpPaneResources, server: current.server})
-			},
-			onAuth:    func() { doAuth(server.Name) },
-			onRestart: func() { doRestart(server.Name) },
-			onToggle:  func() { doToggle(server.Name) },
+			onTools:     func() { open(mcpPaneTools) },
+			onPrompts:   func() { open(mcpPanePrompts) },
+			onResources: func() { open(mcpPaneResources) },
+			onAuth:      func() { doAuth(server.Name) },
+			onRestart:   func() { doRestart(server.Name) },
+			onToggle:    func() { doToggle(server.Name) },
 		})
 	}
 
@@ -1798,14 +1611,8 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 	}
 
 	inspect := func(opt uicomponents.Option) {
-		for i := range listed {
-			if listed[i].Name == opt.Value {
-				server := listed[i]
-				setNotice("")
-				setState(mcpBrowserState{pane: mcpPaneInspector, server: &server})
-				return
-			}
-		}
+		setNotice("")
+		nav.Push(mcpRoute{pane: mcpPaneInspector, server: opt.Value})
 	}
 
 	title := "Manage MCP servers"

@@ -1,18 +1,19 @@
 package command
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -34,11 +35,13 @@ const (
 	usageTabQuotas
 )
 
-var usageTabNames = []string{"Session", "Workspace", "Global", "Quotas"}
+var usageTabs = []uicomponents.TabItem{
+	{Label: "Session"}, {Label: "Workspace"}, {Label: "Global"}, {Label: "Quotas"},
+}
 
-// statsTabNames bounds the /stats browser, which has no quota windows of its
+// statsTabs bounds the /stats browser, which has no quota windows of its
 // own: quota capacity is a cost concept and lives in /usage only.
-var statsTabNames = usageTabNames[:3]
+var statsTabs = usageTabs[:usageTabQuotas]
 
 func handleUsage(args []string) error {
 	tab := usageTabSession
@@ -87,11 +90,11 @@ const usageViewRows = 22
 // usageBrowser renders the /usage slot: Session, Workspace, Global, and Quotas
 // tabs with group-by, range, and model-list hotkeys.
 var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.Node {
-	scheme := theme.UseTheme()
 	winSize := trail.UseWindowSize()
 
 	tab, setTab := kitex.UseState(props.tab)
-	group, setGroup := kitex.UseState(api.UsageGroupByModel)
+	groupIdx, setGroup := kitex.UseState(0)
+	group := usageGroupKeys[groupIdx()].By
 	rangeIdx, setRangeIdx := kitex.UseState(2)
 	showModels, setShowModels := kitex.UseState(false)
 	tick, setTick := kitex.UseState(0)
@@ -109,7 +112,7 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 		viewWidth = max(48, winSize.Width-2)
 	}
 
-	currentKey := fmt.Sprintf("%d/%s/%d/%d", tab(), group(), rangeIdx(), tick())
+	currentKey := fmt.Sprintf("%d/%s/%d/%d", tab(), group, rangeIdx(), tick())
 	kitex.UseEffectCleanup(func() func() {
 		c := store.Client()
 		if c == nil {
@@ -140,7 +143,7 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 		}
 		setFetch(usageFetch{key: currentKey, loading: true})
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		key, by, rng := currentKey, group(), usageRanges[rangeIdx()]
+		key, by, rng := currentKey, group, usageRanges[rangeIdx()]
 		go func() {
 			defer cancel()
 			summary, err := c.Usage(ctx, api.UsageRequest{Scope: scope, GroupBy: by, Since: rng.since(time.Now())})
@@ -185,197 +188,171 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 		lines = summaryLines(*fetch().summary, usageRanges[rangeIdx()].Label)
 	}
 
-	maxOffset := max(0, len(lines)-usageViewRows)
-	pos := min(offset(), maxOffset)
-
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape", "q"):
-			store.RemoveSlot(props.slotID)
-		case k.MatchString("tab", "right", "l"):
-			setTab((tab() + 1) % usageTab(len(usageTabNames)))
+	summary := tab() == usageTabWorkspace || tab() == usageTabGlobal
+	meta := ""
+	var actions []uicomponents.KeyAction
+	if summary {
+		meta = fmt.Sprintf("group: %s · range: %s", group, usageRanges[rangeIdx()].Key)
+		selectGroup := func(i int) {
+			setGroup(i)
 			setOffset(0)
-		case k.MatchString("left", "shift+tab", "h"):
-			setTab((tab() + usageTab(len(usageTabNames)) - 1) % usageTab(len(usageTabNames)))
-			setOffset(0)
-		case k.MatchString("1"):
-			setTab(usageTabSession)
-			setOffset(0)
-		case k.MatchString("2"):
-			setTab(usageTabWorkspace)
-			setOffset(0)
-		case k.MatchString("3"):
-			setTab(usageTabGlobal)
-			setOffset(0)
-		case k.MatchString("4"):
-			setTab(usageTabQuotas)
-			setOffset(0)
-		case k.MatchString("t"):
-			setRangeIdx((rangeIdx() + 1) % len(usageRanges))
-			setOffset(0)
-		case k.MatchString("r"):
-			setTick(tick() + 1)
-		case k.MatchString("up", "k", "ctrl+p"):
-			setOffset(max(0, pos-1))
-		case k.MatchString("down", "j", "ctrl+n"):
-			setOffset(min(maxOffset, pos+1))
-		case k.MatchString("pgup", "b", "ctrl+u", "ctrl+b"):
-			setOffset(max(0, pos-usageViewRows))
-		case k.MatchString("pgdown", "space", "f", "ctrl+d", "ctrl+f"):
-			setOffset(min(maxOffset, pos+usageViewRows))
-		default:
-			if tab() == usageTabQuotas {
-				if k.MatchString("m") {
-					setShowModels(!showModels())
-					setOffset(0)
-				}
-				return
-			}
-			if tab() != usageTabWorkspace && tab() != usageTabGlobal {
-				return
-			}
-			for _, g := range usageGroupKeys {
-				if k.MatchString(g.Key) {
-					setGroup(g.By)
-					setOffset(0)
-					return
-				}
-			}
 		}
-	})
-
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	row := func(st style.Style, text string) trail.Node {
-		return trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{Style: st}, trail.Text(text)))
-	}
-
-	children := []trail.Node{
-		row(style.S().WhiteSpace(style.WhiteSpacePre).Bold(true).Foreground(scheme.Color.Icon.Primary), "Usage"),
-		renderUsageLine(scheme, usageTabBarLine(tab(), group(), usageRanges[rangeIdx()])),
-		row(style.S().WhiteSpace(style.WhiteSpacePre), " "),
-	}
-	end := min(len(lines), pos+usageViewRows)
-	for _, l := range lines[pos:end] {
-		children = append(children, renderUsageLine(scheme, l))
-	}
-	if len(lines) > usageViewRows {
-		children = append(children, row(style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Muted),
-			fmt.Sprintf("lines %d-%d of %d", pos+1, end, len(lines))))
-	}
-
-	bindings := []uicomponents.KeyBinding{
-		{Key: "←/→", Label: "Tab"},
-		{Key: "↑/↓", Label: "Scroll"},
+		actions = append(actions, uicomponents.KeyAction{
+			Keys: []string{"g"}, Hint: "g/m/p/a/u/i/d", Label: "Group by",
+			OnPress: func() { selectGroup((groupIdx() + 1) % len(usageGroupKeys)) },
+		})
+		for i, g := range usageGroupKeys {
+			actions = append(actions, uicomponents.KeyAction{
+				Keys: []string{g.Key}, OnPress: func() { selectGroup(i) },
+			})
+		}
 	}
 	if tab() == usageTabQuotas {
 		label := "Models"
 		if showModels() {
 			label = "Hide models"
 		}
-		bindings = append(bindings, uicomponents.KeyBinding{Key: "m", Label: label})
-	}
-	bindings = append(bindings, uicomponents.KeyBinding{Key: "r", Label: "Refresh"})
-	if tab() == usageTabWorkspace || tab() == usageTabGlobal {
-		bindings = append(bindings,
-			uicomponents.KeyBinding{Key: "m/p/a/u/i/d", Label: "Group by"},
-			uicomponents.KeyBinding{Key: "t", Label: "Range"},
-		)
-	}
-	bindings = append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Close"})
-	children = append(children, trail.Box(trail.BoxProps{Style: style.S().Margin(1, 0, 0, 0)},
-		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{Bindings: bindings})))
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	}, children...)
-})
-
-func usageSpanStyle(scheme *theme.Scheme, st lineStyle, bold bool) style.Style {
-	s := style.S().WhiteSpace(style.WhiteSpacePre)
-	switch st {
-	case lineHeading:
-		s = s.Bold(true).Foreground(scheme.Color.Icon.Primary)
-	case lineDim:
-		s = s.Foreground(scheme.Color.Text.Secondary)
-	case lineMuted:
-		s = s.Foreground(scheme.Color.Text.Muted)
-	case lineTrack:
-		s = s.Foreground(scheme.Color.Text.Disabled)
-	case lineAccent:
-		s = s.Foreground(scheme.Color.Text.Accent)
-	case lineWarn:
-		s = s.Foreground(scheme.Color.Text.Warning)
-	case lineDanger:
-		s = s.Foreground(scheme.Color.Text.Error)
-	case lineGood:
-		s = s.Foreground(scheme.Color.Text.Success)
-	default:
-		s = s.Foreground(scheme.Color.Text.Primary)
-	}
-	if bold {
-		s = s.Bold(true)
-	}
-	return s
-}
-
-// renderUsageLine turns a usageLine into a block-level trail row, honoring
-// multi-span segments or leading key labels when present.
-func renderUsageLine(scheme *theme.Scheme, l usageLine) trail.Node {
-	if len(l.Spans) > 0 {
-		nodes := make([]trail.Node, 0, len(l.Spans))
-		for _, sp := range l.Spans {
-			nodes = append(nodes, trail.Span(trail.SpanProps{
-				Style: usageSpanStyle(scheme, sp.Style, sp.Bold),
-			}, trail.Text(sp.Text)))
-		}
-		return trail.Box(trail.BoxProps{}, nodes...)
-	}
-
-	text := l.Text
-	if text == "" {
-		text = " "
-	}
-	st := usageSpanStyle(scheme, l.Style, false)
-	if l.LabelLen <= 0 || l.LabelLen > len(text) {
-		return trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{Style: st}, trail.Text(text)))
-	}
-	labelStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
-	return trail.Box(trail.BoxProps{},
-		trail.Span(trail.SpanProps{Style: labelStyle}, trail.Text(text[:l.LabelLen])),
-		trail.Span(trail.SpanProps{Style: st}, trail.Text(text[l.LabelLen:])),
-	)
-}
-
-// usageTabBarLine builds the styled tab strip: the active tab highlighted in
-// accent brackets, plus the active group-by and range for Workspace and Global.
-func usageTabBarLine(active usageTab, by api.UsageGroupBy, rng usageRange) usageLine {
-	spans := make([]usageSpan, 0, len(usageTabNames)*2+1)
-	for i, name := range usageTabNames {
-		if i > 0 {
-			spans = append(spans, usageSpan{Text: "  ", Style: lineDim})
-		}
-		label := fmt.Sprintf("%d %s", i+1, name)
-		if usageTab(i) == active {
-			spans = append(spans, usageSpan{Text: "[" + label + "]", Style: lineAccent, Bold: true})
-		} else {
-			spans = append(spans, usageSpan{Text: label, Style: lineDim})
-		}
-	}
-	if active == usageTabWorkspace || active == usageTabGlobal {
-		spans = append(spans, usageSpan{
-			Text:  fmt.Sprintf("    group: %s · range: %s", by, rng.Key),
-			Style: lineMuted,
+		actions = append(actions, uicomponents.KeyAction{
+			Keys: []string{"m"}, Label: label,
+			OnPress: func() {
+				setShowModels(!showModels())
+				setOffset(0)
+			},
 		})
 	}
-	return styledLine(lineDim, spans...)
+	return reportPanel(reportPanelProps{
+		Title:     "Usage",
+		Tabs:      usageTabs,
+		Active:    tab(),
+		Meta:      meta,
+		Lines:     lines,
+		Offset:    offset(),
+		SetOffset: setOffset,
+		SetTab:    setTab,
+		Actions:   actions,
+		ShowRange: summary,
+		NextRange: func() { setRangeIdx((rangeIdx() + 1) % len(usageRanges)) },
+		Refresh:   func() { setTick(tick() + 1) },
+		Close:     func() { store.RemoveSlot(props.slotID) },
+	})
+})
+
+type reportPanelProps struct {
+	Title     string
+	Tabs      []uicomponents.TabItem
+	Active    usageTab
+	Meta      string
+	Lines     []usageLine
+	Offset    int
+	SetOffset func(int)
+	SetTab    func(usageTab)
+	Actions   []uicomponents.KeyAction
+	ShowRange bool
+	NextRange func()
+	Refresh   func()
+	Close     func()
 }
 
-// usageTabBar renders the plain-text tab strip.
-func usageTabBar(active usageTab, by api.UsageGroupBy, rng usageRange) string {
-	return usageTabBarLine(active, by, rng).Text
+type reportPanelStyles struct {
+	Body, Label style.Style
+	Lines       []style.Style
+}
+
+func newReportPanelStyles(s *theme.Scheme) reportPanelStyles {
+	common := styles.NewCommon(s)
+	label := style.S().
+		Foreground(s.Color.Icon.Primary).
+		WhiteSpace(style.WhiteSpacePre)
+	return reportPanelStyles{
+		Body:  common.Column.MarginBottom(1),
+		Label: label,
+		Lines: []style.Style{
+			lineNormal:  common.Primary,
+			lineHeading: label.Bold(true),
+			lineDim:     common.Secondary,
+			lineMuted:   common.Muted,
+			lineTrack:   style.S().Foreground(s.Color.Text.Disabled),
+			lineAccent:  common.Accent,
+			lineWarn:    common.Warning,
+			lineDanger:  common.Error,
+			lineGood:    common.Success,
+		},
+	}
+}
+
+var reportPanel = trail.FC("ReportPanel", func(p reportPanelProps) trail.Node {
+	st := styles.Use(newReportPanelStyles)
+	maxOffset := max(0, len(p.Lines)-usageViewRows)
+	pos := min(p.Offset, maxOffset)
+	end := min(len(p.Lines), pos+usageViewRows)
+	scroll := func(delta int) func() {
+		return func() { p.SetOffset(min(maxOffset, max(0, pos+delta))) }
+	}
+	actions := uicomponents.TabKeyActions(len(p.Tabs), int(p.Active), func(i int) {
+		p.SetTab(usageTab(i))
+		p.SetOffset(0)
+	}, false)
+	for i, action := range actions {
+		switch action.Keys[0] {
+		case "tab":
+			actions[i].Keys = append(action.Keys, "right", "l")
+			actions[i].Hint, actions[i].Label = "←/→", "Tab"
+		case "shift+tab":
+			actions[i].Keys = append(action.Keys, "left", "h")
+		}
+	}
+	actions = append(actions,
+		uicomponents.KeyAction{Keys: []string{"up", "k", "ctrl+p"}, Hint: "↑/↓", Label: "Scroll", OnPress: scroll(-1)},
+		uicomponents.KeyAction{Keys: []string{"down", "j", "ctrl+n"}, OnPress: scroll(1)},
+		uicomponents.KeyAction{Keys: []string{"pgup", "b", "ctrl+u", "ctrl+b"}, OnPress: scroll(-usageViewRows)},
+		uicomponents.KeyAction{Keys: []string{"pgdown", "space", "f", "ctrl+d", "ctrl+f"}, OnPress: scroll(usageViewRows)},
+	)
+	actions = append(actions, p.Actions...)
+	rangeLabel := ""
+	if p.ShowRange {
+		rangeLabel = "Range"
+	}
+	actions = append(actions,
+		uicomponents.KeyAction{Keys: []string{"t"}, Label: rangeLabel, OnPress: func() {
+			p.NextRange()
+			p.SetOffset(0)
+		}},
+		uicomponents.KeyAction{Keys: []string{"r"}, Label: "Refresh", OnPress: p.Refresh},
+		uicomponents.KeyAction{Keys: []string{"esc", "escape", "q"}, Label: "Close", OnPress: p.Close},
+	)
+	bindings := uicomponents.UseKeyMap(actions, true)
+	return uicomponents.Panel(uicomponents.PanelProps{
+		Header: renderUsageLine(st, usageLine{Text: p.Title, Style: lineHeading}), Bindings: bindings,
+	},
+		uicomponents.TabBar(uicomponents.TabBarProps{
+			Tabs: p.Tabs, Active: int(p.Active), Meta: p.Meta, Numbered: true, MarginBottom: 1,
+		}),
+		trail.Box(trail.BoxProps{Style: st.Body},
+			kitex.Map(p.Lines[pos:end], func(l usageLine, _ int) trail.Node { return renderUsageLine(st, l) }),
+			kitex.If(maxOffset > 0, func() trail.Node {
+				return renderUsageLine(st, usageLine{
+					Text:  fmt.Sprintf("lines %d-%d of %d", pos+1, end, len(p.Lines)),
+					Style: lineMuted,
+				})
+			}),
+		),
+	)
+})
+
+func renderUsageLine(st reportPanelStyles, l usageLine) trail.Node {
+	span := func(text string, face style.Style) trail.Node {
+		return trail.Span(trail.SpanProps{Style: face.WhiteSpace(style.WhiteSpacePre)}, trail.Text(text))
+	}
+	if len(l.Spans) > 0 {
+		return trail.Box(trail.BoxProps{}, kitex.Map(l.Spans, func(sp usageSpan, _ int) trail.Node {
+			return span(sp.Text, st.Lines[sp.Style].Bold(sp.Bold || sp.Style == lineHeading))
+		}))
+	}
+	text := cmp.Or(l.Text, " ")
+	if l.LabelLen > 0 && l.LabelLen <= len(text) {
+		return trail.Box(trail.BoxProps{}, span(text[:l.LabelLen], st.Label), span(text[l.LabelLen:], st.Lines[l.Style]))
+	}
+	return trail.Box(trail.BoxProps{}, span(text, st.Lines[l.Style]))
 }
 
 // quotaClient fetches workspace quota snapshots for the Quotas tab.

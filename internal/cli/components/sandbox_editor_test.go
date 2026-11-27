@@ -627,14 +627,14 @@ func TestSandboxConfigEditorExcludedTabAddRemove(t *testing.T) {
 	// this point lands in the field.
 	app.Press(key.Key{Code: 'a', Text: "a"})
 	app.WaitFor(func(s string) bool { return strings.Contains(s, "Examples: git commit *") })
-	app.Type("docker *")
+	app.Type("docker 123sde *")
 	app.Press(key.Key{Code: key.KeyEnter})
 	out := app.WaitFor(func(s string) bool { return len(rec.addedPatterns()) == 1 })
 	if !strings.Contains(out, "Keyboard:") {
 		t.Fatalf("expected input to close after submit:\n%s", out)
 	}
-	if added := rec.addedPatterns(); added[0] != "docker *" {
-		t.Fatalf("expected add of \"docker *\", got %v", added)
+	if added := rec.addedPatterns(); added[0] != "docker 123sde *" {
+		t.Fatalf("expected add of \"docker 123sde *\", got %v", added)
 	}
 }
 

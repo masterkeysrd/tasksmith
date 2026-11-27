@@ -19,6 +19,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	"github.com/masterkeysrd/tasksmith/internal/ui/clipboard"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
@@ -475,7 +476,7 @@ var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewP
 	value, setValue := kitex.UseState("")
 	trail.UseFocus(input, trail.FocusOptions{AutoFocus: true, IsActive: !state.browserOnly})
 	copyURL := func() {
-		if mcpCopyToClipboard(doc(), state.authURL) {
+		if clipboard.WriteText(doc(), state.authURL) {
 			if strings.TrimSpace(value()) == "c" {
 				setValue("")
 			}

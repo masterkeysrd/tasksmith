@@ -74,7 +74,7 @@ Two steps: pick a scope (`Project` / `Global`), then browse one of two lists (`a
 | --- | --- | --- |
 | `↑` / `↓` | Scope step | Choose `Project` or `Global`. |
 | `Enter` | Scope step | Enter the rule lists. |
-| `Tab` / `→` / `←` | Rules | Switch between allowlist and denylist. |
+| `Tab` / `Shift+Tab` / `→` / `←` / `1` `2` | Rules | Switch between allowlist and denylist. |
 | `a` | Rules | Add a rule (inline input; `Enter` submits, `Esc` cancels). |
 | `e` | Rules | Edit the highlighted rule in place. |
 | `d` / `Backspace` / `Delete` | Rules | Delete the highlighted rule. |

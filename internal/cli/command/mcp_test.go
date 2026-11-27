@@ -15,13 +15,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/element"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/kite/promise"
+	"github.com/masterkeysrd/kite/terminal"
 	"github.com/masterkeysrd/kite/testenv"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
@@ -660,7 +661,7 @@ func TestMCPCardFieldsForConnectedServer(t *testing.T) {
 	fields := mcpOverviewFields(scheme, connected)
 	got := map[string]string{}
 	for _, field := range fields {
-		got[field.Label] = field.Text
+		got[field.Label] = field.Value
 	}
 
 	if got["Status"] != "✔ connected" {
@@ -708,7 +709,7 @@ func TestMCPCardFieldsForAuthRequiredServer(t *testing.T) {
 
 	got := map[string]string{}
 	for _, field := range mcpOverviewFields(scheme, auth) {
-		got[field.Label] = field.Text
+		got[field.Label] = field.Value
 	}
 
 	if got["Status"] != "⚠ needs authentication" {
@@ -746,7 +747,7 @@ func TestMCPCardFieldOrderingForFailures(t *testing.T) {
 
 	got := map[string]string{}
 	for _, field := range mcpOverviewFields(scheme, failed) {
-		got[field.Label] = field.Text
+		got[field.Label] = field.Value
 	}
 
 	if got["Status"] != "✘ failed to connect" {
@@ -773,7 +774,7 @@ func TestMCPCardLabelAlignment(t *testing.T) {
 	scheme := theme.Get()
 	connected := mcpTestServers()[0]
 
-	out := testutils.Render(t, trail.Box(trail.BoxProps{}, mcpCardRows(scheme, connected, 100)...), 100, 40)
+	out := testutils.Render(t, trail.Box(trail.BoxProps{}, mcpCardRows(scheme, connected)...), 100, 40)
 
 	// Every value must start in the same column: the card indent plus room for the
 	// longest label, so the card reads as a table.
@@ -934,6 +935,25 @@ func TestMCPOverviewTracksLiveListing(t *testing.T) {
 	}
 	if strings.Contains(out, "prohibited") {
 		t.Errorf("overview still reports a prohibited tool:\n%s", out)
+	}
+}
+
+func TestMCPRemovedServerLeavesFilterableRoute(t *testing.T) {
+	newMCPFixture(t, mcpTestServers())
+	env := mcpMountBrowser(t, mcpBrowserProps{slotID: "slot-removed-server"})
+	env.SendKey(key.Key{Code: key.KeyEnter})
+	env.Flush()
+	env.SendKey(key.Key{Code: 'p', Text: "p"})
+	if out, ok := waitForRender(t, env, "notes — prompts"); !ok {
+		t.Fatalf("prompt picker not shown:\n%s", out)
+	}
+	store.SetWorkspaceMCPServers(nil)
+	if out, ok := waitForRender(t, env, "This server is no longer configured."); !ok {
+		t.Fatalf("removed server remained actionable:\n%s", out)
+	}
+	env.SendKey(key.Key{Code: key.KeyEscape})
+	if out, ok := waitForRender(t, env, "Manage MCP servers (0 configured)"); !ok {
+		t.Fatalf("back did not return to the list:\n%s", out)
 	}
 }
 
@@ -3166,20 +3186,22 @@ func TestMCPStaticAuthInstructionNamesTheCredential(t *testing.T) {
 	}
 }
 
-// mcpStubClipboard records what the authorization screen asked the terminal to copy
-// and reports success, since the test terminal has no clipboard to write to.
-func mcpStubClipboard(t *testing.T) *mcpOpenedURLs {
+type mcpRecordingClipboard struct {
+	terminal.Clipboard
+	recorded *mcpOpenedURLs
+}
+
+func (c *mcpRecordingClipboard) WriteText(text string) *promise.Promise[struct{}] {
+	c.recorded.add(text)
+	return promise.Resolved(struct{}{})
+}
+
+// mcpStubClipboard installs a recording clipboard provider on env's document so
+// tests capture copied authorization URLs without touching the host clipboard.
+func mcpStubClipboard(t *testing.T, env *testenv.Environment) *mcpOpenedURLs {
 	t.Helper()
 	opened := &mcpOpenedURLs{}
-	original := mcpCopyToClipboard
-	mcpCopyToClipboard = func(_ dom.Document, text string) bool {
-		if strings.TrimSpace(text) == "" {
-			return false
-		}
-		opened.add(text)
-		return true
-	}
-	t.Cleanup(func() { mcpCopyToClipboard = original })
+	env.Document().SetClipboardProvider(&mcpRecordingClipboard{recorded: opened})
 	return opened
 }
 
@@ -3332,7 +3354,6 @@ func TestMCPAuthScreenWaitsForTheURLBeforeItArrives(t *testing.T) {
 func TestMCPAuthScreenCopyPutsTheURLOnTheClipboard(t *testing.T) {
 	newMCPFixture(t, mcpTestServers())
 	mcpStubAuthFlow(t)
-	copied := mcpStubClipboard(t)
 	store.ClearSlot()
 	defer store.ClearSlot()
 
@@ -3341,6 +3362,7 @@ func TestMCPAuthScreenCopyPutsTheURLOnTheClipboard(t *testing.T) {
 		authStore:         newMCPAuthStore(),
 		initialAuthServer: "sentry",
 	})
+	copied := mcpStubClipboard(t, env)
 	if _, ok := waitForRender(t, env, "https://example.com/authorize?server=sentry"); !ok {
 		t.Fatalf("the authorization URL never reached the screen:\n%s", env.DumpText())
 	}
@@ -3361,7 +3383,6 @@ func TestMCPAuthScreenCopyPutsTheURLOnTheClipboard(t *testing.T) {
 func TestMCPAuthScreenCopyKeyCopiesAnEmptyField(t *testing.T) {
 	newMCPFixture(t, mcpTestServers())
 	mcpStubAuthFlow(t)
-	copied := mcpStubClipboard(t)
 	store.ClearSlot()
 	defer store.ClearSlot()
 
@@ -3370,6 +3391,7 @@ func TestMCPAuthScreenCopyKeyCopiesAnEmptyField(t *testing.T) {
 		authStore:         newMCPAuthStore(),
 		initialAuthServer: "sentry",
 	})
+	copied := mcpStubClipboard(t, env)
 	if _, ok := waitForRender(t, env, "https://example.com/authorize?server=sentry"); !ok {
 		t.Fatalf("the authorization URL never reached the screen:\n%s", env.DumpText())
 	}

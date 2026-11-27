@@ -228,6 +228,33 @@ func TestModelAliasEditorTypedForeignAliasStagesMove(t *testing.T) {
 	}
 }
 
+func TestModelAliasEditorCustomInputOwnsShortcuts(t *testing.T) {
+	env := testutils.NewEnv(t, 110, 30)
+	props := aliasEditorTestProps()
+	var saves, cancels int
+	props.OnSave = func(api.AssignModelAliasesRequest) { saves++ }
+	props.OnCancel = func() { cancels++ }
+	env.Render(ModelAliasEditor(props))
+	env.KeyPress("n")
+	env.Type("njk12")
+	out := env.KeyPress("enter")
+	if saves != 0 || !strings.Contains(out, "[x] @njk12") {
+		t.Fatalf("prompt submitted to checklist: saves=%d\n%s", saves, out)
+	}
+	env.KeyPress("n")
+	out = env.KeyPress("esc")
+	if cancels != 0 || !strings.Contains(out, "Add custom alias") {
+		t.Fatalf("prompt escape dismissed checklist: cancels=%d\n%s", cancels, out)
+	}
+	for range len(StandardModelAliases) + 1 {
+		env.KeyPress("down")
+	}
+	out = env.KeyPress("space")
+	if !strings.Contains(out, "[ ] @njk12") {
+		t.Fatalf("new alias did not uncheck:\n%s", out)
+	}
+}
+
 func TestModelAliasEditorEscapeCancels(t *testing.T) {
 	env := testutils.NewEnv(t, 110, 30)
 	canceled := false

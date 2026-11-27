@@ -248,7 +248,7 @@ func TestPermissionConfigEditorScreen3AddAndEditRule(t *testing.T) {
 		t.Errorf("expected invalid format error: %s", out)
 	}
 
-	// Clear and type a valid rule: "bash(test *)"
+	// Clear and type a valid rule: "bash(test 12ade *)"
 	// First Esc to cancel back to Screen 2
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
 	inst.Frame()
@@ -260,14 +260,14 @@ func TestPermissionConfigEditorScreen3AddAndEditRule(t *testing.T) {
 	// Re-open Add Mode with 'a'
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'a', Text: "a"}})
 	inst.Frame()
-	for _, r := range "bash(test *)" {
+	for _, r := range "bash(test 12ade *)" {
 		inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: r, Text: string(r)}})
 	}
 	inst.Frame()
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 	inst.Frame()
 
-	if addedScope != api.ScopeProject || addedEffect != api.EffectAllow || addedRule != "bash(test *)" {
+	if addedScope != api.ScopeProject || addedEffect != api.EffectAllow || addedRule != "bash(test 12ade *)" {
 		t.Errorf("expected OnAddRule called, got scope=%s effect=%s rule=%s", addedScope, addedEffect, addedRule)
 	}
 	out = testutils.SurfaceText(b)

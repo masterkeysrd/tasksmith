@@ -6,15 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
-	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
-	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func (r *Registry) registerStatsCommand() {
@@ -72,8 +68,6 @@ const statsAutoRefresh = 15 * time.Second
 // statsBrowser renders the /stats slot: throughput headline numbers and a
 // per-model speed table over a selectable scope and range.
 var statsBrowser = trail.FC("StatsBrowser", func(props statsBrowserProps) trail.Node {
-	scheme := theme.UseTheme()
-
 	tab, setTab := kitex.UseState(props.tab)
 	rangeIdx, setRangeIdx := kitex.UseState(0)
 	tick, setTick := kitex.UseState(0)
@@ -174,110 +168,20 @@ var statsBrowser = trail.FC("StatsBrowser", func(props statsBrowserProps) trail.
 		lines = statsLines(*fetch().data, statsRanges[rangeIdx()].Label)
 	}
 
-	maxOffset := max(0, len(lines)-usageViewRows)
-	pos := min(offset(), maxOffset)
-
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		switch {
-		case k.MatchString("esc", "escape", "q"):
-			store.RemoveSlot(props.slotID)
-		case k.MatchString("tab", "right", "l"):
-			setTab((tab() + 1) % usageTab(len(statsTabNames)))
-			setOffset(0)
-		case k.MatchString("left", "shift+tab", "h"):
-			setTab((tab() + usageTab(len(statsTabNames)) - 1) % usageTab(len(statsTabNames)))
-			setOffset(0)
-		case k.MatchString("1"):
-			setTab(usageTabSession)
-			setOffset(0)
-		case k.MatchString("2"):
-			setTab(usageTabWorkspace)
-			setOffset(0)
-		case k.MatchString("3"):
-			setTab(usageTabGlobal)
-			setOffset(0)
-		case k.MatchString("t"):
-			setRangeIdx((rangeIdx() + 1) % len(statsRanges))
-			setOffset(0)
-		case k.MatchString("r"):
-			setTick(tick() + 1)
-		case k.MatchString("up", "k", "ctrl+p"):
-			setOffset(max(0, pos-1))
-		case k.MatchString("down", "j", "ctrl+n"):
-			setOffset(min(maxOffset, pos+1))
-		case k.MatchString("pgup", "b", "ctrl+u", "ctrl+b"):
-			setOffset(max(0, pos-usageViewRows))
-		case k.MatchString("pgdown", "space", "f", "ctrl+d", "ctrl+f"):
-			setOffset(min(maxOffset, pos+usageViewRows))
-		}
+	return reportPanel(reportPanelProps{
+		Title:     "Stats",
+		Tabs:      statsTabs,
+		Active:    tab(),
+		Meta:      "range: " + statsRanges[rangeIdx()].Key,
+		Lines:     lines,
+		Offset:    offset(),
+		SetOffset: setOffset,
+		SetTab:    setTab,
+		ShowRange: true,
+		NextRange: func() { setRangeIdx((rangeIdx() + 1) % len(statsRanges)) },
+		Refresh:   func() { setTick(tick() + 1) },
+		Close:     func() { store.RemoveSlot(props.slotID) },
 	})
-
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	labelStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
-	lineStyle := func(l usageLine) style.Style {
-		st := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)
-		switch l.Style {
-		case lineHeading:
-			st = style.S().WhiteSpace(style.WhiteSpacePre).Bold(true).Foreground(scheme.Color.Icon.Primary)
-		case lineDim:
-			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
-		case lineWarn:
-			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Warning)
-		case lineDanger:
-			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Error)
-		case lineGood:
-			st = style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Success)
-		}
-		return st
-	}
-
-	// Spans are inline, so each line lives in its own block-level Box.
-	row := func(st style.Style, text string) trail.Node {
-		return trail.Box(trail.BoxProps{}, trail.Span(trail.SpanProps{Style: st}, trail.Text(text)))
-	}
-	labeled := func(st style.Style, text string, labelLen int) trail.Node {
-		if labelLen <= 0 || labelLen > len(text) {
-			return row(st, text)
-		}
-		return trail.Box(trail.BoxProps{},
-			trail.Span(trail.SpanProps{Style: labelStyle}, trail.Text(text[:labelLen])),
-			trail.Span(trail.SpanProps{Style: st}, trail.Text(text[labelLen:])))
-	}
-	children := []trail.Node{
-		row(style.S().WhiteSpace(style.WhiteSpacePre).Bold(true).Foreground(scheme.Color.Icon.Primary), "Stats"),
-		row(style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary),
-			statsTabBar(tab(), statsRanges[rangeIdx()])),
-		row(style.S().WhiteSpace(style.WhiteSpacePre), " "),
-	}
-	end := min(len(lines), pos+usageViewRows)
-	for _, l := range lines[pos:end] {
-		text := l.Text
-		if text == "" {
-			text = " "
-		}
-		children = append(children, labeled(lineStyle(l), text, l.LabelLen))
-	}
-	if len(lines) > usageViewRows {
-		children = append(children, row(style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Muted),
-			fmt.Sprintf("lines %d-%d of %d", pos+1, end, len(lines))))
-	}
-
-	bindings := []uicomponents.KeyBinding{
-		{Key: "←/→", Label: "Tab"},
-		{Key: "↑/↓", Label: "Scroll"},
-		{Key: "t", Label: "Range"},
-		{Key: "r", Label: "Refresh"},
-		{Key: "esc", Label: "Close"},
-	}
-	children = append(children, trail.Box(trail.BoxProps{Style: style.S().Margin(1, 0, 0, 0)},
-		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{Bindings: bindings})))
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	}, children...)
 })
 
 // queryStats runs one aggregate pass over the metrics store.
@@ -300,18 +204,4 @@ func metricsAgg(ms []metrics.Metric, fn metrics.AggFunc) []api.MetricsAggregate 
 		out[i] = api.MetricsAggregate{Metric: string(m), Func: string(fn)}
 	}
 	return out
-}
-
-// statsTabBar renders the tab strip: the active tab in brackets, plus the
-// active range.
-func statsTabBar(active usageTab, rng usageRange) string {
-	var parts []string
-	for i, name := range statsTabNames {
-		label := fmt.Sprintf("%d %s", i+1, name)
-		if usageTab(i) == active {
-			label = "[" + label + "]"
-		}
-		parts = append(parts, label)
-	}
-	return strings.Join(parts, "  ") + fmt.Sprintf("    range: %s", rng.Key)
 }

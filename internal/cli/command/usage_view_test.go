@@ -7,13 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
-	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func text(lines []usageLine) string {
@@ -143,7 +140,15 @@ func TestDayGroupMarksPeakDay(t *testing.T) {
 }
 
 func TestUsageTabBar(t *testing.T) {
-	bar := usageTabBar(usageTabWorkspace, api.UsageGroupByTier, usageRanges[1])
+	env := testutils.NewEnv(t, 100, 20)
+	env.Render(usageBrowser(usageBrowserProps{tab: usageTabWorkspace}))
+	if got := env.KeyPress("g"); !strings.Contains(got, "group: provider") {
+		t.Fatalf("g did not cycle the group:\n%s", got)
+	}
+	env.KeyPress("i")
+	env.KeyPress("t")
+	env.KeyPress("t")
+	bar := env.KeyPress("t")
 	for _, want := range []string{"1 Session", "[2 Workspace]", "3 Global", "4 Quotas", "group: tier", "range: 7d"} {
 		if !strings.Contains(bar, want) {
 			t.Errorf("missing %q in %q", want, bar)
@@ -426,15 +431,9 @@ func TestUsageBrowserQuotasRenderAndModelsToggle(t *testing.T) {
 		}},
 	}, nil, "antigravity/gemini-4-neon", now, quotaOptions{Width: 96})
 
-	rowsView := trail.SimpleFC("QuotaRowsPreview", func() trail.Node {
-		scheme := theme.UseTheme()
-		children := make([]trail.Node, 0, len(lines))
-		for _, l := range lines {
-			children = append(children, renderUsageLine(scheme, l))
-		}
-		return trail.Box(trail.BoxProps{Style: style.S().FlexDirection(style.FlexColumn)}, children...)
-	})
-	rendered := testutils.Render(t, rowsView(), 96, 12)
+	rendered := testutils.Render(t, reportPanel(reportPanelProps{
+		Title: "Usage", Tabs: usageTabs, Active: usageTabQuotas, Lines: lines,
+	}), 96, 20)
 	for _, want := range []string{
 		"antigravity · dev@example.com",
 		"● Current pool (2 models) · gemini-4-neon, gemini-flash",

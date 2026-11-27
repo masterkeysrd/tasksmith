@@ -65,7 +65,9 @@ func TestStatsCommandArgs(t *testing.T) {
 }
 
 func TestStatsTabBar(t *testing.T) {
-	bar := statsTabBar(usageTabWorkspace, statsRanges[1])
+	env := testutils.NewEnv(t, 100, 20)
+	env.Render(statsBrowser(statsBrowserProps{tab: usageTabWorkspace}))
+	bar := env.KeyPress("t")
 	if !strings.Contains(bar, "[2 Workspace]") {
 		t.Errorf("active tab should be bracketed: %q", bar)
 	}
