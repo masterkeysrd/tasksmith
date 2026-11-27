@@ -122,29 +122,38 @@ func TestHydrateMessagesForLLM(t *testing.T) {
 		}
 	})
 
-	t.Run("promotes tool media for openai and antigravity", func(t *testing.T) {
-		m := models.Model{
-			ID:           "openai/gpt-vision",
-			ProviderType: "openai",
-			Modalities:   models.Modalities{Input: []string{"text", "image"}},
-		}
-		asst := &message.Assistant{Content: message.Content{&message.ToolCall{ID: "call-1", Name: "view"}}}
-		toolRes := &message.Tool{
-			ToolCallID: "call-1",
-			Name:       "view",
-			Content:    message.Content{&message.TextBlock{Text: "Viewed ui.png (image/png, 12 B)"}, blk},
-		}
-		got := hydrateMessagesForLLM(store, m, []message.Message{message.NewUserText("view it"), asst, toolRes})
-		if len(got) != 4 {
-			t.Fatalf("len(Messages) = %d, want 4 (with promoted user media message)", len(got))
-		}
-		promoted, ok := got[3].(*message.User)
-		if !ok {
-			t.Fatalf("expected trailing *message.User, got %T", got[3])
-		}
-		gotImg := promoted.Content[1].(*message.ImageBlock)
-		if string(gotImg.Data) != string(pngBytes) {
-			t.Fatalf("promoted bytes = %x, want %x", gotImg.Data, pngBytes)
+	t.Run("promotes tool media for openai, antigravity, and ollama", func(t *testing.T) {
+		for _, provider := range []string{"openai", "antigravity", "ollama"} {
+			t.Run(provider, func(t *testing.T) {
+				m := models.Model{
+					ID:           models.ID(provider + "/vision"),
+					ProviderType: provider,
+					Modalities:   models.Modalities{Input: []string{"text", "image"}},
+				}
+				asst := &message.Assistant{Content: message.Content{&message.ToolCall{ID: "call-1", Name: "view"}}}
+				toolRes := &message.Tool{
+					ToolCallID: "call-1",
+					Name:       "view",
+					Content:    message.Content{&message.TextBlock{Text: "Viewed ui.png (image/png, 12 B)"}, blk},
+				}
+				got := hydrateMessagesForLLM(store, m, []message.Message{message.NewUserText("view it"), asst, toolRes})
+				if len(got) != 4 {
+					t.Fatalf("len(Messages) = %d, want 4 (with promoted user media message)", len(got))
+				}
+				for _, b := range got[2].GetContent() {
+					if _, isImg := b.(*message.ImageBlock); isImg {
+						t.Fatalf("provider %q kept *message.ImageBlock inside tool message", provider)
+					}
+				}
+				promoted, ok := got[3].(*message.User)
+				if !ok {
+					t.Fatalf("expected trailing *message.User, got %T", got[3])
+				}
+				gotImg := promoted.Content[1].(*message.ImageBlock)
+				if string(gotImg.Data) != string(pngBytes) {
+					t.Fatalf("promoted bytes = %x, want %x", gotImg.Data, pngBytes)
+				}
+			})
 		}
 	})
 

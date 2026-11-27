@@ -174,9 +174,6 @@ func providerPreservesToolMedia(provider string, block message.Block, mime strin
 	switch provider {
 	case "", "genai", "google-genai", "gemini":
 		return true
-	case "ollama":
-		_, ok := block.(*message.ImageBlock)
-		return ok
 	case "anthropic":
 		switch block.(type) {
 		case *message.ImageBlock:
