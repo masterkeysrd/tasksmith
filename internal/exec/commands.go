@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
@@ -454,6 +455,8 @@ func (r *run) cmdFork(args []string) error {
 		return err
 	}
 	r.sess = forked
+	r.started = time.Now()
+	r.startCursor = client.NewCursor()
 	if r.watchCancel != nil {
 		r.rebindMainWatch()
 	}

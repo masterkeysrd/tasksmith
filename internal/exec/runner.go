@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -52,7 +53,9 @@ type run struct {
 	interrupt   chan struct{}
 	quit        chan struct{}
 	watchMu     sync.Mutex
-	since       string
+	resync      chan snapshotRequest
+	started     time.Time
+	seenEntries map[string]bool
 	startCursor string
 	watchedSubs map[string]struct{}
 
@@ -91,12 +94,21 @@ func newRun(ctx context.Context, opts *Options) (*run, error) {
 		opts.Stderr = os.Stderr
 	}
 
+	if ws := strings.TrimSpace(opts.Workspace); ws != "" {
+		absolute, err := filepath.Abs(ws)
+		if err != nil {
+			return nil, fmt.Errorf("resolve workspace: %w", err)
+		}
+		opts.Workspace = absolute
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	r := &run{
 		ctx:              runCtx,
 		cancel:           cancel,
 		opts:             opts,
 		tracker:          newTurnTracker(),
+		resync:           make(chan snapshotRequest),
+		seenEntries:      make(map[string]bool),
 		watchedSubs:      make(map[string]struct{}),
 		permOwners:       make(map[string]string),
 		questionOwners:   make(map[string]string),
@@ -257,7 +269,7 @@ func (r *run) writeHeader() error {
 // re-attaches with a fresh cursor on transport errors, mirroring the TUI.
 func (r *run) startWatcher() {
 	cursor := client.NewCursor()
-	r.since = cursor
+	r.started = time.Now()
 	r.startCursor = cursor
 	r.rebindMainWatch()
 	for i := range r.sess.Subagents {
@@ -276,29 +288,7 @@ func (r *run) rebindMainWatch() {
 	sessionID := r.sess.ID
 	watchCtx, cancel := context.WithCancel(r.ctx)
 	r.watchCancel = cancel
-	go func() {
-		for attempt := 0; ; attempt++ {
-			err := r.consumeStream(watchCtx, sessionID)
-			if watchCtx.Err() != nil || r.ctx.Err() != nil {
-				return
-			}
-			if client.IsNeedSync(err) {
-				r.setSince(client.NewCursor())
-				attempt = -1
-			} else if attempt >= streamReconnectAttempts {
-				select {
-				case r.streamErr <- err:
-				case <-r.ctx.Done():
-				}
-				return
-			}
-			select {
-			case <-r.ctx.Done():
-				return
-			case <-time.After(200 * time.Millisecond):
-			}
-		}
-	}()
+	go r.watch(watchCtx, sessionID, r.startCursor, api.SessionStreamTopic(sessionID), api.TopicSessions)
 }
 
 // ensureSubagentWatcher subscribes to a child subagent's turn stream once so
@@ -317,43 +307,198 @@ func (r *run) ensureSubagentWatcher(subID string) {
 	since := r.startCursor
 	r.watchMu.Unlock()
 
-	topic := api.SessionStreamTopic(subID)
-	go func() {
-		for attempt := 0; ; attempt++ {
-			err := r.consumeSubagentStream(topic, &since)
-			if r.ctx.Err() != nil {
+	go r.watch(r.ctx, subID, since, api.SessionStreamTopic(subID))
+}
+
+type snapshotRequest struct {
+	sessionID string
+	done      chan error
+}
+
+func (r *run) watch(ctx context.Context, id, since string, topics ...string) {
+	var err error
+	for attempt := 0; attempt <= streamReconnectAttempts; attempt++ {
+		err = errors.New("event stream ended")
+		for ev, streamErr := range r.c.Watch(ctx, since, topics...) {
+			if streamErr != nil {
+				err = streamErr
+				break
+			}
+			if ev.ID != "" {
+				if ev.ID != since {
+					attempt = 0
+				}
+				since = ev.ID
+			}
+			select {
+			case r.events <- ev:
+			case <-ctx.Done():
 				return
 			}
-			if client.IsNeedSync(err) {
-				since = client.NewCursor()
-				attempt = 0
-			} else if attempt >= streamReconnectAttempts {
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if client.IsNeedSync(err) {
+			next := client.NewCursor()
+			req := snapshotRequest{id, make(chan error, 1)}
+			select {
+			case r.resync <- req:
+			case <-ctx.Done():
 				return
 			}
 			select {
-			case <-r.ctx.Done():
+			case err = <-req.done:
+				if err != nil {
+					break
+				}
+				since = next
+			case <-ctx.Done():
 				return
-			case <-time.After(200 * time.Millisecond):
 			}
-		}
-	}()
-}
-
-func (r *run) consumeSubagentStream(topic string, since *string) error {
-	for ev, err := range r.c.Watch(r.ctx, *since, topic) {
-		if err != nil {
-			return err
-		}
-		if ev.ID != "" {
-			*since = ev.ID
+			if err != nil {
+				break
+			}
+			err = fmt.Errorf("replay repeatedly evicted: %w", client.ErrNeedSync)
 		}
 		select {
-		case r.events <- ev:
-		case <-r.ctx.Done():
-			return r.ctx.Err()
+		case <-ctx.Done():
+			return
+		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	return errors.New("client: subagent stream ended")
+	select {
+	case r.streamErr <- err:
+	case <-ctx.Done():
+	}
+}
+
+func (r *run) reconcile(id string) (bool, error) {
+	ctx, cancel := context.WithTimeout(r.ctx, settleFetchTimeout)
+	defer cancel()
+	sess, err := r.c.GetSession(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	entries, err := r.c.Timeline(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if id != r.sess.ID && sess.ParentID != r.sess.ID {
+		return false, nil
+	}
+	var terminal string
+	topic := api.SessionStreamTopic(id)
+	for _, entry := range entries {
+		if entry.CreatedAt.Before(r.started) || r.seenEntries[entry.ID] {
+			continue
+		}
+		if entry.TurnCompleted != nil {
+			terminal = entry.TurnCompleted.Status
+		} else if entry.Kind == api.TimelineKindInterrupted {
+			terminal = api.TurnStatusCanceled
+		}
+		if msg := entry.Message; msg != nil && msg.Role == api.RoleAssistant && id == r.sess.ID && r.opts.OutputFormat == OutputText {
+			text := messageText(msg)
+			if draft := r.tracker.streamed[msg.ID]; draft != nil {
+				text = strings.TrimPrefix(text, draft.String())
+			}
+			if err := r.w.delta(msg.ID, text); err != nil {
+				return false, err
+			}
+		}
+		r.handleEvent(api.Event{Topic: topic, Type: api.EventEntryAdded, Payload: api.EntryAddedEvent{SessionID: id, Entry: entry}})
+	}
+	if r.opts.Interactive() {
+		r.emitPendingElicitations(sess, id == r.sess.ID)
+	}
+	if r.handleSessionLifecycleEvent(api.Event{Topic: api.TopicSessions, Type: api.EventSessionUpdated, Payload: api.SessionUpdatedEvent{Session: *sess}}) {
+		return true, nil
+	}
+	if id != r.sess.ID || r.pendingSends == 0 && !r.cancelPending || !sessionQuiescent(sess) {
+		return false, nil
+	}
+	if terminal == api.TurnStatusFailed {
+		const msg = "turn failed during event stream interruption"
+		if r.opts.Interactive() {
+			if err := r.w.event(api.Event{Topic: topic, Type: api.EventError, Payload: api.ErrorEvent{SessionID: id, Error: msg}}); err != nil {
+				r.warn(fmt.Sprintf("write event: %v", err))
+			}
+		}
+		r.lastStatus, r.lastError = api.ExecResultFailed, msg
+		r.pendingSends, r.cancelPending = 0, false
+		return !r.opts.Interactive(), nil
+	}
+	if terminal == api.TurnStatusCanceled || r.cancelPending {
+		if r.opts.Interactive() {
+			if err := r.w.event(api.Event{Topic: topic, Type: api.EventStatusChanged, Payload: api.StatusChangedEvent{SessionID: id, Status: api.StatusIdle}}); err != nil {
+				r.warn(fmt.Sprintf("write event: %v", err))
+			}
+		}
+		r.cancelPending = true
+		return r.completeTurn(), nil
+	}
+	if r.opts.Interactive() {
+		if err := r.w.event(api.Event{Topic: topic, Type: api.EventCompleted, Payload: api.CompletedEvent{SessionID: id}}); err != nil {
+			r.warn(fmt.Sprintf("write event: %v", err))
+		}
+	}
+	return r.completeTurn(), nil
+}
+
+func (r *run) emitPendingElicitations(sess *api.Session, includeSubagents bool) {
+	if sess == nil {
+		return
+	}
+	r.emitSingleSessionPendingElicitations(sess)
+	if includeSubagents {
+		for i := range sess.Subagents {
+			r.emitSingleSessionPendingElicitations(&sess.Subagents[i])
+		}
+	}
+}
+
+func (r *run) emitSingleSessionPendingElicitations(sess *api.Session) {
+	topic := api.SessionStreamTopic(sess.ID)
+	var perms []api.PermissionRequest
+	for _, req := range sess.PendingPermissions {
+		if req.ID == "" || r.permOwners[req.ID] == "" {
+			perms = append(perms, req)
+		}
+	}
+	if len(perms) > 0 {
+		r.handleEvent(api.Event{
+			Topic:   topic,
+			Type:    api.EventPermissionRequested,
+			Payload: api.PermissionRequestedEvent{SessionID: sess.ID, Permissions: perms},
+		})
+	}
+	var questions []api.QuestionRequest
+	for _, req := range sess.PendingQuestions {
+		if req.ID == "" || r.questionOwners[req.ID] == "" {
+			questions = append(questions, req)
+		}
+	}
+	if len(questions) > 0 {
+		r.handleEvent(api.Event{
+			Topic:   topic,
+			Type:    api.EventQuestionRequested,
+			Payload: api.QuestionRequestedEvent{SessionID: sess.ID, Questions: questions},
+		})
+	}
+	var reviews []api.PlanReviewRequest
+	for _, req := range sess.PendingPlanReviews {
+		if req.ID == "" || r.planReviewOwners[req.ID] == "" {
+			reviews = append(reviews, req)
+		}
+	}
+	if len(reviews) > 0 {
+		r.handleEvent(api.Event{
+			Topic:   topic,
+			Type:    api.EventPlanReviewRequested,
+			Payload: api.PlanReviewRequestedEvent{SessionID: sess.ID, PlanReviews: reviews},
+		})
+	}
 }
 
 func (r *run) isWatchedSubagent(id string) bool {
@@ -361,35 +506,6 @@ func (r *run) isWatchedSubagent(id string) bool {
 	_, ok := r.watchedSubs[id]
 	r.watchMu.Unlock()
 	return ok
-}
-
-// consumeStream iterates the session and session-metadata topics until the
-// iterator ends. TopicSessions lets non-interactive runs detect child subagents
-// waiting on permissions/questions without polluting the NDJSON output stream.
-func (r *run) consumeStream(watchCtx context.Context, sessionID string) error {
-	r.watchMu.Lock()
-	since := r.since
-	r.watchMu.Unlock()
-	for ev, err := range r.c.Watch(watchCtx, since, api.SessionStreamTopic(sessionID), api.TopicSessions) {
-		if err != nil {
-			return err
-		}
-		if ev.ID != "" {
-			r.setSince(ev.ID)
-		}
-		select {
-		case r.events <- ev:
-		case <-r.ctx.Done():
-			return r.ctx.Err()
-		}
-	}
-	return errors.New("client: session stream ended")
-}
-
-func (r *run) setSince(s string) {
-	r.watchMu.Lock()
-	r.since = s
-	r.watchMu.Unlock()
 }
 
 // watchSignals forwards SIGINT/SIGTERM to the loop as a cancel request so
@@ -541,6 +657,13 @@ func (r *run) loop() int {
 			}
 			return r.exitCode()
 
+		case req := <-r.resync:
+			stop, err := r.reconcile(req.sessionID)
+			req.done <- err
+			if stop || err == nil && (!stdinOpen || quitRequested) && r.pendingSends == 0 && !r.cancelPending {
+				return r.exitCode()
+			}
+
 		case err := <-r.streamErr:
 			r.lastStatus = api.ExecResultFailed
 			r.lastError = fmt.Sprintf("session stream lost: %v", err)
@@ -585,6 +708,12 @@ func (r *run) handleEvent(ev api.Event) bool {
 		return r.handleSessionLifecycleEvent(ev)
 	}
 
+	if p, ok := ev.Payload.(api.EntryAddedEvent); ok && p.Entry.ID != "" {
+		if r.seenEntries[p.Entry.ID] {
+			return false
+		}
+		r.seenEntries[p.Entry.ID] = true
+	}
 	if err := r.w.event(ev); err != nil {
 		r.warn(fmt.Sprintf("write event: %v", err))
 	}
@@ -651,23 +780,7 @@ func (r *run) handleEvent(ev api.Event) bool {
 		if !r.quiescent() {
 			return false
 		}
-		r.pendingSends = 0
-		if r.cancelPending {
-			r.cancelPending = false
-			r.lastStatus = api.ExecResultCanceled
-		} else {
-			r.lastStatus = api.ExecResultCompleted
-			r.lastError = ""
-		}
-		r.turnsDone++
-		if r.opts.MaxTurns > 0 && r.turnsDone >= r.opts.MaxTurns {
-			// The cap stops the run after this turn: no further input.
-			select {
-			case r.quit <- struct{}{}:
-			default:
-			}
-		}
-		return !r.opts.Interactive()
+		return r.completeTurn()
 	case api.StatusChangedEvent:
 		if !isRoot {
 			return false
@@ -682,6 +795,26 @@ func (r *run) handleEvent(ev api.Event) bool {
 		}
 	}
 	return false
+}
+
+func (r *run) completeTurn() bool {
+	r.pendingSends = 0
+	if r.cancelPending {
+		r.cancelPending = false
+		r.lastStatus = api.ExecResultCanceled
+	} else {
+		r.lastStatus = api.ExecResultCompleted
+		r.lastError = ""
+	}
+	r.turnsDone++
+	if r.opts.MaxTurns > 0 && r.turnsDone >= r.opts.MaxTurns {
+		// The cap stops the run after this turn: no further input.
+		select {
+		case r.quit <- struct{}{}:
+		default:
+		}
+	}
+	return !r.opts.Interactive()
 }
 
 // handleSessionLifecycleEvent filters workspace-wide session lifecycle events
@@ -869,7 +1002,11 @@ func (r *run) quiescent() bool {
 		return true
 	}
 	r.sess = sess
-	return sess.Status == api.StatusIdle && !hasRunningSubagents(sess.Subagents)
+	return sessionQuiescent(sess)
+}
+
+func sessionQuiescent(sess *api.Session) bool {
+	return sess.Status == api.StatusIdle && len(sess.Queue) == 0 && !hasRunningSubagents(sess.Subagents)
 }
 
 func hasRunningSubagents(subs []api.Session) bool {

@@ -7,12 +7,65 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 )
+
+func TestRelativeWorkspace(t *testing.T) {
+	opts := Options{Workspace: "./dir/../child"}
+	r, err := newRun(t.Context(), &opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.cancel()
+	want, err := filepath.Abs("child")
+	if err != nil || opts.Workspace != want {
+		t.Fatalf("workspace = %q, want %q (%v)", opts.Workspace, want, err)
+	}
+}
+
+func TestNeedSyncSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name, session string
+		code          int
+	}{
+		{"completed", `{"id":"s","status":"idle"}`, ExitOK},
+		{"permission", `{"id":"s","status":"waiting_permission","pending_permissions":[{"id":"p","tool_name":"write"}]}`, ExitNeedsInput},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				body := tc.session
+				status := http.StatusOK
+				switch req.URL.Path {
+				case "/v1/events":
+					status = http.StatusConflict
+					body = `{"code":"need_sync","message":"evicted"}`
+				case "/v1/sessions/s/timeline":
+					body = `[{"id":"entry","kind":"message","message":{"id":"answer","role":"assistant","content":[{"type":"text","text":"restored"}]}}]`
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			})
+			r := newExecRun(t, &Options{OutputFormat: OutputJSON}, rt)
+			r.sess = &api.Session{ID: "s"}
+			r.pendingSends = 1
+			ctx, cancel := context.WithTimeout(r.ctx, time.Second)
+			defer cancel()
+			r.ctx = ctx
+			r.rebindMainWatch()
+			if code := r.loop(); code != tc.code || r.tracker.Text() != "restored" {
+				t.Fatalf("code=%d text=%q error=%q", code, r.tracker.Text(), r.lastError)
+			}
+		})
+	}
+	if sessionQuiescent(&api.Session{Status: api.StatusIdle, Queue: []api.QueueItem{{ID: "queued"}}}) {
+		t.Fatal("queued session considered quiescent")
+	}
+}
 
 func TestParseFormats(t *testing.T) {
 	inTests := []struct {
@@ -310,6 +363,9 @@ func TestCmdForkRebindsRunSession(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `forked session fork-1 as "Source (fork)"`) {
 		t.Fatalf("command output = %q, want fork confirmation", out.String())
+	}
+	if r.startCursor == "" {
+		t.Fatal("expected cmdFork to advance startCursor")
 	}
 }
 
@@ -638,5 +694,111 @@ func TestExecUsageIncludesPermissionReview(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in exec /usage output:\n%s", want, got)
 		}
+	}
+}
+
+func TestReconcileInteractiveEmitsMissedElicitationsAndSettlement(t *testing.T) {
+	now := time.Now()
+	var sessPayload api.Session
+	var timelinePayload []api.TimelineEntry
+
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body []byte
+		var err error
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/v1/sessions/root-sess":
+			body, err = json.Marshal(sessPayload)
+		case req.Method == http.MethodGet && req.URL.Path == "/v1/sessions/root-sess/timeline":
+			body, err = json.Marshal(timelinePayload)
+		default:
+			return execTransport{}.RoundTrip(req)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
+	})
+
+	var out bytes.Buffer
+	r := newExecRun(t, &Options{
+		InputFormat:  InputJSONL,
+		OutputFormat: OutputJSONL,
+		Stdout:       &out,
+		Stderr:       &bytes.Buffer{},
+	}, rt)
+	r.started = now.Add(-time.Minute)
+	r.sess = &api.Session{ID: "root-sess", Status: api.StatusThinking}
+
+	// Case 1: Missed permission on root + plan review on child emitted once during interactive reconcile.
+	sessPayload = api.Session{
+		ID:     "root-sess",
+		Status: api.StatusWaitingPermission,
+		PendingPermissions: []api.PermissionRequest{{
+			ID:         "perm-missed",
+			ToolCallID: "tc-1",
+			ToolName:   "bash",
+		}},
+		Subagents: []api.Session{{
+			ID:       "sub-1",
+			ParentID: "root-sess",
+			Status:   api.StatusWaitingPlanReview,
+			PendingPlanReviews: []api.PlanReviewRequest{{
+				ID:   "pr-missed",
+				Path: "plans/sub.md",
+			}},
+		}},
+	}
+	if stop, err := r.reconcile("root-sess"); err != nil || stop {
+		t.Fatalf("reconcile(elicitations) = (%v, %v), want (false, nil)", stop, err)
+	}
+	got := out.String()
+	if !strings.Contains(got, `"type":"permission_requested"`) || !strings.Contains(got, `"perm-missed"`) {
+		t.Fatalf("expected missed permission_requested in JSONL output:\n%s", got)
+	}
+	if !strings.Contains(got, `"type":"plan_review_requested"`) || !strings.Contains(got, `"pr-missed"`) {
+		t.Fatalf("expected missed subagent plan_review_requested in JSONL output:\n%s", got)
+	}
+
+	// Case 2: Already-seen failed TurnCompleted from Turn 1 must not poison Turn 2 completion.
+	out.Reset()
+	r.seenEntries["e-turn1-fail"] = true
+	r.pendingSends = 1
+	sessPayload = api.Session{ID: "root-sess", Status: api.StatusIdle}
+	timelinePayload = []api.TimelineEntry{{
+		ID:            "e-turn1-fail",
+		Kind:          api.TimelineKindTurnCompleted,
+		CreatedAt:     now,
+		TurnCompleted: &api.TurnCompletedRecord{Status: api.TurnStatusFailed},
+	}}
+	if stop, err := r.reconcile("root-sess"); err != nil || stop {
+		t.Fatalf("reconcile(completed) = (%v, %v), want (false, nil)", stop, err)
+	}
+	if r.lastStatus != api.ExecResultCompleted {
+		t.Fatalf("lastStatus = %q, want %q", r.lastStatus, api.ExecResultCompleted)
+	}
+	if !strings.Contains(out.String(), `"type":"completed"`) {
+		t.Fatalf("expected completed event in JSONL output:\n%s", out.String())
+	}
+
+	// Case 3: Unseen TimelineKindInterrupted settles as canceled and emits idle status.
+	out.Reset()
+	r.pendingSends = 1
+	timelinePayload = []api.TimelineEntry{{
+		ID:        "e-turn3-interrupted",
+		Kind:      api.TimelineKindInterrupted,
+		CreatedAt: now,
+	}}
+	if stop, err := r.reconcile("root-sess"); err != nil || stop {
+		t.Fatalf("reconcile(interrupted) = (%v, %v), want (false, nil)", stop, err)
+	}
+	if r.lastStatus != api.ExecResultCanceled {
+		t.Fatalf("lastStatus = %q, want %q", r.lastStatus, api.ExecResultCanceled)
+	}
+	if !strings.Contains(out.String(), `"type":"status_changed"`) || !strings.Contains(out.String(), `"status":"idle"`) {
+		t.Fatalf("expected idle status_changed event in JSONL output:\n%s", out.String())
 	}
 }
