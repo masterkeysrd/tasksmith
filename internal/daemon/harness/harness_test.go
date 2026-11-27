@@ -1563,12 +1563,28 @@ func TestInboxDrainAfterToolExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
-	if err := h.Configure(NodeOptions{
-		Model: newTestModel(t, prov),
-		Tools: reg,
-	}); err != nil {
+	opts := NodeOptions{Model: newTestModel(t, prov), Tools: reg}
+	if err := h.Configure(opts); err != nil {
 		t.Fatal(err)
 	}
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			opts.Static.SystemPrompt ^= 1
+			if err := h.Configure(opts); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	defer func() { close(stop); <-stopped }()
 
 	var emittedMessages []message.Message
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Read file")}) {
@@ -1612,6 +1628,19 @@ func TestInboxDrainAfterToolExecution(t *testing.T) {
 	}
 	if state.Messages[3].GetID() == "" {
 		t.Fatal("expected non-empty ID for drained inbox message in state")
+	}
+
+	var compacted bool
+	for ev, err := range h.Stream(ctx, Input{Compact: &api.CompactRequest{}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := ev.(CompactionCompleted); ok {
+			compacted = true
+		}
+	}
+	if !compacted {
+		t.Fatal("missing compaction completion")
 	}
 }
 

@@ -9,17 +9,16 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/masterkeysrd/loom/checkpoint/sqlite"
 	"github.com/masterkeysrd/loom/graph"
-	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -177,14 +176,9 @@ type harness struct {
 	id           string
 	logger       log.Interface
 	graph        *graph.Graph[State]
-	nodes        []Node
-	model        *llm.Model
-	tools        tools.Container
+	options      *atomic.Pointer[NodeOptions]
 	queue        Queue
-	static       StaticContext
-	limits       models.Limits
 	checkpointer graph.Checkpointer
-	attachments  *AttachmentResolver
 }
 
 var _ Harness = (*harness)(nil)
@@ -202,7 +196,9 @@ func New(cfg Config) (Harness, error) {
 
 	logger := cfg.Logger.ForComponent("harness")
 
-	g, nodes, err := buildGraph(GraphConfig{
+	options := new(atomic.Pointer[NodeOptions])
+	options.Store(&NodeOptions{})
+	g, err := buildGraph(options, GraphConfig{
 		Checkpointer: cp,
 		Permissions:  cfg.Permissions,
 		Queue:        cfg.Queue,
@@ -220,7 +216,7 @@ func New(cfg Config) (Harness, error) {
 		id:           strings.TrimSpace(cfg.ID),
 		logger:       logger,
 		graph:        g,
-		nodes:        nodes,
+		options:      options,
 		queue:        cfg.Queue,
 		checkpointer: cp,
 	}, nil
@@ -232,14 +228,8 @@ func (h *harness) Configure(opts NodeOptions) error {
 	if err := opts.Validate(); err != nil {
 		return err
 	}
-	h.model = opts.Model
-	h.tools = opts.Tools
-	h.static = opts.Static
-	h.limits = opts.Limits
-	h.attachments = opts.Attachments
-	for _, n := range h.nodes {
-		n.Configure(opts)
-	}
+	opts.ModelInfo = opts.ModelInfo.Clone()
+	h.options.Store(&opts)
 	return nil
 }
 
@@ -380,8 +370,9 @@ func (h *harness) prepareMessage(ctx context.Context, msg message.Message, state
 	nextState := state.RecordLoadedTools(newTools...)
 	var reminder *message.User
 	var loadedRules []RuleLoaded
-	if h.attachments != nil {
-		nextState, reminder, loadedRules = h.attachments.ResolveUserMessage(ctx, in, nextState)
+	opts := h.options.Load()
+	if opts.Attachments != nil {
+		nextState, reminder, loadedRules = opts.Attachments.ResolveUserMessage(ctx, in, nextState)
 	}
 
 	var inputMsg message.Message
@@ -394,12 +385,12 @@ func (h *harness) prepareMessage(ctx context.Context, msg message.Message, state
 
 	return graph.Update[State](func(s State) State {
 		s = s.RecordLoadedTools(nextState.LoadedTools...)
-		s = s.AppendMessage(in, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
+		s = s.AppendMessage(in, MessageUpdateOptions{Static: opts.Static, Limits: opts.Limits, SkipContextRecalculation: len(unfulfilled) > 0})
 		s = s.RecordLoadedRules(nextState.LoadedRules...)
 		s = s.RecordLoadedSkills(nextState.LoadedSkills...)
 		s = s.RecordSuggestedRules(nextState.SuggestedRules...)
 		if reminder != nil {
-			s = s.AppendMessage(reminder, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
+			s = s.AppendMessage(reminder, MessageUpdateOptions{Static: opts.Static, Limits: opts.Limits, SkipContextRecalculation: len(unfulfilled) > 0})
 		}
 		return s
 	}), inputMsg, loadedRules, nil

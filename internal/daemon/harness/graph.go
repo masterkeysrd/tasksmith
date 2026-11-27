@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/masterkeysrd/loom/graph"
@@ -110,7 +111,19 @@ type CommandNodeConfig struct {
 	Logger  log.Interface
 }
 
-func buildGraph(cfg GraphConfig) (*graph.Graph[State], []Node, error) {
+func snapshotNode[T any, P interface {
+	*T
+	Node
+}](options *atomic.Pointer[NodeOptions], template P) graph.Node[State] {
+	return graph.NodeFunc[State](func(ctx context.Context, state State) (graph.Command[State], error) {
+		step := *template
+		node := P(&step)
+		node.Configure(*options.Load())
+		return node.Execute(ctx, state)
+	})
+}
+
+func buildGraph(options *atomic.Pointer[NodeOptions], cfg GraphConfig) (*graph.Graph[State], error) {
 	compactNode := NewCompactionNode(CompactionNodeConfig{
 		Logger: cfg.Logger,
 	})
@@ -145,11 +158,11 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], []Node, error) {
 	g, err := graph.New[State]().
 		WithName("harness").
 		WithCheckpointer(cfg.Checkpointer).
-		AddNode("command", commandNode).
-		AddNode("inbox", inboxNode).
-		AddNode("agent", agentNode).
-		AddNode("tools", toolsNode).
-		AddNode("compact", compactNode).
+		AddNode("command", snapshotNode(options, commandNode)).
+		AddNode("inbox", snapshotNode(options, inboxNode)).
+		AddNode("agent", snapshotNode(options, agentNode)).
+		AddNode("tools", snapshotNode(options, toolsNode)).
+		AddNode("compact", snapshotNode(options, compactNode)).
 		// START routing:
 		AddConditionalEdge(graph.START, "compact", State.HasLeadingCompact).
 		AddConditionalEdge(graph.START, "tools", func(s State) bool {
@@ -199,11 +212,10 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], []Node, error) {
 		}).
 		Build()
 	if err != nil {
-		return nil, nil, fmt.Errorf("harness: build graph: %w", err)
+		return nil, fmt.Errorf("harness: build graph: %w", err)
 	}
 
-	nodes := []Node{commandNode, inboxNode, agentNode, toolsNode, compactNode}
-	return g, nodes, nil
+	return g, nil
 }
 
 func emit(ctx context.Context, ev any) {
