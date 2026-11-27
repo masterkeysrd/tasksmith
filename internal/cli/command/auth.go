@@ -1,7 +1,6 @@
 package command
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,20 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/masterkeysrd/kite/dom"
-	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
-	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
-	"github.com/masterkeysrd/tasksmith/internal/ui/clipboard"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
-	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 // authPollInterval and authPollTimeout bound how long the /login screen waits
@@ -109,10 +102,8 @@ func EnqueueProviderAuth(provider string) {
 
 // providerAuthState is the observable state of one provider sign-in.
 type providerAuthState struct {
-	provider string
-	authURL  string
-	// report is what the screen shows prominently: a copy confirmation, a
-	// rejected paste, or the final result.
+	provider    string
+	authURL     string
 	report      string
 	settled     bool
 	failed      bool
@@ -398,7 +389,6 @@ type providerAuthViewProps struct {
 // when no browser appeared, and a field to paste the redirect back when the
 // browser could not reach the daemon's callback listener.
 var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewProps) trail.Node {
-	notice, setNotice := kitex.UseState("")
 	reported, setReported := kitex.UseState(false)
 
 	authStore := kitex.UseMemo(newProviderAuthStore, []any{})
@@ -471,76 +461,13 @@ var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewP
 		escLabel = "Back"
 	}
 
-	doc := kitex.UseDocument()
-	input := kitex.UseRef[dom.Element](nil)
-	value, setValue := kitex.UseState("")
-	trail.UseFocus(input, trail.FocusOptions{AutoFocus: true, IsActive: !state.browserOnly})
-	copyURL := func() {
-		if clipboard.WriteText(doc(), state.authURL) {
-			if strings.TrimSpace(value()) == "c" {
-				setValue("")
-			}
-			setNotice(mcpAuthCopiedNotice)
-		}
-	}
-	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
-		{Keys: []string{"c"}, Label: "Copy URL", Disabled: state.browserOnly, OnPress: func() {
-			if pasted := strings.TrimSpace(value()); pasted == "" || pasted == "c" {
-				copyURL()
-			}
-		}},
-		{Keys: []string{"ctrl+y"}, Disabled: state.browserOnly, OnPress: copyURL},
-		{Keys: []string{"enter"}, Label: "Submit pasted URL", Disabled: state.browserOnly, OnPress: func() {
-			if pasted := strings.TrimSpace(value()); pasted != "" {
-				setValue("")
-				setNotice("")
-				flowRef.Current.submit(context.Background(), pasted)
-			}
-		}},
-		{Keys: []string{"esc", "escape"}, Label: escLabel, OnPress: closeView},
-	}, true)
-	st := styles.Use(newProviderAuthStyles)
-	width := trail.UseWindowSize().Width - mcpCardIndent
-	panel := uicomponents.PanelProps{
-		Title:    title + "…",
-		Subtitle: mcpAuthSpinner + " " + mcpAuthNotice,
-		Bindings: bindings,
-		Notice:   cmp.Or(notice(), state.report),
-	}
-	if state.failed {
-		panel.Error, panel.Notice = panel.Notice, ""
-	}
-	return uicomponents.Panel(panel, kitex.If(!state.browserOnly, func() trail.Node {
-		return trail.Box(trail.BoxProps{Style: st.Column},
-			trail.Span(trail.SpanProps{Style: st.Secondary}, trail.Text(mcpAuthCopyHint)),
-			uicomponents.KVList(uicomponents.KVListProps{Items: []uicomponents.KVItem{{
-				Label: "URL",
-				Value: strings.Join(mcpWrapText(cmp.Or(state.authURL, "Waiting for the authorization URL…"), width-5, 0), "\n"),
-				Tone:  uicomponents.ToneAccent,
-			}}}),
-			trail.Span(trail.SpanProps{Style: st.Secondary}, trail.Text(mcpAuthPasteHint)),
-			trail.Box(trail.BoxProps{Style: st.Row}, trail.Span(trail.SpanProps{Style: st.Secondary}, trail.Text("URL > ")),
-				kitex.Input(kitex.InputProps{Ref: input, Value: value(), Style: st.Input, OnChange: func(e event.Event) {
-					if ie, ok := e.(*event.InputEvent); ok {
-						setValue(ie.Value)
-					}
-				}}),
-			),
-			trail.Span(trail.SpanProps{Style: st.Muted}, trail.Text(mcpAuthReturnHint)),
-		)
-	}))
+	return uicomponents.OAuthPrompt(uicomponents.OAuthPromptProps{
+		Title:       title + "…",
+		AuthURL:     state.authURL,
+		Status:      state.report,
+		BrowserOnly: state.browserOnly,
+		EscLabel:    escLabel,
+		OnSubmit:    func(callbackURL string) { flowRef.Current.submit(context.Background(), callbackURL) },
+		OnClose:     closeView,
+	})
 })
-
-type providerAuthStyles struct {
-	styles.Common
-	Input style.Style
-}
-
-func newProviderAuthStyles(s *theme.Scheme) providerAuthStyles {
-	return providerAuthStyles{
-		Common: styles.NewCommon(s),
-		Input: style.S().
-			Flex(1).
-			MinWidth(style.Cells(0)),
-	}
-}

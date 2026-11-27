@@ -26,6 +26,23 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
+type mcpAuthScreenProps struct {
+	state    *kites.Store[mcpAuthState]
+	onSubmit func(string)
+	onClose  func()
+}
+
+var mcpAuthScreen = trail.FC("MCPAuthScreen", func(props mcpAuthScreenProps) trail.Node {
+	state := kites.Use(props.state, func(s mcpAuthState) mcpAuthState { return s })
+	return uicomponents.OAuthPrompt(uicomponents.OAuthPromptProps{
+		Title:    "Authenticating with " + state.server + "…",
+		AuthURL:  state.authURL,
+		Status:   state.status,
+		OnSubmit: props.onSubmit,
+		OnClose:  props.onClose,
+	})
+})
+
 // enqueueMCPBrowser opens the server browser with an optional status line.
 func enqueueMCPBrowser(notice string) {
 	enqueueMCPBrowserWithStore(notice, nil)
@@ -1241,9 +1258,6 @@ var mcpScreen = trail.FC("MCPScreen", func(props mcpScreenProps) trail.Node {
 	// toolNotice reports the outcome of an action taken inside the tool detail view,
 	// which has no title of its own to carry it.
 	toolNotice, setToolNotice := kitex.UseState("")
-	// authCopyNotice confirms a copy pressed inside the authorization screen. It
-	// lives here because that screen unmounts the moment the user leaves it.
-	authCopyNotice, setAuthCopyNotice := kitex.UseState("")
 	// authReported records that a finished authorization already wrote its outcome to
 	// the timeline, so no re-render can write it a second time.
 	authReported, setAuthReported := kitex.UseState(false)
@@ -1380,7 +1394,6 @@ var mcpScreen = trail.FC("MCPScreen", func(props mcpScreenProps) trail.Node {
 			return
 		}
 		setNotice("")
-		setAuthCopyNotice("")
 		setAuthReported(false)
 		nav.Push(mcpRoute{pane: mcpPaneAuth, server: name})
 		if flowRef.Current != nil {
@@ -1397,7 +1410,6 @@ var mcpScreen = trail.FC("MCPScreen", func(props mcpScreenProps) trail.Node {
 			flowRef.Current.cancel()
 			flowRef.Current = nil
 		}
-		setAuthCopyNotice("")
 		// /mcp auth <name> opened this screen directly, so going back means leaving
 		// the browser too; there is nothing behind it to return to.
 		if props.initialAuthServer != "" {
@@ -1417,7 +1429,7 @@ var mcpScreen = trail.FC("MCPScreen", func(props mcpScreenProps) trail.Node {
 		setAuthReported(true)
 		mcpAuthTimelineReport(authState)
 		store.RemoveSlot(props.slotID)
-	}, []any{authState.settled, authState.notice})
+	}, []any{authState.settled, authState.outcome})
 
 	// /mcp auth <name> names the server to authorize, so the browser opens on that
 	// flow rather than on a list the user has already decided they did not want.
@@ -1482,18 +1494,14 @@ var mcpScreen = trail.FC("MCPScreen", func(props mcpScreenProps) trail.Node {
 	}
 	switch current.pane {
 	case mcpPaneAuth:
-		return mcpAuthPane(mcpAuthPaneProps{
-			server: current.server,
-			state:  authStore,
-			notice: authCopyNotice(),
-			onCopy: func() { setAuthCopyNotice(mcpAuthCopiedNotice) },
+		return mcpAuthScreen(mcpAuthScreenProps{
+			state: authStore,
 			onSubmit: func(callbackURL string) {
-				setAuthCopyNotice("")
 				if flowRef.Current != nil {
 					flowRef.Current.submit(context.Background(), callbackURL)
 				}
 			},
-			onBack: leaveAuth,
+			onClose: leaveAuth,
 		})
 	case mcpPaneArgs:
 		target, found := mcpTargetFor(servers, current.server, mcpTargetPrompt, current.item)

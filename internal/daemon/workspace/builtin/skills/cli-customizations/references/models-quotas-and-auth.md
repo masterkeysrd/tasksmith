@@ -61,7 +61,7 @@ OAuth model providers authenticate through the daemon. Choose the provider in `/
 - **`tasksmith auth status [provider] [--json]`**: shows provider, auth type and status, plus account, scope, default model, model count and error when available. Omit the name for the `PROVIDER / AUTH / STATUS / ACCOUNT / SCOPE` table. Use `--json` for an indented status object or the full array of provider summaries.
 - **`tasksmith auth logout [provider]`**: deletes stored credentials for that provider and cancels any in-flight sign-in flow.
 - **REPL `/login [provider]`** (aliases `/auth`, `/signin`): opens the interactive sign-in screen (also reachable via `l` in `/providers`, or from the inline re-authentication prompt shown automatically when an interactive turn fails due to an expired OAuth session):
-  - `c` (Antigravity): copy the authorization URL to clipboard.
+  - `Ctrl+Y` (Antigravity): copy the authorization URL to clipboard.
   - `Enter` (Antigravity): submit a pasted redirect URL (full address-bar URL, query string, or bare code).
   - `Esc`: dismiss the screen while the daemon's flow continues; the settled result posts to the conversation timeline.
 - **Provider resolution & daemon requirement**:

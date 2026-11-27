@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/kite/element"
-	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -3312,7 +3311,7 @@ func TestMCPAuthScreenShowsTheURLAndThePasteField(t *testing.T) {
 	out, ok := waitForRender(t, env,
 		"Authenticating with sentry…",
 		"A browser window will open for authentication",
-		"(c to copy)",
+		"ctrl+y",
 		"https://example.com/authorize?server=sentry",
 		"paste the URL from your browser's address bar:",
 		"URL >",
@@ -3325,7 +3324,7 @@ func TestMCPAuthScreenShowsTheURLAndThePasteField(t *testing.T) {
 		t.Errorf("authorization screen must advertise its keys, got:\n%s", out)
 	}
 	// The confirmation only appears once the user actually copies.
-	if strings.Contains(out, mcpAuthCopiedNotice) {
+	if strings.Contains(out, "Copied authorization URL to clipboard.") {
 		t.Errorf("the copy confirmation showed before a copy, got:\n%s", out)
 	}
 }
@@ -3339,9 +3338,8 @@ func TestMCPAuthScreenWaitsForTheURLBeforeItArrives(t *testing.T) {
 	defer store.ClearSlot()
 
 	store.ClearTranscript()
-	node := mcpAuthPane(mcpAuthPaneProps{
-		server: "sentry",
-		state:  kites.Create(mcpAuthState{server: "sentry"}),
+	node := mcpAuthScreen(mcpAuthScreenProps{
+		state: kites.Create(mcpAuthState{server: "sentry"}),
 	})
 	out := testutils.Render(t, node, 100, 30)
 	if !strings.Contains(out, "Waiting for the authorization URL…") {
@@ -3368,7 +3366,7 @@ func TestMCPAuthScreenCopyPutsTheURLOnTheClipboard(t *testing.T) {
 	}
 
 	env.SendKey(key.Key{Code: 'y', Text: "y", Mod: key.ModCtrl})
-	out, ok := waitForRender(t, env, mcpAuthCopiedNotice)
+	out, ok := waitForRender(t, env, "Copied authorization URL to clipboard.")
 	if !ok {
 		t.Fatalf("expected the copy confirmation, got:\n%s", out)
 	}
@@ -3377,10 +3375,7 @@ func TestMCPAuthScreenCopyPutsTheURLOnTheClipboard(t *testing.T) {
 	}
 }
 
-// TestMCPAuthScreenCopyKeyCopiesAnEmptyField covers the bare `c` shortcut. The paste
-// field has focus on this screen, so the keystroke must not leave a stray letter
-// behind once the copy is done.
-func TestMCPAuthScreenCopyKeyCopiesAnEmptyField(t *testing.T) {
+func TestMCPAuthScreenTypesCIntoEmptyField(t *testing.T) {
 	newMCPFixture(t, mcpTestServers())
 	mcpStubAuthFlow(t)
 	store.ClearSlot()
@@ -3397,15 +3392,8 @@ func TestMCPAuthScreenCopyKeyCopiesAnEmptyField(t *testing.T) {
 	}
 
 	env.SendKey(key.Key{Code: 'c', Text: "c"})
-	out, ok := waitForRender(t, env, mcpAuthCopiedNotice)
-	if !ok {
-		t.Fatalf("expected the copy confirmation, got:\n%s", out)
-	}
-	if !slices.Contains(copied.all(), "https://example.com/authorize?server=sentry") {
-		t.Errorf("copied URLs = %v, want the authorization URL", copied.all())
-	}
-	if strings.Contains(out, "URL > c") {
-		t.Errorf("the copy keystroke left a stray letter in the paste field:\n%s", out)
+	if out, ok := waitForRender(t, env, "URL > c"); !ok || len(copied.all()) != 0 {
+		t.Fatalf("typing c should edit the field without copying: %v\n%s", copied.all(), out)
 	}
 }
 
@@ -3607,7 +3595,7 @@ func TestMCPAuthScreenReportsAFailedAuthorization(t *testing.T) {
 
 	mcpAuthTimelineReport(mcpAuthState{
 		server:  "sentry",
-		notice:  "Authorization for sentry failed: token endpoint returned 400",
+		outcome: "Authorization for sentry failed: token endpoint returned 400",
 		settled: true,
 		failed:  true,
 	})
@@ -3628,7 +3616,7 @@ func TestMCPAuthScreenReportsSuccessAsCommandOutput(t *testing.T) {
 
 	mcpAuthTimelineReport(mcpAuthState{
 		server:  "sentry",
-		notice:  "Authentication successful. Connected to sentry.",
+		outcome: "Authentication successful. Connected to sentry.",
 		settled: true,
 	})
 	out := transcriptText()
@@ -3646,36 +3634,9 @@ func TestMCPAuthScreenStaysQuietWhileFlowing(t *testing.T) {
 	newMCPFixture(t, mcpTestServers())
 	store.ClearTranscript()
 
-	mcpAuthTimelineReport(mcpAuthState{server: "sentry", notice: "Opened the authorization page for sentry"})
+	mcpAuthTimelineReport(mcpAuthState{server: "sentry", status: "Opened the authorization page for sentry"})
 	if out := transcriptText(); out != "" {
 		t.Fatalf("an in-flight authorization must not report to the timeline, got:\n%s", out)
-	}
-}
-
-// TestMCPAuthCopyKeyClaimsOnlyTheCopyChords pins which keystrokes copy. A bare `c`
-// copies only while nothing has been typed, so a URL being entered keeps its letter;
-// ctrl+y always copies.
-func TestMCPAuthCopyKeyClaimsOnlyTheCopyChords(t *testing.T) {
-	tests := []struct {
-		name   string
-		key    key.Key
-		pasted string
-		want   bool
-	}{
-		{name: "bare c on an empty field", key: key.Key{Code: 'c', Text: "c"}, want: true},
-		{name: "bare c while typing", key: key.Key{Code: 'c', Text: "c"}, pasted: "http://localhost:1/c", want: false},
-		{name: "ctrl+y with a paste", key: key.Key{Code: 'y', Text: "y", Mod: key.ModCtrl}, pasted: "code=abc", want: true},
-		{name: "ctrl+y on an empty field", key: key.Key{Code: 'y', Text: "y", Mod: key.ModCtrl}, want: true},
-		{name: "ctrl+c is left alone", key: key.Key{Code: 'c', Text: "c", Mod: key.ModCtrl}},
-		{name: "capital C is left alone", key: key.Key{Code: 'C', Text: "C"}},
-		{name: "enter is left alone", key: key.Key{Code: key.KeyEnter, Text: "\r"}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := mcpAuthCopyKey(event.KeyEvent{Key: tc.key}, tc.pasted); got != tc.want {
-				t.Errorf("mcpAuthCopyKey = %v, want %v", got, tc.want)
-			}
-		})
 	}
 }
 

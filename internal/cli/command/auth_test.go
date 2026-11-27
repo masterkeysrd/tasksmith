@@ -385,7 +385,7 @@ func TestProviderAuthScreenRendersTheFlow(t *testing.T) {
 	if !strings.Contains(out, "Signing in to antigravity") {
 		t.Fatalf("sign-in screen missing the provider headline, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Copy URL") || !strings.Contains(out, "Submit pasted URL") {
+	if !strings.Contains(out, "ctrl+y") || !strings.Contains(out, "Copy URL") || !strings.Contains(out, "Submit pasted URL") {
 		t.Errorf("sign-in screen must advertise its keys, got:\n%s", out)
 	}
 }
@@ -447,7 +447,12 @@ func TestProviderAuthScreenSubmitsPastedURL(t *testing.T) {
 		t.Fatalf("the authorization URL never reached the screen:\n%s", env.DumpText())
 	}
 
-	env.Type("http://localhost:1/cb?code=abc")
+	copied := mcpStubClipboard(t, env.Environment)
+	env.Press(key.Key{Code: 'y', Mod: key.ModCtrl})
+	if urls := copied.all(); len(urls) != 1 || urls[0] != "https://authorize.example/x" {
+		t.Fatalf("copied URLs = %v", urls)
+	}
+	env.Type("code=abc")
 	env.Press(key.Key{Code: key.KeyEnter})
 
 	out, ok := waitForRender(t, env.Environment, "Signed in to antigravity as pasted@example.com.")
@@ -455,7 +460,7 @@ func TestProviderAuthScreenSubmitsPastedURL(t *testing.T) {
 		t.Fatalf("the pasted callback never settled the flow:\n%s", out)
 	}
 	sent := f.callbackSubmissions()
-	if len(sent) != 1 || sent[0] != "http://localhost:1/cb?code=abc" {
+	if len(sent) != 1 || sent[0] != "code=abc" {
 		t.Errorf("callback submissions = %v, want the pasted URL", sent)
 	}
 }
