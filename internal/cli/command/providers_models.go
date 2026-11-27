@@ -13,7 +13,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 type providersModelsPaneProps struct {
@@ -41,7 +40,6 @@ type modelsPaneStaged struct {
 // editing (f2), removal marking (space), default selection (d), a custom model
 // id prompt (n), catalog browsing (c), and saving (s).
 var providersModelsPane = trail.FC("ProvidersModelsPane", func(props providersModelsPaneProps) trail.Node {
-	scheme := theme.UseTheme()
 	width := trail.UseWindowSize().Width
 	staged, setStaged := kitex.UseState(modelsPaneStaged{remove: map[string]bool{}})
 
@@ -160,7 +158,7 @@ var providersModelsPane = trail.FC("ProvidersModelsPane", func(props providersMo
 			options[i].CellNodes = []trail.Node{
 				nil,
 				nil,
-				mcpBadgeNode(cells[2], style.S().Foreground(scheme.Color.Text.Muted)),
+				uicomponents.Badge(uicomponents.BadgeProps{Label: cells[2], Tone: uicomponents.ToneMuted}),
 			}
 		}
 		pickerProps.Columns = []uicomponents.Column{
@@ -239,11 +237,7 @@ var providersModelsPane = trail.FC("ProvidersModelsPane", func(props providersMo
 			},
 		},
 	}
-	pickerProps.OnCancel = func() {
-		if props.onBack != nil {
-			props.onBack()
-		}
-	}
+	pickerProps.OnCancel = props.onBack
 
 	return components.Picker(pickerProps)
 })

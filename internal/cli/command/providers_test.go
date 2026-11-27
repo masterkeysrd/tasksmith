@@ -27,6 +27,8 @@ type providerFixture struct {
 	providers []api.WorkspaceProvider
 	aliases   []api.AliasAssignment
 	presets   []api.ProviderSummary
+	authURL   string
+	callback  chan string
 	catalog   []api.ProviderCatalogEntry
 	created   []api.CreateProviderRequest
 	assigned  []api.AssignModelAliasesRequest
@@ -182,9 +184,18 @@ func (f *providerFixture) RoundTrip(r *http.Request) (*http.Response, error) {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/workspace":
 		return mcpJSONResponse(http.StatusOK, api.Workspace{Name: "test-ws"})
 
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/auth/callback"):
+		var req api.ProviderAuthCallbackRequest
+		if err := decodeJSONBody(r, &req); err != nil {
+			return nil, err
+		}
+		f.callback <- req.CallbackURL
+		return mcpJSONResponse(http.StatusOK, api.ProviderAuthResponse{Provider: "prova", Status: "authenticated"})
+
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/providers/") && strings.HasSuffix(r.URL.Path, "/auth"):
 		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/providers/"), "/auth")
 		return mcpJSONResponse(http.StatusOK, api.ProviderAuthResponse{
+			AuthURL:  f.authURL,
 			Provider: name,
 			Status:   "authorizing",
 		})
@@ -444,7 +455,9 @@ func TestProvidersBrowserAddPaneWalksPresetAndForm(t *testing.T) {
 	env.Flush()
 	env.SendKey(key.Key{Code: key.KeyEscape})
 	env.Flush()
-	waitForText(env, time.Second, func(s string) bool { return strings.Contains(s, "Manage model providers") })
+	if text, ok := waitForText(env, time.Second, func(s string) bool { return strings.Contains(s, "Manage model providers") }); !ok {
+		t.Fatalf("Esc did not return from the preset picker:\n%s", text)
+	}
 	mcpSettle(env)
 	if len(f.created) != 0 {
 		t.Fatalf("no provider should have been created yet: %+v", f.created)
@@ -855,4 +868,38 @@ func TestProvidersBrowserAuthHealthStatusesAndLoginKey(t *testing.T) {
 	app.WaitFor(func(s string) bool {
 		return strings.Contains(s, "Manage model providers") && strings.Contains(s, "Session expired")
 	})
+}
+
+func TestProvidersAuthRouteAcceptsCallbackText(t *testing.T) {
+	providers := testWorkspaceProviders()
+	providers[0].AuthType = "oauth2"
+	f := newProviderFixture(t, providers)
+	stubAuthBrowser(t)
+	f.authURL = "https://authorize.example/start"
+	f.callback = make(chan string, 1)
+	if err := handleProviders(nil); err != nil {
+		t.Fatal(err)
+	}
+	env := mcpMountActiveSlot(t)
+	env.SendKey(key.Key{Code: 'l', Text: "l"})
+	if text, ok := waitForText(env, time.Second, func(s string) bool { return strings.Contains(s, f.authURL) }); !ok {
+		t.Fatalf("authorization URL missing:\n%s", text)
+	}
+	const callback = "https://example.test/callback?code=abc"
+	for _, ch := range callback {
+		env.SendKey(key.Key{Code: ch, Text: string(ch)})
+		env.Flush()
+	}
+	env.SendKey(key.Key{Code: key.KeyEnter})
+	select {
+	case got := <-f.callback:
+		if got != callback {
+			t.Fatalf("submitted %q, want %q", got, callback)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("callback not submitted:\n%s", env.DumpText())
+	}
+	if text, ok := waitForText(env, time.Second, func(s string) bool { return strings.Contains(s, "Manage model providers") }); !ok {
+		t.Fatalf("completing sign-in did not restore the provider list:\n%s", text)
+	}
 }

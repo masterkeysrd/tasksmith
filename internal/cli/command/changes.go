@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/flight"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
@@ -13,6 +13,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -88,350 +90,257 @@ func handleRevert(args []string) error {
 }
 
 func aggregateFileChanges(entries []api.FileChange) []api.FileChange {
-	if len(entries) == 0 {
-		return nil
+	type group struct {
+		first, last    api.FileChange
+		added, removed int
 	}
-
-	type fileGroup struct {
-		path    string
-		entries []api.FileChange
-	}
-
-	var groups []fileGroup
-	groupIndices := make(map[string]int)
-
+	var paths []string
+	groups := make(map[string]*group)
 	for _, ch := range entries {
-		idx, ok := groupIndices[ch.Path]
-		if !ok {
-			groupIndices[ch.Path] = len(groups)
-			groups = append(groups, fileGroup{
-				path:    ch.Path,
-				entries: []api.FileChange{ch},
-			})
+		g := groups[ch.Path]
+		if g == nil {
+			paths = append(paths, ch.Path)
+			g = &group{first: ch}
+			groups[ch.Path] = g
+		}
+		g.last = ch
+		if ch.Tool == "revert" {
+			g.added, g.removed = 0, 0
 		} else {
-			groups[idx].entries = append(groups[idx].entries, ch)
+			g.added += ch.Additions
+			g.removed += ch.Deletions
 		}
 	}
 
 	var result []api.FileChange
-	for _, g := range groups {
-		if len(g.entries) == 0 {
-			continue
-		}
-		first := g.entries[0]
-		last := g.entries[len(g.entries)-1]
-
-		baselineHash := first.BeforeHash
+	for _, path := range paths {
+		g := groups[path]
+		first, last := g.first, g.last
 		currentHash := last.AfterHash
 		if last.Kind == api.KindDeleted {
 			currentHash = ""
 		}
-
-		if baselineHash == currentHash && (first.Kind != api.KindCreated || last.Kind == api.KindDeleted) {
+		if first.BeforeHash == currentHash && (first.Kind != api.KindCreated || last.Kind == api.KindDeleted) {
 			continue
 		}
-
-		var netKind api.ChangeKind
-		if (first.Kind == api.KindCreated || first.BeforeHash == "") && last.Kind != api.KindDeleted {
-			netKind = api.KindCreated
-		} else if last.Kind == api.KindDeleted {
-			netKind = api.KindDeleted
-		} else {
-			netKind = api.KindModified
+		kind := api.KindModified
+		switch {
+		case last.Kind == api.KindDeleted:
+			kind = api.KindDeleted
+		case first.Kind == api.KindCreated || first.BeforeHash == "":
+			kind = api.KindCreated
 		}
-
-		lastRevertIdx := -1
-		for i, e := range g.entries {
-			if e.Tool == "revert" {
-				lastRevertIdx = i
-			}
-		}
-
-		totalAdd := 0
-		totalDel := 0
-		for i := lastRevertIdx + 1; i < len(g.entries); i++ {
-			if g.entries[i].Tool != "revert" {
-				totalAdd += g.entries[i].Additions
-				totalDel += g.entries[i].Deletions
-			}
-		}
-
 		result = append(result, api.FileChange{
-			ID:        last.ID,
-			Path:      g.path,
-			Kind:      netKind,
-			Additions: totalAdd,
-			Deletions: totalDel,
-			Timestamp: last.Timestamp,
+			ID: last.ID, Path: path, Kind: kind,
+			Additions: g.added, Deletions: g.removed, Timestamp: last.Timestamp,
 		})
 	}
-
 	return result
 }
 
-type emptyChangesViewProps struct {
-	slotID string
-}
-
-var emptyChangesView = trail.FC("EmptyChangesView", func(props emptyChangesViewProps) trail.Node {
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		if k.MatchString("esc", "escape") {
-			store.RemoveSlot(props.slotID)
-		}
-	})
-
-	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	boxStyle := style.S().
-		Border(border).
-		Width(style.Percent(100)).
-		FlexDirection(style.FlexColumn)
-	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
-	emptyStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
-
-	return trail.Box(trail.BoxProps{Style: boxStyle},
-		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Tracked Changes")),
-		trail.Span(trail.SpanProps{Style: emptyStyle}, trail.Text("  No tracked file changes.")),
-		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-			Bindings: []uicomponents.KeyBinding{
-				{Key: "esc", Label: "Close"},
-			},
-		}),
-	)
-})
-
 type changeDiffProps struct {
 	sessionID string
-	change    *api.FileChange
-	onClose   func()
+	path      string
+	kind      api.ChangeKind
 }
 
 var changeDiffViewer = trail.FC("ChangeDiffViewer", func(props changeDiffProps) trail.Node {
-	c := store.Client()
-	diffText, setDiffText := kitex.UseState("")
-	isLoading, setIsLoading := kitex.UseState(true)
-	errText, setErrText := kitex.UseState("")
-
+	nav := flight.UseNavigation()
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"esc", "escape"}, Label: "Return to changes", OnPress: nav.Pop},
+	}, true)
+	type result struct{ text, err string }
+	diff, setDiff := kitex.UseState[*result](nil)
 	kitex.UseEffectCleanup(func() func() {
+		c := store.Client()
 		if c == nil {
-			setIsLoading(false)
-			setErrText("client unavailable")
+			setDiff(&result{err: "Error loading diff: client unavailable"})
 			return nil
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		setIsLoading(true)
+		setDiff(nil)
 		go func() {
-			diff, err := c.DiffChange(ctx, props.sessionID, props.change.Path, "")
+			text, err := c.DiffChange(ctx, props.sessionID, props.path, "")
 			if ctx.Err() != nil {
 				return
 			}
 			if err != nil {
-				setErrText(err.Error())
+				setDiff(&result{err: "Error loading diff: " + err.Error()})
 			} else {
-				setDiffText(diff)
-				setErrText("")
+				setDiff(&result{text: text})
 			}
-			setIsLoading(false)
 		}()
 		return cancel
-	}, []any{props.sessionID, props.change.Path})
+	}, []any{props.sessionID, props.path})
 
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		if k.MatchString("esc", "escape") {
-			if props.onClose != nil {
-				props.onClose()
-			}
-		}
-	})
-
-	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	headerStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
-
-	var content trail.Node
-	if isLoading() {
-		content = trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
-		}, trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Secondary),
-		}, trail.Text("Loading diff...")))
-	} else if err := errText(); err != "" {
-		content = trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
-		}, trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Error),
-		}, trail.Text("Error loading diff: "+err)))
+	panel := uicomponents.PanelProps{Title: fmt.Sprintf("Diff for %s (%s):", props.path, props.kind), Bindings: bindings}
+	data := diff()
+	if data == nil {
+		panel.Notice = "Loading diff..."
 	} else {
-		content = components.DiffView(components.DiffProps{
-			Text: diffText(),
-			Path: props.change.Path,
-		})
+		panel.Error = data.err
 	}
-
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Border(border).
-			Width(style.Percent(100)).
-			FlexDirection(style.FlexColumn),
-	},
-		trail.Span(trail.SpanProps{
-			Style: headerStyle,
-		}, trail.Text(fmt.Sprintf("Diff for %s (%s):", props.change.Path, props.change.Kind))),
-		content,
-		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-			Bindings: []uicomponents.KeyBinding{
-				{Key: "esc", Label: "Return to changes"},
-			},
-		}),
-	)
+	return uicomponents.Panel(panel, kitex.If(data != nil && data.err == "", func() trail.Node {
+		return components.DiffView(components.DiffProps{Text: data.text, Path: props.path})
+	}))
 })
+
+type changesListRoute struct{}
+
+type changeDiffRoute struct{ Path string }
 
 // ChangesBrowser renders an interactive changes list and inline diff viewer inside <Slot />.
 var ChangesBrowser = trail.FC("ChangesBrowser", func(slotID string) trail.Node {
-	sess := store.GetSession().Session
+	sessID := store.UseSession(func(s store.SessionState) string {
+		if s.Session != nil {
+			return s.Session.ID
+		}
+		return ""
+	})
 	c := store.Client()
-
-	selectedChange, setSelectedChange := kitex.UseState[*api.FileChange](nil)
-	changesState, setChangesState := kitex.UseState[[]api.FileChange](nil)
-	isLoading, setIsLoading := kitex.UseState(true)
-	errorState, setErrorState := kitex.UseState[error](nil)
-	fetchCount, setFetchCount := kitex.UseState(0)
-
-	sessID := ""
-	if sess != nil {
-		sessID = sess.ID
-	}
-
-	refetch := func() {
-		setFetchCount(fetchCount() + 1)
-	}
-
+	changes, setChanges := kitex.UseState[[]api.FileChange](nil)
+	loading, setLoading := kitex.UseState(true)
+	generation, refresh := kitex.UseState(0)
 	kitex.UseEffectCleanup(func() func() {
-		if sess == nil || sess.ID == "" || c == nil {
-			setIsLoading(false)
+		switch {
+		case sessID == "":
+			store.RemoveSlot(slotID)
+			store.AppendCommandOutput("/changes", "No active session.")
+			return nil
+		case c == nil:
+			store.RemoveSlot(slotID)
+			store.AppendNotice("Client unavailable.")
 			return nil
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		setIsLoading(true)
+		setLoading(true)
 		go func() {
-			data, err := c.Changes(ctx, sess.ID)
+			entries, err := c.Changes(ctx, sessID)
 			if ctx.Err() != nil {
 				return
 			}
 			if err != nil {
-				setErrorState(err)
-			} else {
-				setChangesState(data)
-				setErrorState(nil)
+				store.RemoveSlot(slotID)
+				store.AppendError("Error", err.Error())
+				return
 			}
-			setIsLoading(false)
+			setChanges(aggregateFileChanges(entries))
+			setLoading(false)
 		}()
 		return cancel
-	}, []any{sessID, fetchCount()})
+	}, []any{sessID, c, generation()})
 
-	if sess == nil || sess.ID == "" {
-		store.RemoveSlot(slotID)
-		store.AppendCommandOutput("/changes", "No active session.")
-		return nil
-	}
-	if c == nil {
-		store.RemoveSlot(slotID)
-		store.AppendNotice("Client unavailable.")
-		return nil
-	}
+	return changesStack(changesListProps{
+		slotID:    slotID,
+		sessionID: sessID,
+		changes:   changes(),
+		loading:   loading(),
+		revert: func(path string) {
+			go func() {
+				if err := c.Revert(context.Background(), sessID, api.RevertRequest{Path: path}); err != nil {
+					store.AppendError("Revert Error", err.Error())
+					return
+				}
+				refresh(generation() + 1)
+			}()
+		},
+	})
+})
 
-	if sel := selectedChange(); sel != nil {
-		return changeDiffViewer(changeDiffProps{
-			sessionID: sess.ID,
-			change:    sel,
-			onClose: func() {
-				setSelectedChange(nil)
-			},
+type changesListProps struct {
+	slotID, sessionID string
+	changes           []api.FileChange
+	loading           bool
+	revert            func(string)
+}
+
+func changesStack(props changesListProps) trail.Node {
+	return flight.Stack(flight.StackProps{
+		InitialRoute: changesListRoute{},
+		RenderRoute: func(route flight.Route) trail.Node {
+			if detail, ok := route.(changeDiffRoute); ok {
+				for _, ch := range props.changes {
+					if ch.Path == detail.Path {
+						return changeDiffViewer(changeDiffProps{sessionID: props.sessionID, path: ch.Path, kind: ch.Kind})
+					}
+				}
+				return missingChange()
+			}
+			var content trail.Node
+			if props.loading {
+				content = loadingHint("Loading changes...")
+			} else {
+				content = changesList(props)
+			}
+			return trail.Box(trail.BoxProps{}, content)
+		},
+	})
+}
+
+var missingChange = trail.SimpleFC("MissingChange", func() trail.Node {
+	nav := flight.UseNavigation()
+	kitex.UseEffect(nav.Pop, []any{})
+	return trail.Box(trail.BoxProps{})
+})
+
+type changesListStyles struct {
+	stats, added, removed, separator style.Style
+}
+
+func newChangesListStyles(s *theme.Scheme) changesListStyles {
+	common := styles.NewCommon(s)
+	return changesListStyles{
+		stats:     style.S().WhiteSpace(style.WhiteSpacePre),
+		added:     style.S().Foreground(s.Color.Diff.AddedText),
+		removed:   style.S().Foreground(s.Color.Diff.RemovedText),
+		separator: common.Secondary,
+	}
+}
+
+var changesList = trail.FC("ChangesList", func(props changesListProps) trail.Node {
+	nav := flight.UseNavigation()
+	sheet := styles.Use(newChangesListStyles)
+	closeList := func() { store.RemoveSlot(props.slotID) }
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"esc", "escape"}, Label: "Close", OnPress: closeList},
+	}, len(props.changes) == 0)
+	if len(props.changes) == 0 {
+		return uicomponents.Panel(uicomponents.PanelProps{
+			Title: "Tracked Changes", Notice: "  No tracked file changes.", Bindings: bindings,
 		})
 	}
 
-	if isLoading() {
-		return loadingHint("Loading changes...")
-	}
-	if err := errorState(); err != nil {
-		store.RemoveSlot(slotID)
-		store.AppendError("Error", err.Error())
-		return nil
-	}
-
-	aggregated := aggregateFileChanges(changesState())
-	if len(aggregated) == 0 {
-		return emptyChangesView(emptyChangesViewProps{slotID: slotID})
-	}
-
-	scheme := theme.UseTheme()
-	opts := make([]uicomponents.Option, len(aggregated))
-	for i, ch := range aggregated {
-		stats := fmt.Sprintf("+%d/-%d", ch.Additions, ch.Deletions)
-		statsNode := trail.Span(trail.SpanProps{
-			Style: style.S().WhiteSpace(style.WhiteSpacePre),
-		},
-			trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Diff.AddedText),
-			}, trail.Text(fmt.Sprintf("+%d", ch.Additions))),
-			trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Text.Secondary),
-			}, trail.Text("/")),
-			trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Diff.RemovedText),
-			}, trail.Text(fmt.Sprintf("-%d", ch.Deletions))),
+	opts := make([]uicomponents.Option, len(props.changes))
+	for i, ch := range props.changes {
+		added, removed := "+"+format.Tokens(ch.Additions), "-"+format.Tokens(ch.Deletions)
+		stats := trail.Span(trail.SpanProps{Style: sheet.stats},
+			trail.Span(trail.SpanProps{Style: sheet.added}, trail.Text(added)),
+			trail.Span(trail.SpanProps{Style: sheet.separator}, trail.Text("/")),
+			trail.Span(trail.SpanProps{Style: sheet.removed}, trail.Text(removed)),
 		)
 		opts[i] = uicomponents.Option{
-			Value:     ch.Path,
-			Label:     ch.Path,
-			Cells:     []string{ch.Path, string(ch.Kind), stats},
-			CellNodes: []trail.Node{nil, nil, statsNode},
+			Value: ch.Path, Label: ch.Path,
+			Cells:     []string{ch.Path, string(ch.Kind), added + "/" + removed},
+			CellNodes: []trail.Node{nil, nil, stats},
 		}
 	}
-
-	pickerProps := components.NewPicker("Tracked Changes", opts, func(opt uicomponents.Option) {
-		for i := range aggregated {
-			if aggregated[i].Path == opt.Value {
-				ch := aggregated[i]
-				setSelectedChange(&ch)
-				break
-			}
-		}
+	picker := components.NewPicker("Tracked Changes", opts, func(opt uicomponents.Option) {
+		nav.Push(changeDiffRoute{Path: opt.Value})
 	})
-	pickerProps.Columns = []uicomponents.Column{
-		{Width: 0},
-		{Width: 16, Align: style.TextAlignLeft},
-		{Width: 16, Align: style.TextAlignRight},
-	}
-	pickerProps.Filterable = true
-	pickerProps.Bindings = []uicomponents.KeyBinding{
+	picker.Columns = []uicomponents.Column{{}, {Width: 16}, {Width: 16, Align: style.TextAlignRight}}
+	picker.Filterable = true
+	picker.Bindings = []uicomponents.KeyBinding{
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "View diff"},
 		{Key: "r", Label: "Revert"},
 		{Key: "esc", Label: "Close"},
 	}
-	pickerProps.OnCancel = func() {
-		store.RemoveSlot(slotID)
-	}
-	pickerProps.ConfirmActions = map[string]components.ConfirmAction{
+	picker.OnCancel = closeList
+	picker.ConfirmActions = map[string]components.ConfirmAction{
 		"r": {
-			Prompt: func(opt uicomponents.Option) string {
-				return fmt.Sprintf("Revert changes to %s?", opt.Label)
-			},
-			OnConfirm: func(opt uicomponents.Option) {
-				go func() {
-					err := c.Revert(context.Background(), sess.ID, api.RevertRequest{
-						Path: opt.Value,
-					})
-					if err != nil {
-						store.AppendError("Revert Error", err.Error())
-						return
-					}
-					refetch()
-				}()
-			},
+			Prompt:    func(opt uicomponents.Option) string { return "Revert changes to " + opt.Label + "?" },
+			OnConfirm: func(opt uicomponents.Option) { props.revert(opt.Value) },
 		},
 	}
-
-	return components.Picker(pickerProps)
+	return components.Picker(picker)
 })

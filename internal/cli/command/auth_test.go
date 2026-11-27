@@ -365,7 +365,6 @@ func TestProviderAuthScreenRendersTheFlow(t *testing.T) {
 	env.Render(providerAuthView(providerAuthViewProps{
 		slotID:   "slot-render",
 		provider: "antigravity",
-		state:    newProviderAuthStore(),
 	}))
 	out, ok := waitForRender(t, env.Environment, authURL)
 	if !ok {
@@ -400,7 +399,6 @@ func TestProviderAuthScreenWaitsForTheURL(t *testing.T) {
 	out := env.Render(providerAuthView(providerAuthViewProps{
 		slotID:   "slot-wait",
 		provider: "antigravity",
-		state:    newProviderAuthStore(),
 	}))
 	if !strings.Contains(out, "Waiting for the authorization URL…") {
 		t.Fatalf("expected the waiting notice, got:\n%s", out)
@@ -419,7 +417,6 @@ func TestProviderAuthScreenWaitsForChatGPTBrowser(t *testing.T) {
 	env.Render(providerAuthView(providerAuthViewProps{
 		slotID:   "slot-chatgpt",
 		provider: "codex",
-		state:    newProviderAuthStore(),
 	}))
 	out, ok := waitForRender(t, env.Environment, "Continue sign-in in the browser on the daemon host.")
 	if !ok || strings.Contains(out, "Submit pasted URL") || strings.Contains(out, "Copy URL") {
@@ -445,7 +442,6 @@ func TestProviderAuthScreenSubmitsPastedURL(t *testing.T) {
 	env.Render(providerAuthView(providerAuthViewProps{
 		slotID:   "slot-submit",
 		provider: "antigravity",
-		state:    newProviderAuthStore(),
 	}))
 	if _, ok := waitForRender(t, env.Environment, "https://authorize.example/x"); !ok {
 		t.Fatalf("the authorization URL never reached the screen:\n%s", env.DumpText())

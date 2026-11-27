@@ -2,11 +2,14 @@ package command
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestRulesCommandArgsValidation(t *testing.T) {
@@ -168,6 +171,28 @@ func TestRulesBrowserEmptyAndPopulatedRendering(t *testing.T) {
 	}
 }
 
+func TestRulesBrowserNavigation(t *testing.T) {
+	t.Cleanup(func() { store.SetWorkspaceRules(nil) })
+	rule := api.Rule{Name: "go-style", Triggers: api.RuleTriggers{Globs: []string{"*.go"}}}
+	store.SetWorkspaceRules([]api.Rule{rule})
+	app := testutils.NewApp(t, RulesBrowser("rules"), 100, 30)
+	if out := app.Type("i"); !strings.Contains(out, "Rule: go-style") {
+		t.Fatal(out)
+	}
+	rule.Description = "Updated rule"
+	store.SetWorkspaceRules([]api.Rule{rule})
+	app.WaitFor(func(out string) bool { return strings.Contains(out, rule.Description) })
+	if out := app.Press(key.Key{Code: key.KeyEscape}); !strings.Contains(out, "Rules (1 available)") {
+		t.Fatal(out)
+	}
+	app.Press(key.Key{Code: key.KeyEnter})
+	store.SetWorkspaceRules(nil)
+	app.WaitFor(func(out string) bool { return strings.Contains(out, "Rule no longer available.") })
+	if out := app.Press(key.Key{Code: key.KeyEscape}); !strings.Contains(out, "Rules (0 available)") {
+		t.Fatal(out)
+	}
+}
+
 func TestRuleMarkdownViewerRendering(t *testing.T) {
 	rl := api.Rule{
 		Name:         "go-error-handling",
@@ -190,7 +215,7 @@ func TestRuleMarkdownViewerRendering(t *testing.T) {
 	if !strings.Contains(out, "[Workspace]") {
 		t.Fatalf("expected header to contain scope badge, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Priority: 50") {
+	if !regexp.MustCompile(`(?m)^Priority: +50 *$`).MatchString(out) {
 		t.Fatalf("expected header to contain priority, got:\n%s", out)
 	}
 	if !strings.Contains(out, "When to use: writing or reviewing Go code") {

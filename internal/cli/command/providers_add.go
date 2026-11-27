@@ -83,7 +83,7 @@ var providersAddPane = trail.FC("ProvidersAddPane", func(props providersAddPaneP
 	}, []any{props.client != nil})
 
 	if loading() {
-		return loadingHint("Loading provider presets…")
+		return uicomponents.Panel(uicomponents.PanelProps{Title: "Loading provider presets…"})
 	}
 
 	if step() == providerAddStepPreset {
@@ -136,11 +136,7 @@ var providersAddPane = trail.FC("ProvidersAddPane", func(props providersAddPaneP
 			{Key: "enter", Label: "Continue"},
 			{Key: "esc", Label: "Back"},
 		}
-		pickerProps.OnCancel = func() {
-			if props.onBack != nil {
-				props.onBack()
-			}
-		}
+		pickerProps.OnCancel = props.onBack
 		return components.Picker(pickerProps)
 	}
 
@@ -268,42 +264,26 @@ var providersAddPane = trail.FC("ProvidersAddPane", func(props providersAddPaneP
 		"e": {
 			Prompt: "New value:",
 			DisabledReason: func(opt uicomponents.Option) string {
-				switch opt.Value {
-				case addRowName, addRowType, addRowEndpoint, addRowAuthEnv, addRowAPIKey:
+				if d.field(opt.Value) != nil {
 					return ""
 				}
 				return "The " + opt.Label + " row toggles or submits on enter; it has no free-text value."
 			},
 			InitialValue: func(opt uicomponents.Option) string {
-				switch opt.Value {
-				case addRowName:
-					return d.name
-				case addRowType:
-					return d.provType
-				case addRowEndpoint:
-					return d.endpoint
-				case addRowAuthEnv:
-					return d.authEnv
-				case addRowAPIKey:
-					return d.apiKey
+				if field := d.field(opt.Value); field != nil {
+					return *field
 				}
 				return ""
 			},
 			OnSubmit: func(opt uicomponents.Option, value string) {
 				next := d
-				switch opt.Value {
-				case addRowName:
-					next.name = strings.TrimSpace(value)
-				case addRowType:
-					next.provType = strings.TrimSpace(value)
-				case addRowEndpoint:
-					next.endpoint = strings.TrimSpace(value)
-				case addRowAuthEnv:
-					next.authEnv = strings.ToUpper(strings.TrimSpace(value))
-				case addRowAPIKey:
-					next.apiKey = strings.TrimSpace(value)
-				default:
+				field := next.field(opt.Value)
+				if field == nil {
 					return
+				}
+				*field = strings.TrimSpace(value)
+				if opt.Value == addRowAuthEnv {
+					*field = strings.ToUpper(*field)
 				}
 				setNotice("")
 				setDraft(next)
@@ -313,6 +293,23 @@ var providersAddPane = trail.FC("ProvidersAddPane", func(props providersAddPaneP
 
 	return components.Picker(pickerProps)
 })
+
+func (d *providerAddDraft) field(key string) *string {
+	switch key {
+	case addRowName:
+		return &d.name
+	case addRowType:
+		return &d.provType
+	case addRowEndpoint:
+		return &d.endpoint
+	case addRowAuthEnv:
+		return &d.authEnv
+	case addRowAPIKey:
+		return &d.apiKey
+	default:
+		return nil
+	}
+}
 
 func scopeLabel(scope string) string {
 	if scope == "user" {

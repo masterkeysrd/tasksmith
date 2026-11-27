@@ -128,6 +128,28 @@ func TestSkillsBrowserEmptyAndPopulatedRendering(t *testing.T) {
 	}
 }
 
+func TestSkillsBrowserNavigation(t *testing.T) {
+	t.Cleanup(func() { store.SetWorkspaceSkills(nil) })
+	sk := api.Skill{Name: "go-style", Instructions: "First version"}
+	store.SetWorkspaceSkills([]api.Skill{sk})
+	app := testutils.NewApp(t, SkillsBrowser("skills"), 100, 30)
+	if out := app.Press(key.Key{Code: key.KeyEnter}); !strings.Contains(out, "Skill: go-style") {
+		t.Fatal(out)
+	}
+	sk.Instructions = "Updated runbook"
+	store.SetWorkspaceSkills([]api.Skill{sk})
+	app.WaitFor(func(out string) bool { return strings.Contains(out, sk.Instructions) })
+	if out := app.Press(key.Key{Code: key.KeyEscape}); !strings.Contains(out, "Skills (1 available)") {
+		t.Fatal(out)
+	}
+	app.Type("i")
+	store.SetWorkspaceSkills(nil)
+	app.WaitFor(func(out string) bool { return strings.Contains(out, "Skill no longer available.") })
+	if out := app.Press(key.Key{Code: key.KeyEscape}); !strings.Contains(out, "Skills (0 available)") {
+		t.Fatal(out)
+	}
+}
+
 func TestSkillMarkdownViewerRendering(t *testing.T) {
 	sk := api.Skill{
 		Name:         "go-style",

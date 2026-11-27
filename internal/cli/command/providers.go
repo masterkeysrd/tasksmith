@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/masterkeysrd/kite/extras/kites"
+	"github.com/masterkeysrd/kite/extras/flight"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
@@ -17,7 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
 )
 
 func (r *Registry) registerProviderCommands() {
@@ -43,31 +44,17 @@ func handleProviders(args []string) error {
 	return nil
 }
 
-// providerStatusIcon renders the browser row glyph for a provider status.
-func providerStatusIcon(status string) string {
+func providerStatusBadge(status string) trail.Node {
+	badge := uicomponents.BadgeProps{Icon: "○", Tone: uicomponents.ToneMuted}
 	switch status {
 	case "active":
-		return "✔"
+		badge.Icon, badge.Tone = "✔", uicomponents.ToneSuccess
 	case "local":
-		return "●"
+		badge.Icon, badge.Tone = "●", uicomponents.ToneAccent
 	case "missing_auth", "expired_auth", "invalid_auth", "invalid_config":
-		return "⚠"
-	default:
-		return "○"
+		badge.Icon, badge.Tone = "⚠", uicomponents.ToneWarning
 	}
-}
-
-func providerStatusIconStyle(scheme *theme.Scheme, status string) style.Style {
-	switch status {
-	case "active":
-		return style.S().Foreground(scheme.Color.Text.Success)
-	case "local":
-		return style.S().Foreground(scheme.Color.Text.Info)
-	case "missing_auth", "expired_auth", "invalid_auth", "invalid_config":
-		return style.S().Foreground(scheme.Color.Text.Warning)
-	default:
-		return style.S().Foreground(scheme.Color.Text.Muted)
-	}
+	return uicomponents.Badge(badge)
 }
 
 func providerStatusLabel(status string) string {
@@ -185,23 +172,37 @@ const (
 	providersPaneAuth
 )
 
-type providersBrowserState struct {
-	pane      providersPane
-	provider  *api.WorkspaceProvider
-	model     *api.ProviderModelInfo
-	authStore *kites.Store[providerAuthState]
+type providerRoute struct {
+	pane     providersPane
+	provider string
+	model    string
 }
 
-// providersBrowser renders the interactive provider browser inside <Slot />.
+type providersScreenProps struct {
+	slotID string
+	route  providerRoute
+}
+
 var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserProps) trail.Node {
-	scheme := theme.UseTheme()
+	common := styles.UseCommon()
+	return flight.Stack(flight.StackProps{
+		InitialRoute: providerRoute{pane: providersPaneBrowser},
+		RenderRoute: func(route flight.Route) trail.Node {
+			return trail.Box(trail.BoxProps{Style: common.Column}, providersScreen(providersScreenProps{
+				slotID: props.slotID, route: route.(providerRoute),
+			}))
+		},
+	})
+})
+
+var providersScreen = trail.FC("ProvidersScreen", func(props providersScreenProps) trail.Node {
+	nav := flight.UseNavigation()
 	c := store.Client()
 
 	providers, setProviders := kitex.UseState[[]api.WorkspaceProvider](nil)
 	loading, setLoading := kitex.UseState(true)
 	notice, setNotice := kitex.UseState("")
 	busy, setBusy := kitex.UseState("")
-	state, setState := kitex.UseState(providersBrowserState{})
 
 	clientReady := c != nil
 	kitex.UseEffect(func() {
@@ -234,17 +235,6 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 			defer cancel()
 			fn(ctx, setNotice)
 		})
-	}
-
-	// liveProvider re-resolves the pane's provider by name so panes always show
-	// the state after the most recent mutation, not the snapshot taken on entry.
-	liveProvider := func(p *api.WorkspaceProvider) (api.WorkspaceProvider, bool) {
-		for _, candidate := range providers() {
-			if candidate.Name == p.Name {
-				return candidate, true
-			}
-		}
-		return *p, false
 	}
 
 	toggleEnabled := func(p api.WorkspaceProvider) {
@@ -287,99 +277,81 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 		})
 	}
 
-	current := state()
-
-	switch current.pane {
+	route := props.route
+	leftRoute := kitex.UseMemo(func() *atomic.Bool { return new(atomic.Bool) }, []any{route})
+	kitex.UseLayoutEffectCleanup(func() func() { return func() { leftRoute.Store(true) } }, []any{route})
+	popAfterSave := func() {
+		if !leftRoute.Load() {
+			nav.Pop()
+		}
+	}
+	live := providerByName(providers(), route.provider)
+	back := func() { setNotice(""); nav.Pop() }
+	open := func(pane providersPane, provider string) {
+		setNotice("")
+		nav.Push(providerRoute{pane: pane, provider: provider})
+	}
+	missing := route.provider != "" && !slices.ContainsFunc(providers(), func(p api.WorkspaceProvider) bool { return p.Name == route.provider })
+	kitex.UseEffect(func() {
+		if missing {
+			nav.Pop()
+		}
+	}, []any{route, missing})
+	if missing {
+		return nil
+	}
+	updateModels := func(remove []string, add []api.ProviderModelRequest, defaultModel, message string) {
+		runBusy("models:"+live.Name, func(ctx context.Context, report func(string)) {
+			req := api.UpdateProviderModelsRequest{DefaultModel: defaultModel, DefaultSet: defaultModel != ""}
+			for _, m := range live.Models {
+				if !slices.Contains(remove, m.ID) {
+					req.Models = append(req.Models, api.ProviderModelRequest(m))
+				}
+			}
+			req.Models = append(req.Models, add...)
+			list, err := c.UpdateProviderModels(ctx, live.Name, req)
+			if err != nil {
+				prefix := "Failed to update models: "
+				if route.pane == providersPaneCatalog {
+					prefix = "Failed to add models: "
+				}
+				report(prefix + err.Error())
+				return
+			}
+			setProviders(list)
+			refreshProviderWorkspaceContext(ctx)
+			report(message)
+			if route.pane == providersPaneCatalog {
+				popAfterSave()
+			}
+		})
+	}
+	switch route.pane {
 	case providersPaneModels:
-		if current.provider == nil {
-			break
-		}
-		live, ok := liveProvider(current.provider)
-		if !ok {
-			setState(providersBrowserState{})
-			return nil
-		}
 		return providersModelsPane(providersModelsPaneProps{
-			provider: live,
-			busy:     busy(),
-			notice:   notice(),
-			onBack:   func() { setNotice(""); setState(providersBrowserState{}) },
-			onCatalog: func() {
-				setNotice("")
-				setState(providersBrowserState{pane: providersPaneCatalog, provider: &live})
-			},
+			provider:  live,
+			busy:      busy(),
+			notice:    notice(),
+			onBack:    back,
+			onCatalog: func() { open(providersPaneCatalog, live.Name) },
 			onSave: func(remove []string, add []api.ProviderModelRequest, defaultModel string) {
-				runBusy("models:"+live.Name, func(ctx context.Context, report func(string)) {
-					removed := make(map[string]bool, len(remove))
-					for _, id := range remove {
-						removed[id] = true
-					}
-					var models []api.ProviderModelRequest
-					for _, m := range live.Models {
-						if removed[m.ID] {
-							continue
-						}
-						models = append(models, api.ProviderModelRequest(m))
-					}
-					models = append(models, add...)
-					req := api.UpdateProviderModelsRequest{Models: models}
-					if defaultModel != "" {
-						req.DefaultModel = defaultModel
-						req.DefaultSet = true
-					}
-					list, err := c.UpdateProviderModels(ctx, live.Name, req)
-					if err != nil {
-						report("Failed to update models: " + err.Error())
-						return
-					}
-					setProviders(list)
-					refreshProviderWorkspaceContext(ctx)
-					updated := providerByName(list, live.Name)
-					setState(providersBrowserState{pane: providersPaneModels, provider: &updated})
-					report("Models updated for " + live.Name + ".")
-				})
+				updateModels(remove, add, defaultModel, "Models updated for "+live.Name+".")
 			},
 			onAliases: func(m api.ProviderModelInfo) {
-				setState(providersBrowserState{pane: providersPaneAlias, provider: &live, model: &m})
+				nav.Push(providerRoute{pane: providersPaneAlias, provider: live.Name, model: m.ID})
 			},
 		})
 	case providersPaneCatalog:
-		if current.provider == nil {
-			break
-		}
-		live, ok := liveProvider(current.provider)
-		if !ok {
-			setState(providersBrowserState{pane: providersPaneModels, provider: current.provider})
-			return nil
-		}
 		return providersCatalogPane(providersCatalogPaneProps{
-			client:   c,
-			provider: live,
-			onBack:   func() { setState(providersBrowserState{pane: providersPaneModels, provider: &live}) },
+			client: c, provider: live, onBack: nav.Pop,
 			onAdd: func(entries []api.ProviderModelRequest, message string) {
-				runBusy("models:"+live.Name, func(ctx context.Context, report func(string)) {
-					models := make([]api.ProviderModelRequest, 0, len(live.Models)+len(entries))
-					for _, m := range live.Models {
-						models = append(models, api.ProviderModelRequest(m))
-					}
-					models = append(models, entries...)
-					list, err := c.UpdateProviderModels(ctx, live.Name, api.UpdateProviderModelsRequest{Models: models})
-					if err != nil {
-						report("Failed to add models: " + err.Error())
-						return
-					}
-					setProviders(list)
-					refreshProviderWorkspaceContext(ctx)
-					updated := providerByName(list, live.Name)
-					setNotice(message)
-					setState(providersBrowserState{pane: providersPaneModels, provider: &updated})
-				})
+				updateModels(nil, entries, "", message)
 			},
 		})
 	case providersPaneAdd:
 		return providersAddPane(providersAddPaneProps{
 			client: c,
-			onBack: func() { setNotice(""); setState(providersBrowserState{}) },
+			onBack: back,
 			onCreated: func(created api.WorkspaceProvider, verdict string) {
 				store.RemoveSlot(props.slotID)
 				refreshProviderWorkspaceContext(context.Background())
@@ -388,18 +360,17 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 			},
 		})
 	case providersPaneAlias:
-		if current.provider == nil || current.model == nil {
-			break
-		}
-		live, ok := liveProvider(current.provider)
-		if !ok {
-			setState(providersBrowserState{pane: providersPaneModels, provider: current.provider})
-			return nil
+		name := route.model
+		for _, m := range live.Models {
+			if m.ID == route.model {
+				name = firstNonEmpty(m.Label, m.Name, m.ID)
+				break
+			}
 		}
 		return modelAliasEditorSlot(modelAliasEditorSlotProps{
 			ProviderName: live.Name,
-			ModelID:      current.model.ID,
-			ModelName:    firstNonEmpty(current.model.Label, current.model.Name, current.model.ID),
+			ModelID:      route.model,
+			ModelName:    name,
 			onDone: func(message string, err error) {
 				refetchProviders()
 				if err != nil {
@@ -409,30 +380,24 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 				// Land back on the models pane so the save confirmation is
 				// visible instead of hidden behind the editor.
 				setNotice(message)
-				setState(providersBrowserState{pane: providersPaneModels, provider: &live})
+				popAfterSave()
 			},
-			onCancel: func() {
-				setState(providersBrowserState{pane: providersPaneModels, provider: &live})
-			},
+			onCancel: nav.Pop,
 		})
 	case providersPaneAuth:
-		if current.provider == nil || current.authStore == nil {
-			break
-		}
 		return providerAuthView(providerAuthViewProps{
 			slotID:   props.slotID,
-			provider: current.provider.Name,
-			state:    current.authStore,
+			provider: route.provider,
 			onSettled: func(_ bool, message string) {
 				refetchProviders()
 				setNotice(message)
-				setState(providersBrowserState{})
+				popAfterSave()
 			},
 			onCancel: func(inFlight bool) {
 				if inFlight {
 					setNotice("Left sign-in screen; browser flow continues in background.")
 				}
-				setState(providersBrowserState{})
+				nav.Pop()
 			},
 		})
 	}
@@ -444,21 +409,13 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 		return nil
 	}
 
+	closeBrowser := func() {
+		store.RemoveSlot(props.slotID)
+		store.AppendCommandOutput("/providers", "Exited /providers command")
+	}
+	addProvider := func() { open(providersPaneAdd, "") }
 	if len(providers()) == 0 {
-		message := "No providers configured. Press a to add one."
-		if note := notice(); note != "" {
-			message = note
-		}
-		return mcpEmptyNotice(mcpEmptyNoticeProps{
-			title:   "Manage model providers",
-			message: message,
-			action: func() {
-				store.RemoveSlot(props.slotID)
-				store.AppendCommandOutput("/providers", "Exited /providers command")
-			},
-			onAdd:    func() { setNotice(""); setState(providersBrowserState{pane: providersPaneAdd}) },
-			addLabel: "Add provider",
-		})
+		return emptyProviderList(emptyProviderListProps{notice: notice(), add: addProvider, close: closeBrowser})
 	}
 
 	listed := providerGroupOrders(providers())
@@ -478,14 +435,12 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 			Value: p.Name,
 			Label: p.Name,
 			Cells: []string{p.Name, status, count},
-			Icon:  mcpIconNode(providerStatusIcon(p.Status), providerStatusIconStyle(scheme, p.Status)),
+			Icon:  providerStatusBadge(p.Status),
 		}
 	}
 
 	enterModels := func(name string) {
-		p := providerByName(listed, name)
-		setNotice("")
-		setState(providersBrowserState{pane: providersPaneModels, provider: &p})
+		open(providersPaneModels, name)
 	}
 
 	pickerProps := components.NewPicker("Manage model providers", options, func(opt uicomponents.Option) {
@@ -499,17 +454,8 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 	}
 	pickerProps.Footer = func(opt uicomponents.Option) string {
 		p := providerByName(listed, opt.Value)
-		var parts []string
-		if p.Type != "" {
-			parts = append(parts, p.Type)
-		}
-		if p.Account != "" {
-			parts = append(parts, p.Account)
-		}
-		if p.Endpoint != "" {
-			parts = append(parts, p.Endpoint)
-		}
-		return strings.Join(parts, " · ")
+		fields := slices.DeleteFunc([]string{p.Type, p.Account, p.Endpoint}, func(field string) bool { return field == "" })
+		return strings.Join(fields, " · ")
 	}
 	pickerProps.GroupLabel = func(opt uicomponents.Option) string {
 		for _, p := range listed {
@@ -539,21 +485,30 @@ var providersBrowser = trail.FC("ProvidersBrowser", func(props providersBrowserP
 				setNotice("Provider " + p.Name + " does not use OAuth sign-in.")
 				return
 			}
-			setNotice("")
-			setState(providersBrowserState{
-				pane:      providersPaneAuth,
-				provider:  &p,
-				authStore: newProviderAuthStore(),
-			})
+			open(providersPaneAuth, p.Name)
 		},
 		"m": func(opt uicomponents.Option) { enterModels(opt.Value) },
-		"a": func(_ uicomponents.Option) { setNotice(""); setState(providersBrowserState{pane: providersPaneAdd}) },
-		"n": func(_ uicomponents.Option) { setNotice(""); setState(providersBrowserState{pane: providersPaneAdd}) },
+		"a": func(_ uicomponents.Option) { addProvider() },
+		"n": func(_ uicomponents.Option) { addProvider() },
 	}
-	pickerProps.OnCancel = func() {
-		store.RemoveSlot(props.slotID)
-		store.AppendCommandOutput("/providers", "Exited /providers command")
-	}
+	pickerProps.OnCancel = closeBrowser
 
 	return components.Picker(pickerProps)
+})
+
+type emptyProviderListProps struct {
+	notice     string
+	add, close func()
+}
+
+var emptyProviderList = trail.FC("EmptyProviderList", func(props emptyProviderListProps) trail.Node {
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"a", "n"}, Label: "Add provider", OnPress: props.add},
+		{Keys: []string{"esc", "escape"}, Label: "Close", OnPress: props.close},
+	}, true)
+	return uicomponents.Panel(uicomponents.PanelProps{
+		Title:    "Manage model providers",
+		Notice:   firstNonEmpty(props.notice, "No providers configured. Press a to add one."),
+		Bindings: bindings,
+	})
 })

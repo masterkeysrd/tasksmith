@@ -15,7 +15,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 type providersCatalogPaneProps struct {
@@ -30,7 +29,6 @@ type providersCatalogPaneProps struct {
 // models.dev metadata, or ollama's live endpoint) and adds the checked
 // entries to the manifest.
 var providersCatalogPane = trail.FC("ProvidersCatalogPane", func(props providersCatalogPaneProps) trail.Node {
-	scheme := theme.UseTheme()
 	winSize := trail.UseWindowSize()
 	entries, setEntries := kitex.UseState[[]api.ProviderCatalogEntry](nil)
 	loading, setLoading := kitex.UseState(true)
@@ -63,30 +61,28 @@ var providersCatalogPane = trail.FC("ProvidersCatalogPane", func(props providers
 	}
 
 	commit := func() {
-		var chosen []api.ProviderCatalogEntry
+		var reqs []api.ProviderModelRequest
 		for _, e := range entries() {
 			if picked()[e.ID] && !e.Listed {
-				chosen = append(chosen, e)
+				reqs = append(reqs, api.ProviderModelRequest{
+					ID: e.ID, Name: firstNonEmpty(strings.TrimSpace(e.Name), e.ID),
+					Context: e.ContextLimit, Output: e.OutputLimit,
+				})
 			}
 		}
-		if len(chosen) == 0 {
+		if len(reqs) == 0 {
 			return
-		}
-		var reqs []api.ProviderModelRequest
-		for _, e := range chosen {
-			name := strings.TrimSpace(e.Name)
-			if name == "" {
-				name = e.ID
-			}
-			reqs = append(reqs, api.ProviderModelRequest{ID: e.ID, Name: name, Context: e.ContextLimit, Output: e.OutputLimit})
 		}
 		message := fmt.Sprintf("Added %d model(s) to %s.", len(reqs), provider.Name)
 		setPicked(map[string]bool{})
 		props.onAdd(reqs, message)
 	}
 
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"esc", "escape"}, Label: "Back", OnPress: props.onBack},
+	}, !loading() && len(entries()) == 0)
 	if loading() {
-		return loadingHint("Loading " + provider.Type + " catalog…")
+		return uicomponents.Panel(uicomponents.PanelProps{Title: "Loading " + provider.Type + " catalog…"})
 	}
 
 	title := "Catalog · " + provider.Name
@@ -122,14 +118,12 @@ var providersCatalogPane = trail.FC("ProvidersCatalogPane", func(props providers
 		} else if picked()[e.ID] {
 			parts = append(parts, "selected")
 		}
-		icon := "  "
-		iconStyle := style.S().Foreground(scheme.Color.Text.Muted)
+		badge := uicomponents.BadgeProps{Tone: uicomponents.ToneMuted}
 		if e.Listed {
-			icon = "✔"
-			iconStyle = style.S().Foreground(scheme.Color.Text.Muted)
+			badge.Icon = "✔"
 		} else if picked()[e.ID] {
-			icon = "☑"
-			iconStyle = style.S().Foreground(scheme.Color.Text.Success)
+			badge.Icon = "☑"
+			badge.Tone = uicomponents.ToneSuccess
 		}
 		options = append(options, uicomponents.Option{
 			Value:       e.ID,
@@ -137,22 +131,17 @@ var providersCatalogPane = trail.FC("ProvidersCatalogPane", func(props providers
 			Description: strings.Join(parts, " · "),
 			Search:      e.ID + " " + e.Description,
 			Cells:       []string{label, strings.Join(parts, " · ")},
-			Icon:        mcpIconNode(icon, iconStyle),
+			Icon:        uicomponents.Badge(badge),
 			Current:     false,
 		})
 	}
 	if len(options) == 0 {
-		hint := "press n in the model list to enter a custom id"
-		if errText := loadErr(); errText != "" {
-			hint = "catalog unavailable (" + errText + ") — press n in the model list to enter a custom id"
-		}
-		options = []uicomponents.Option{{Value: emptyModelsRow, Label: "(no catalog entries — " + hint + ")"}}
+		return uicomponents.Panel(uicomponents.PanelProps{
+			Title: title, Subtitle: provider.Type, Error: loadErr(), Notice: "(no catalog entries — press n in the model list to enter a custom id)", Bindings: bindings,
+		})
 	}
 
 	pickerProps := components.NewPicker(title, options, func(opt uicomponents.Option) {
-		if opt.Value == emptyModelsRow {
-			return
-		}
 		for _, e := range entries() {
 			if e.ID == opt.Value && !e.Listed {
 				toggle(e.ID)
@@ -187,11 +176,7 @@ var providersCatalogPane = trail.FC("ProvidersCatalogPane", func(props providers
 	pickerProps.Keys = map[string]func(uicomponents.Option){
 		"ctrl+s": func(_ uicomponents.Option) { commit() },
 	}
-	pickerProps.OnCancel = func() {
-		if props.onBack != nil {
-			props.onBack()
-		}
-	}
+	pickerProps.OnCancel = props.onBack
 
 	return components.Picker(pickerProps)
 })

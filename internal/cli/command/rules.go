@@ -4,20 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
-	"time"
 
-	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/flight"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/tokenizer"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func (r *Registry) registerRuleCommands() {
@@ -43,25 +41,7 @@ func handleRules(args []string) error {
 // RuleScope returns the canonical scope string for a rule:
 // [Workspace], [Project], [User], or [Builtin] (System and Builtin are treated as Builtin).
 func RuleScope(r api.Rule) string {
-	if r.Scope != "" {
-		return r.Scope
-	}
-	switch strings.ToLower(strings.TrimSpace(r.Namespace)) {
-	case "workspace":
-		return "Workspace"
-	case "local", "project":
-		return "Project"
-	case "user":
-		return "User"
-	case "system", "builtin", "":
-		return "Builtin"
-	default:
-		s := strings.TrimSpace(r.Namespace)
-		if len(s) > 0 {
-			return strings.ToUpper(s[:1]) + s[1:]
-		}
-		return "Builtin"
-	}
+	return resourceScope(r.Scope, r.Namespace)
 }
 
 // EstimateRuleTokens calculates approximate tokens for rule instructions using
@@ -110,111 +90,31 @@ type ruleMarkdownProps struct {
 }
 
 var ruleMarkdownViewer = trail.FC("RuleMarkdownViewer", func(props ruleMarkdownProps) trail.Node {
-	scheme := theme.UseTheme()
-	outerStyle := style.S().Border(
-		style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default),
-	)
-
-	scope := RuleScope(props.rule)
-	estTokens := props.rule.Tokens
-	if estTokens == 0 && props.rule.Instructions != "" {
-		estTokens = EstimateRuleTokens(props.rule.Instructions)
+	rule := props.rule
+	priority := ""
+	if rule.Priority != 0 {
+		priority = strconv.Itoa(rule.Priority)
 	}
-	tokStr := format.Tokens(estTokens) + " tok"
-
-	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
-	scopeBadgeStyle := style.S().Bold(true).Foreground(scheme.Color.Icon.Primary)
-	metaStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
-	descStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
-
-	headerItems := []trail.Node{
-		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(fmt.Sprintf("Rule: %s  ", props.rule.Name))),
-		trail.Span(trail.SpanProps{Style: scopeBadgeStyle}, trail.Text(fmt.Sprintf("[%s]  ", scope))),
-		trail.Span(trail.SpanProps{Style: descStyle}, trail.Text(fmt.Sprintf("(est. %s)", tokStr))),
-	}
-
-	var meta []trail.Node
-	if props.rule.Description != "" {
-		meta = append(meta, trail.Span(trail.SpanProps{Style: descStyle}, trail.Text(props.rule.Description)))
-	}
-	if props.rule.Priority != 0 {
-		meta = append(meta, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text(fmt.Sprintf("Priority: %d", props.rule.Priority))))
-	}
-	meta = append(meta, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text("Triggers: "+ruleTriggersSummary(props.rule))))
-	if props.rule.Triggers.UseWhen != "" {
-		meta = append(meta, trail.Span(trail.SpanProps{Style: metaStyle}, trail.Text("When to use: "+props.rule.Triggers.UseWhen)))
-	}
-
-	return uicomponents.ScrollViewer(uicomponents.ScrollViewerProps{
-		Header:             headerItems,
-		HeaderMarginBottom: 1,
-		Meta:               meta,
-		Markdown:           props.rule.Instructions,
-		EmptyText:          "(no instructions defined for this rule)",
-		OuterStyle:         &outerStyle,
-		OnClose:            props.onClose,
-		Actions: []uicomponents.ScrollViewerAction{
-			{
-				Keys: []string{"enter"},
-				Handler: func() {
-					store.RemoveSlot(props.slotID)
-					store.Send("@rule:" + props.rule.Name + " ")
-				},
-			},
+	return resourceInspector(resourceInspectorProps{
+		title:       "Rule: " + rule.Name,
+		scope:       RuleScope(rule),
+		tokens:      resourceTokens(rule.Tokens, rule.Instructions),
+		description: rule.Description,
+		metadata: []uicomponents.KVItem{
+			{Label: "Priority", Value: priority, OmitEmpty: true},
+			{Label: "Triggers", Value: ruleTriggersSummary(rule)},
+			{Label: "When to use", Value: rule.Triggers.UseWhen, OmitEmpty: true},
 		},
-		Bindings: []uicomponents.KeyBinding{
-			{Key: "↑/↓ or j/k", Label: "Scroll"},
-			{Key: "pgup/pgdn", Label: "Page"},
-			{Key: "esc", Label: "Return to rules"},
-			{Key: "enter", Label: "Attach rule"},
-		},
-	})
-})
-
-type emptyRulesViewProps struct {
-	slotID   string
-	notice   string
-	onReload func()
-}
-
-var emptyRulesView = trail.FC("EmptyRulesView", func(props emptyRulesViewProps) trail.Node {
-	trail.UseInput(func(_ string, k event.KeyEvent) {
-		if k.MatchString("esc", "escape") {
+		instructions: rule.Instructions,
+		emptyText:    "(no instructions defined for this rule)",
+		backLabel:    "Return to rules",
+		actionLabel:  "Attach rule",
+		onClose:      props.onClose,
+		onAction: func() {
 			store.RemoveSlot(props.slotID)
-		} else if k.MatchString("r") {
-			if props.onReload != nil {
-				props.onReload()
-			}
-		}
-	})
-
-	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
-	boxStyle := style.S().
-		Border(border).
-		Width(style.Percent(100)).
-		FlexDirection(style.FlexColumn)
-	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
-	emptyStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
-
-	var children []trail.Node
-	children = append(children,
-		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Rules (0 available)")),
-		trail.Span(trail.SpanProps{Style: emptyStyle}, trail.Text("  No rules configured in workspace.")),
-	)
-	if props.notice != "" {
-		children = append(children, trail.Span(trail.SpanProps{
-			Style: style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary),
-		}, trail.Text("  "+props.notice)))
-	}
-	children = append(children, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
-		Bindings: []uicomponents.KeyBinding{
-			{Key: "r", Label: "Reload workspace"},
-			{Key: "esc", Label: "Close"},
+			store.Send("@rule:" + rule.Name + " ")
 		},
-	}))
-
-	return trail.Box(trail.BoxProps{Style: boxStyle}, children...)
+	})
 })
 
 // loadedRuleNamesFromSession collects the rules active in the current session:
@@ -267,164 +167,88 @@ func addLoadRuleParts(loaded map[string]bool, parts []store.MessagePart) {
 	}
 }
 
+type rulesListRoute struct{}
+
+type ruleDetailRoute struct{ Name string }
+
+var ruleDetail = trail.FC("RuleDetail", func(p resourceDetailProps) trail.Node {
+	nav := flight.UseNavigation()
+	if records := store.UseApp(selectRules); records != nil {
+		for _, rule := range *records {
+			if rule.Name == p.name {
+				return ruleMarkdownViewer(ruleMarkdownProps{slotID: p.slotID, rule: rule, onClose: nav.Pop})
+			}
+		}
+	}
+	return missingResource("Rule")
+})
+
+func selectRules(s store.AppState) *[]api.Rule { return s.Rules }
+
+func ruleOptions(records *[]api.Rule, width int, loaded map[string]bool) []uicomponents.Option {
+	if records == nil {
+		return nil
+	}
+	options := make([]uicomponents.Option, 0, len(*records))
+	for _, rule := range *records {
+		desc := format.CompactSingleLine(rule.Description, width)
+		tokens := resourceTokens(rule.Tokens, rule.Instructions)
+		status := ruleStatusBadge(rule, loaded)
+		tone := uicomponents.ToneSuccess
+		if status == "[Standby]" {
+			tone = uicomponents.ToneMuted
+		}
+		badge := uicomponents.Badge(uicomponents.BadgeProps{Label: status, Tone: tone})
+		options = append(options, uicomponents.Option{
+			Value: rule.Name, Label: rule.Name, Description: desc,
+			Cells:     []string{rule.Name, status, "[" + RuleScope(rule) + "]", tokens, desc},
+			CellNodes: []trail.Node{nil, badge, nil, nil, resourceDescription(desc)},
+		})
+	}
+	return options
+}
+
 // RulesBrowser renders an interactive rules list and markdown inspector inside <Slot />.
 var RulesBrowser = trail.FC("RulesBrowser", func(slotID string) trail.Node {
-	rulesPtr := store.UseApp(func(s store.AppState) *[]api.Rule { return s.Rules })
+	records := store.UseApp(selectRules)
 	transcriptItems := store.UseTranscript(func(s store.TranscriptState) *[]store.TranscriptItem { return s.Items })
 	streamMessages := store.UseStream(func(s store.StreamState) *[]store.Message { return s.Messages })
-	selectedRule, setSelectedRule := kitex.UseState[*api.Rule](nil)
-	notice, setNotice := kitex.UseState("")
-	isReloading, setIsReloading := kitex.UseState(false)
-
-	var rules []api.Rule
-	if rulesPtr != nil {
-		rules = *rulesPtr
-	}
-
-	// Fetch rules on mount if the store has none yet. Client availability is an
-	// explicit dependency so the fetch retries once a daemon client exists, without
-	// re-running on every render the way a nil deps slice would.
+	reload, onReload := useWorkspaceReload("rules", selectRules)
+	width := resourceDescriptionWidth(trail.UseWindowSize().Width, 30+12+10+8+4)
 	c := store.Client()
 	kitex.UseEffect(func() {
-		if rulesPtr == nil && c != nil {
+		if records == nil && c != nil {
 			go func() {
-				if rls, err := c.ListRules(context.Background()); err == nil {
-					store.SetWorkspaceRules(rls)
+				if rules, err := c.ListRules(context.Background()); err == nil {
+					store.SetWorkspaceRules(rules)
 				}
 			}()
 		}
-	}, []any{rulesPtr == nil, c == nil})
+	}, []any{records == nil, c == nil})
 
-	doReload := func() {
-		if isReloading() {
-			return
-		}
-		setIsReloading(true)
-		setNotice("Reloading workspace rules via registry.Reload...")
-		go func() {
-			defer setIsReloading(false)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			err := store.ReloadWorkspace(ctx)
-			if err != nil {
-				setNotice("Failed to reload workspace: " + err.Error())
-			} else {
-				count := 0
-				if s := store.GetApp().Rules; s != nil {
-					count = len(*s)
-				}
-				setNotice(fmt.Sprintf("Workspace reloaded via registry.Reload (%d rules available).", count))
+	return flight.Stack(flight.StackProps{
+		InitialRoute: rulesListRoute{},
+		RenderRoute: func(route flight.Route) trail.Node {
+			if detail, ok := route.(ruleDetailRoute); ok {
+				return ruleDetail(resourceDetailProps{slotID: slotID, name: detail.Name})
 			}
-		}()
-	}
-
-	if sel := selectedRule(); sel != nil {
-		return ruleMarkdownViewer(ruleMarkdownProps{
-			slotID:  slotID,
-			rule:    *sel,
-			onClose: func() { setSelectedRule(nil) },
-		})
-	}
-
-	if len(rules) == 0 {
-		return emptyRulesView(emptyRulesViewProps{
-			slotID:   slotID,
-			notice:   notice(),
-			onReload: doReload,
-		})
-	}
-
-	title := fmt.Sprintf("Rules (%d available)", len(rules))
-	if n := notice(); n != "" {
-		title = fmt.Sprintf("Rules (%d available) — %s", len(rules), n)
-	}
-
-	scheme := theme.UseTheme()
-
-	winSize := trail.UseWindowSize()
-	availDescWidth := 0
-	if winSize.Width > 0 {
-		availDescWidth = max(20, winSize.Width-30-12-10-8-4) // 30 for name, 12 for status, 10 for scope, 8 for tokens, 4 for padding
-	}
-
-	loaded := loadedRuleNamesFromSession(transcriptItems, streamMessages)
-
-	opts := make([]uicomponents.Option, len(rules))
-	for i, rl := range rules {
-		scope := RuleScope(rl)
-		estTokens := rl.Tokens
-		if estTokens == 0 && rl.Instructions != "" {
-			estTokens = EstimateRuleTokens(rl.Instructions)
-		}
-		tokStr := format.Tokens(estTokens)
-
-		statusCol := ruleStatusBadge(rl, loaded)
-		scopeCol := fmt.Sprintf("[%s]", scope)
-		desc := format.CompactSingleLine(rl.Description, availDescWidth)
-
-		descNode := trail.Box(trail.BoxProps{
-			Style: style.S().
-				FlexDirection(style.FlexRow).
-				Width(style.Percent(100)).
-				MinWidth(style.Cells(0)).
-				Overflow(style.OverflowHidden),
-		}, trail.Span(trail.SpanProps{
-			Style: style.S().
-				Flex(0, 1).
-				MinWidth(style.Cells(0)).
-				Overflow(style.OverflowHidden).
-				WhiteSpace(style.WhiteSpacePre).
-				Foreground(scheme.Color.Text.Muted),
-		}, trail.Text(desc)))
-
-		opts[i] = uicomponents.Option{
-			Value:       rl.Name,
-			Label:       rl.Name,
-			Description: desc,
-			Cells:       []string{rl.Name, statusCol, scopeCol, tokStr, desc},
-			CellNodes:   []trail.Node{nil, nil, nil, nil, descNode},
-		}
-	}
-
-	pickerProps := components.NewPicker(title, opts, func(opt uicomponents.Option) {
-		for i := range rules {
-			if rules[i].Name == opt.Value {
-				setSelectedRule(&rules[i])
-				return
-			}
-		}
+			loaded := loadedRuleNamesFromSession(transcriptItems, streamMessages)
+			return resourceList(resourceListProps{
+				slotID:       slotID,
+				title:        "Rules",
+				inspectLabel: "Inspect rule",
+				options:      ruleOptions(records, width, loaded),
+				columns: []uicomponents.Column{
+					{Width: 30},
+					{Width: 12},
+					{Width: 10},
+					{Width: 8, Align: style.TextAlignRight},
+					{},
+				},
+				reload:   reload,
+				onReload: onReload,
+				detail:   func(name string) flight.Route { return ruleDetailRoute{Name: name} },
+			})
+		},
 	})
-	pickerProps.Columns = []uicomponents.Column{
-		{Width: 30, Align: style.TextAlignLeft},
-		{Width: 12, Align: style.TextAlignLeft},
-		{Width: 10, Align: style.TextAlignLeft},
-		{Width: 8, Align: style.TextAlignRight},
-		{Width: 0, Align: style.TextAlignLeft},
-	}
-	pickerProps.Filterable = false
-	pickerProps.Bindings = []uicomponents.KeyBinding{
-		{Key: "↑/↓", Label: "Select"},
-		{Key: "enter", Label: "Inspect rule"},
-		{Key: "r", Label: "Reload workspace"},
-		{Key: "esc", Label: "Close"},
-	}
-	pickerProps.Keys = map[string]func(uicomponents.Option){
-		"r": func(_ uicomponents.Option) {
-			doReload()
-		},
-		"i": func(opt uicomponents.Option) {
-			for i := range rules {
-				if rules[i].Name == opt.Value {
-					setSelectedRule(&rules[i])
-					return
-				}
-			}
-		},
-	}
-	pickerProps.OnCancel = func() {
-		store.RemoveSlot(slotID)
-		store.AppendCommandOutput("/rules", "Exited /rules command")
-	}
-
-	return components.Picker(pickerProps)
 })

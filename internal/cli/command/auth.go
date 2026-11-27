@@ -1,6 +1,7 @@
 package command
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -8,13 +9,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/masterkeysrd/kite/dom"
+	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/styles"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 // authPollInterval and authPollTimeout bound how long the /login screen waits
@@ -94,7 +101,6 @@ func EnqueueProviderAuth(provider string) {
 			return providerAuthView(providerAuthViewProps{
 				slotID:   slotID,
 				provider: provider,
-				state:    newProviderAuthStore(),
 			})
 		},
 	})
@@ -277,6 +283,10 @@ func providerAuthCheck(ctx context.Context, provider string) providerAuthOutcome
 	if err != nil {
 		return providerAuthOutcome{}
 	}
+	return providerAuthResult(resp)
+}
+
+func providerAuthResult(resp *api.ProviderAuthResponse) providerAuthOutcome {
 	switch resp.Status {
 	case "authenticated":
 		message := "Signed in to " + resp.Provider + "."
@@ -306,15 +316,8 @@ func providerAuthSubmit(ctx context.Context, provider, callbackURL string) provi
 		}
 		return providerAuthOutcome{message: "Could not reach the daemon to submit the callback: " + err.Error()}
 	}
-	switch resp.Status {
-	case "authenticated":
-		message := "Signed in to " + resp.Provider + "."
-		if resp.Account != "" {
-			message = "Signed in to " + resp.Provider + " as " + resp.Account + "."
-		}
-		return providerAuthOutcome{message: message, settled: true}
-	case "error":
-		return providerAuthOutcome{message: "Sign-in failed: " + resp.Error, settled: true, failed: true}
+	if result := providerAuthResult(resp); result.settled {
+		return result
 	}
 	return providerAuthOutcome{message: "Callback received; finishing sign-in for " + resp.Provider + "…"}
 }
@@ -386,7 +389,6 @@ func (f *providerAuthFlow) submit(ctx context.Context, callbackURL string) {
 type providerAuthViewProps struct {
 	slotID    string
 	provider  string
-	state     *kites.Store[providerAuthState]
 	onSettled func(failed bool, message string)
 	onCancel  func(inFlight bool)
 }
@@ -398,46 +400,17 @@ var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewP
 	notice, setNotice := kitex.UseState("")
 	reported, setReported := kitex.UseState(false)
 
-	state := kites.Use(props.state, func(s providerAuthState) providerAuthState { return s })
+	authStore := kitex.UseMemo(newProviderAuthStore, []any{})
+	state := kites.Use(authStore, func(s providerAuthState) providerAuthState { return s })
 	provider := strings.TrimSpace(props.provider)
 	if provider == "" {
 		provider = state.provider
 	}
 
-	paneStore := kitex.UseMemo(func() *kites.Store[mcpAuthState] {
-		return kites.Create(mcpAuthState{
-			server:  provider,
-			authURL: state.authURL,
-			report:  state.report,
-		})
-	}, []any{})
-
-	kitex.UseEffect(func() {
-		paneStore.Set(func(mcpAuthState) mcpAuthState {
-			return mcpAuthState{
-				server:  provider,
-				authURL: state.authURL,
-				report:  state.report,
-			}
-		})
-	}, []any{provider, state.authURL, state.report})
-
 	flowRef := kitex.UseRef[*providerAuthFlow](nil)
-	kitex.UseEffect(func() {
-		if flowRef.Current != nil {
-			return
-		}
-		flowRef.Current = startProviderAuthFlow(provider, props.state)
-	}, []any{})
-
-	// Leaving the screen stops this client's reporting; the daemon keeps its
-	// callback open, so finishing in the browser still signs the user in.
 	kitex.UseEffectCleanup(func() func() {
-		return func() {
-			if flowRef.Current != nil {
-				flowRef.Current.cancel()
-			}
-		}
+		flowRef.Current = startProviderAuthFlow(provider, authStore)
+		return flowRef.Current.cancel
 	}, []any{})
 
 	// A sign-in that finishes while the screen is open reports itself once in
@@ -497,20 +470,76 @@ var providerAuthView = trail.FC("ProviderAuthView", func(props providerAuthViewP
 		escLabel = "Back"
 	}
 
-	return mcpAuthPane(mcpAuthPaneProps{
-		server:      provider,
-		title:       title + "…",
-		browserOnly: state.browserOnly,
-		escLabel:    escLabel,
-		state:       paneStore,
-		notice:      notice(),
-		onCopy:      func() { setNotice(mcpAuthCopiedNotice) },
-		onSubmit: func(callbackURL string) {
-			setNotice("")
-			if flowRef.Current != nil {
-				flowRef.Current.submit(context.Background(), callbackURL)
+	doc := kitex.UseDocument()
+	input := kitex.UseRef[dom.Element](nil)
+	value, setValue := kitex.UseState("")
+	trail.UseFocus(input, trail.FocusOptions{AutoFocus: true, IsActive: !state.browserOnly})
+	copyURL := func() {
+		if mcpCopyToClipboard(doc(), state.authURL) {
+			if strings.TrimSpace(value()) == "c" {
+				setValue("")
 			}
-		},
-		onBack: closeView,
-	})
+			setNotice(mcpAuthCopiedNotice)
+		}
+	}
+	bindings := uicomponents.UseKeyMap([]uicomponents.KeyAction{
+		{Keys: []string{"c"}, Label: "Copy URL", Disabled: state.browserOnly, OnPress: func() {
+			if pasted := strings.TrimSpace(value()); pasted == "" || pasted == "c" {
+				copyURL()
+			}
+		}},
+		{Keys: []string{"ctrl+y"}, Disabled: state.browserOnly, OnPress: copyURL},
+		{Keys: []string{"enter"}, Label: "Submit pasted URL", Disabled: state.browserOnly, OnPress: func() {
+			if pasted := strings.TrimSpace(value()); pasted != "" {
+				setValue("")
+				setNotice("")
+				flowRef.Current.submit(context.Background(), pasted)
+			}
+		}},
+		{Keys: []string{"esc", "escape"}, Label: escLabel, OnPress: closeView},
+	}, true)
+	st := styles.Use(newProviderAuthStyles)
+	width := trail.UseWindowSize().Width - mcpCardIndent
+	panel := uicomponents.PanelProps{
+		Title:    title + "…",
+		Subtitle: mcpAuthSpinner + " " + mcpAuthNotice,
+		Bindings: bindings,
+		Notice:   cmp.Or(notice(), state.report),
+	}
+	if state.failed {
+		panel.Error, panel.Notice = panel.Notice, ""
+	}
+	return uicomponents.Panel(panel, kitex.If(!state.browserOnly, func() trail.Node {
+		return trail.Box(trail.BoxProps{Style: st.Column},
+			trail.Span(trail.SpanProps{Style: st.Secondary}, trail.Text(mcpAuthCopyHint)),
+			uicomponents.KVList(uicomponents.KVListProps{Items: []uicomponents.KVItem{{
+				Label: "URL",
+				Value: strings.Join(mcpWrapText(cmp.Or(state.authURL, "Waiting for the authorization URL…"), width-5, 0), "\n"),
+				Tone:  uicomponents.ToneAccent,
+			}}}),
+			trail.Span(trail.SpanProps{Style: st.Secondary}, trail.Text(mcpAuthPasteHint)),
+			trail.Box(trail.BoxProps{Style: st.Row}, trail.Span(trail.SpanProps{Style: st.Secondary}, trail.Text("URL > ")),
+				kitex.Input(kitex.InputProps{Ref: input, Value: value(), Style: st.Input, OnChange: func(e event.Event) {
+					if ie, ok := e.(*event.InputEvent); ok {
+						setValue(ie.Value)
+					}
+				}}),
+			),
+			trail.Span(trail.SpanProps{Style: st.Muted}, trail.Text(mcpAuthReturnHint)),
+		)
+	}))
 })
+
+type providerAuthStyles struct {
+	styles.Common
+	Input style.Style
+}
+
+func newProviderAuthStyles(s *theme.Scheme) providerAuthStyles {
+	return providerAuthStyles{
+		Common: styles.NewCommon(s),
+		Input: style.S().
+			Flex(1).
+			MinWidth(style.Cells(0)),
+	}
+}

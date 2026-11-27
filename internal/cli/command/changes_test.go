@@ -1,11 +1,54 @@
 package command
 
 import (
+	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
+	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
+
+func TestChangesBrowserDiffAndBack(t *testing.T) {
+	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/v1/sessions/test/changes":
+			return mcpJSONResponse(http.StatusOK, []api.FileChange{
+				{Path: "main.go", Kind: api.KindCreated, AfterHash: "new", Additions: 1},
+			})
+		case "/v1/sessions/test/diff":
+			if path := req.URL.Query().Get("path"); path != "main.go" {
+				return nil, fmt.Errorf("unexpected diff path: %q", path)
+			}
+			return mcpJSONResponse(http.StatusOK, api.DiffResponse{Diff: "@@ -0,0 +1 @@\n+package main"})
+		default:
+			return nil, fmt.Errorf("unexpected request: %s", req.URL)
+		}
+	})
+	c, err := client.New("test.sock", client.WithCWD("."), client.WithHTTPClient(&http.Client{Transport: transport}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetClient(c)
+	store.SetSession(&api.Session{ID: "test"})
+	t.Cleanup(store.ResetSession)
+
+	app := testutils.NewApp(t, ChangesBrowser("slot-changes"), 100, 24)
+	app.WaitFor(func(text string) bool { return strings.Contains(text, "main.go") })
+	app.Press(key.Key{Code: key.KeyEnter})
+	app.WaitFor(func(text string) bool {
+		return strings.Contains(text, "Diff for main.go (created):") && strings.Contains(text, "package main")
+	})
+	out := app.Press(key.Key{Code: key.KeyEscape})
+	if !strings.Contains(out, "Tracked Changes") || !strings.Contains(out, "main.go") || strings.Contains(out, "Diff for") {
+		t.Fatalf("expected the changes list after Escape:\n%s", out)
+	}
+}
 
 func TestAggregateFileChanges(t *testing.T) {
 	t.Run("Empty", func(t *testing.T) {
