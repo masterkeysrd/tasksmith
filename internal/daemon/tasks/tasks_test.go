@@ -13,6 +13,38 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 )
 
+func TestKillBeforeRun(t *testing.T) {
+	mgr := New(Config{OutputsDir: t.TempDir()})
+	defer checkClose(t, mgr)
+	task := &Task{Fn: func(context.Context, io.Writer, io.Reader) (int, error) {
+		t.Error("workload ran after kill")
+		return 0, nil
+	}}
+	if err := mgr.Add(task); err != nil {
+		t.Fatal(err)
+	}
+	done := task.Done()
+	output, _, unsubscribe := task.SubscribeOutput()
+	defer unsubscribe()
+	if err := task.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := task.Run(t.Context()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run: %v", err)
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("waiter still blocked")
+	}
+	if _, ok := <-output; ok {
+		t.Fatal("output still open")
+	}
+	if task.Status() != api.TaskStatusCanceled || task.LogPath() != "" {
+		t.Fatalf("unexpected snapshot: %+v", task.Snapshot())
+	}
+}
+
 func TestFastSynchronousCompletion(t *testing.T) {
 	var updateCalls []api.Task
 	var mu sync.Mutex

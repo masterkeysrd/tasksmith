@@ -166,24 +166,46 @@ func (t *Task) Done() <-chan struct{} {
 
 func (t *Task) Cancel() {
 	t.mu.Lock()
-	t.canceled = true
-	if t.stdinW != nil {
-		_ = t.stdinW.Close()
-		t.stdinW = nil
-	}
-	cancel := t.cancel
-	t.mu.Unlock()
+	defer t.mu.Unlock()
+	t.cancelLocked()
+}
 
-	if cancel != nil {
-		cancel()
+func (t *Task) cancelLocked() {
+	switch t.status {
+	case "", api.TaskStatusPending:
+		t.canceled = true
+		t.status = api.TaskStatusCanceled
+		t.err = context.Canceled
+		t.finishedAt = time.Now().UTC()
+		if t.done == nil {
+			t.done = make(chan struct{})
+		}
+		t.closeDoneLocked()
+	case api.TaskStatusRunning:
+		t.canceled = true
+		if t.stdinW != nil {
+			_ = t.stdinW.Close()
+			t.stdinW = nil
+		}
+		t.cancel()
 	}
 }
 
+func (t *Task) closeDoneLocked() {
+	for ch := range t.subscribers {
+		close(ch)
+	}
+	clear(t.subscribers)
+	close(t.done)
+}
+
 func (t *Task) Kill() error {
-	if st := t.Status(); st != api.TaskStatusRunning && st != api.TaskStatusPending {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.status != "" && t.status != api.TaskStatusPending && t.status != api.TaskStatusRunning {
 		return ErrNotRunning
 	}
-	t.Cancel()
+	t.cancelLocked()
 	return nil
 }
 
@@ -349,11 +371,19 @@ func (t *Task) Run(ctx context.Context) error {
 	if t == nil || t.Fn == nil {
 		return fmt.Errorf("tasks: task and task.Fn must not be nil")
 	}
+	t.mu.Lock()
+	if t.status != "" && t.status != api.TaskStatusPending {
+		err := t.err
+		t.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		return errors.New("tasks: task already started")
+	}
 	if err := ctx.Err(); err != nil {
+		t.mu.Unlock()
 		return err
 	}
-
-	t.mu.Lock()
 	if t.ID == "" {
 		t.ID = uuid.NewString()
 	}
@@ -366,17 +396,18 @@ func (t *Task) Run(ctx context.Context) error {
 	taskID := t.ID
 	outputsDir := t.outputsDir
 	bgCtx := t.bgCtx
-	t.mu.Unlock()
 
 	var logFile *os.File
 	var logPath string
 	if outputsDir != "" {
 		if err := os.MkdirAll(outputsDir, 0o755); err != nil {
+			t.mu.Unlock()
 			return fmt.Errorf("tasks: create outputs dir: %w", err)
 		}
 		logPath = filepath.Join(outputsDir, taskID+".log")
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 		if err != nil {
+			t.mu.Unlock()
 			return fmt.Errorf("tasks: open log file: %w", err)
 		}
 		logFile = f
@@ -387,6 +418,7 @@ func (t *Task) Run(ctx context.Context) error {
 		if logFile != nil {
 			_ = logFile.Close()
 		}
+		t.mu.Unlock()
 		return fmt.Errorf("tasks: create stdin pipe: %w", pipeErr)
 	}
 
@@ -395,7 +427,6 @@ func (t *Task) Run(ctx context.Context) error {
 	}
 	taskCtx, taskCancel := context.WithCancel(bgCtx)
 
-	t.mu.Lock()
 	t.logPath = logPath
 	t.logFile = logFile
 	t.stdinR = stdinR
@@ -421,11 +452,6 @@ func (t *Task) Run(ctx context.Context) error {
 			_ = t.logFile.Close()
 			t.logFile = nil
 		}
-		for ch := range t.subscribers {
-			close(ch)
-		}
-		t.subscribers = make(map[chan string]struct{})
-
 		t.finishedAt = time.Now().UTC()
 		t.exitCode = exitCode
 		t.err = fnErr
@@ -441,7 +467,7 @@ func (t *Task) Run(ctx context.Context) error {
 			t.status = api.TaskStatusCompleted
 		}
 
-		close(t.done)
+		t.closeDoneLocked()
 		bg := t.backgrounded
 		snap := t.snapshotLocked()
 		onUpdate := t.onUpdate
