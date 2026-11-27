@@ -126,6 +126,9 @@ func (f *mcpFixture) RoundTrip(req *http.Request) (*http.Response, error) {
 	f.mu.Unlock()
 
 	switch {
+	case req.Method == http.MethodGet && req.URL.Path == "/v1/workspace":
+		return mcpJSONResponse(http.StatusOK, api.Workspace{})
+
 	case req.Method == http.MethodGet && req.URL.Path == "/v1/workspace/mcps":
 		if authorized {
 			for i := range servers {

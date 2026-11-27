@@ -1001,7 +1001,13 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 			if err := ctx.Err(); err != nil {
 				return nil, nil, nil, err
 			}
-			if recheck, _, recErr := n.permissions.Evaluate(plan); recErr == nil && recheck == tools.AccessDeny {
+			recheck, _, recErr := n.permissions.Evaluate(plan)
+			if recErr != nil {
+				n.recordFailure(ctx, tc, recErr)
+				msg, msgErr := newErrorToolMessage(tc, recErr.Error())
+				return msg, nil, nil, msgErr
+			}
+			if recheck == tools.AccessDeny {
 				n.recordTool(ctx, tc, metrics.StatusDenied, "permission_denied", 0)
 				msg, msgErr := newErrorToolMessage(tc, tools.ErrPermissionDenied.Error())
 				return msg, nil, nil, msgErr

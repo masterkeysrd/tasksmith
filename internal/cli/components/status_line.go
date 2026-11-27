@@ -297,7 +297,20 @@ var DefaultStatusLine = trail.SimpleFC("DefaultStatusLine", func() trail.Node {
 	}
 
 	rows := make([]trail.Node, 0, len(cfg.Rows))
+	restricted := store.UseApp(func(s store.AppState) bool { return s.IsRestricted })
 	for i, row := range cfg.Rows {
+		if i == 0 && restricted {
+			const badge store.StatusLineSegmentID = "restricted"
+			label := "⚠ restricted (/setup)"
+			if width > 0 && width < 32 {
+				label = ansi.Truncate("⚠ restricted", width, "")
+			}
+			fields[badge] = statusField{full: label, color: scheme.Color.Text.Warning, bold: true}
+			if width > 0 && width <= ansi.StringWidth(label)+2 {
+				row = nil
+			}
+			row = append([]store.StatusLineSegmentID{badge}, row...)
+		}
 		if node := renderStatusRow(width, i, cfg.Compact, row, fields, !hasSlot); node != nil {
 			rows = append(rows, node)
 		}

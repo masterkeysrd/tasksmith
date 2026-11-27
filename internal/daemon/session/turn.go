@@ -688,6 +688,9 @@ func (s *Session) reevaluatePendingPermissions(ctx context.Context, mode api.Per
 		}
 		access, _, err := manager.Evaluate(&plan)
 		if err != nil {
+			if access == tools.AccessDeny && errors.Is(err, tools.ErrPermissionDenied) {
+				continue
+			}
 			result = errors.Join(result, fmt.Errorf("session: reevaluate pending permission for %s: %w", req.ToolName, err))
 			continue
 		}

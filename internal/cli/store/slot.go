@@ -13,6 +13,7 @@ import (
 type SlotKind string
 
 const (
+	SlotKindTrust          SlotKind = "workspace_trust"
 	SlotKindPermission     SlotKind = "permission"
 	SlotKindQuestion       SlotKind = "question"
 	SlotKindPlanReview     SlotKind = "plan_review"
@@ -39,7 +40,7 @@ type ProviderReauthRequest struct {
 // HidesComposer reports whether this slot kind should hide the Composer while active.
 func (k SlotKind) HidesComposer() bool {
 	switch k {
-	case SlotKindPermission, SlotKindQuestion, SlotKindPlanReview, SlotKindPicker, SlotKindModelSwitch, SlotKindProviderReauth:
+	case SlotKindTrust, SlotKindPermission, SlotKindQuestion, SlotKindPlanReview, SlotKindPicker, SlotKindModelSwitch, SlotKindProviderReauth:
 		return true
 	default:
 		return false

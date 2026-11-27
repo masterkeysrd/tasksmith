@@ -78,6 +78,7 @@ func updateOnboarding(fn func(s *OnboardingState)) {
 
 // StartOnboarding initializes the wizard with the workspace status.
 func StartOnboarding(wsPath string, status api.WorkspaceStatus, isSetupCmd bool) {
+	DismissWorkspaceTrust()
 	scope := "workspace"
 	if len(status.GlobalProviders) == 0 {
 		scope = "user"

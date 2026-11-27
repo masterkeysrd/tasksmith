@@ -3,6 +3,7 @@
 ## Quick session resume (`-c` / `--continue`)
 
 - `tasksmith -c` / `--continue` (supported on the REPL, `tasksmith exec`, and `tasksmith -p`) resumes the workspace's most recently updated top-level session without needing its session ID.
+- On REPL resume, a restricted workspace shows an inline trust choice, not the full setup wizard. Staying restricted leaves a read-only badge; use `/setup` to reconsider trust.
 - `--session <id>` takes precedence over `-c`.
 - When the workspace has no prior sessions, `-c` quietly starts a fresh session rather than failing — never promise that `-c` errors on an empty workspace.
 

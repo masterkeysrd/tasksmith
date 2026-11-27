@@ -476,7 +476,8 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	// actions regardless of mode, while keeping the session-scoped plans
 	// directory writable.
 	if ws != nil && ws.IsRestricted() && !plan.ReadOnly && !s.isPlanDirMutation(plan) {
-		return tools.AccessDeny, nil, nil
+		return tools.AccessDeny, nil, fmt.Errorf("%w: workspace is in restricted (read-only) mode because it is untrusted "+
+			"or its executable configuration changed; approve workspace trust to allow writes", tools.ErrPermissionDenied)
 	}
 
 	// Agent write, edit, and remove operations inside <session-dir>/plans/ are

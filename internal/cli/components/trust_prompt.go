@@ -1,13 +1,16 @@
 package components
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
@@ -29,6 +32,32 @@ type TrustPromptProps struct {
 	OnCancel func()
 }
 
+var inlineTrustPrompt = trail.FC("InlineTrustPrompt", func(status api.WorkspaceStatus) trail.Node {
+	scheme := theme.UseTheme()
+	failure, setFailure := kitex.UseState("")
+	return kitex.Fragment(
+		kitex.If(failure() != "", func() trail.Node {
+			return trail.Span(trail.SpanProps{Style: style.S().Foreground(scheme.Color.Text.Error)}, trail.Text(failure()))
+		}),
+		TrustPrompt(TrustPromptProps{
+			Status: toTrustStatus(status),
+			OnSelect: func(decision TrustDecision) {
+				switch decision {
+				case TrustDecisionFolder, TrustDecisionParent:
+					scope := api.TrustScope(decision)
+					if err := store.TrustWorkspace(context.Background(), store.Client(), scope, status); err != nil {
+						setFailure("Could not trust workspace: " + err.Error())
+					}
+				case TrustDecisionRestricted:
+					store.DismissWorkspaceTrust()
+				case TrustDecisionExit:
+					store.RequestExit()
+				}
+			},
+		}),
+	)
+})
+
 // TrustPrompt renders the interactive repository trust gate matching section 4.1.
 var TrustPrompt = trail.FC("TrustPrompt", func(props TrustPromptProps) trail.Node {
 	scheme := theme.UseTheme()
@@ -48,6 +77,12 @@ var TrustPrompt = trail.FC("TrustPrompt", func(props TrustPromptProps) trail.Nod
 				}, trail.Text(folderPath)),
 			),
 		),
+	}
+
+	if props.Status.FingerprintChanged {
+		headerNodes = append(headerNodes, trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(scheme.Color.Text.Warning),
+		}, trail.Text("Executable configuration changed since approval. Review it before trusting again.")))
 	}
 
 	execs := props.Status.Executables

@@ -18,10 +18,8 @@ Choose the narrowest scope that covers your work:
 | **Restricted mode** | This visit, without granting trust | Inspect an unfamiliar project or investigate a changed definition |
 | **Exit** | No session | Even inspection should wait |
 
-Check the saved `path` before relying on a parent grant. The current CLI labels
-this choice with the parent directory but submits the current working directory.
-Its descendants can therefore match while sibling checkouts do not. Prefer exact
-folder grants if you want predictable, independent onboarding for each checkout.
+The parent choice grants trust to sibling checkouts under the displayed directory.
+Prefer folder trust when you have only reviewed the current checkout.
 
 ## Complete first-run onboarding
 
@@ -62,6 +60,12 @@ configuration to the repository; keep credentials out of version control.
 | Change repository files | Subject to permission and sandbox policy | Non-read-only actions are denied, not merely prompted |
 | Write a session plan | Safe plan-directory mutations have a dedicated exception | Same exception for the session's own plans, not a repository `plans/` directory |
 | Run commands without the native wrapper | Only if host execution is enabled and permitted | Host exceptions are disabled, including trusted command exclusions |
+
+If you resume a restricted session, or a reload or daemon restart puts the workspace
+in restricted mode, the CLI offers the trust choices inline without restarting setup.
+Choose **Restricted mode** to keep inspecting without being prompted again during
+that restriction. The header and status line identify the read-only workspace;
+use `/setup` to review trust later. Trust is not a substitute for tool permissions.
 
 A restricted workspace starts with the default permission posture. Changing
 permission mode is not a way to enable repository writes. With the native

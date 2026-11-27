@@ -69,6 +69,22 @@ func TestDefaultStatusLine(t *testing.T) {
 	}
 }
 
+func TestRestrictedStatusLine(t *testing.T) {
+	initStatusLineTest(t)
+	store.SetWorkspaceRestricted(true)
+	for _, width := range []int{80, 18} {
+		out := testutils.Render(t, DefaultStatusLine(), width, 6)
+		row := testutils.TrimmedLines(out)[0]
+		if !strings.Contains(row, "⚠ restricted") || (width == 80 && !strings.Contains(row, "/setup")) {
+			t.Fatal(out)
+		}
+	}
+	store.SetWorkspaceRestricted(false)
+	if out := testutils.Render(t, DefaultStatusLine(), 80, 6); strings.Contains(out, "restricted") {
+		t.Fatal(out)
+	}
+}
+
 func TestStatusLineModelProvider(t *testing.T) {
 	for _, tc := range []struct {
 		name, provider, id, config, label, want string

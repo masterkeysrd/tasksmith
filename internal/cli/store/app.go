@@ -34,6 +34,7 @@ type AppState struct {
 	Hint          string
 	Version       string
 	Workspace     string
+	IsRestricted  bool
 	Branch        string
 	Warnings      *[]string
 	Agents        *[]api.Agent
@@ -86,6 +87,16 @@ func SetHeaderMeta(version, workspace string) {
 		s.Branch = branch
 		return s
 	})
+}
+
+func SetWorkspaceRestricted(restricted bool) bool {
+	var changed bool
+	app.Set(func(s AppState) AppState {
+		changed = s.IsRestricted != restricted
+		s.IsRestricted = restricted
+		return s
+	})
+	return changed
 }
 
 // SetCtrlCPending updates the Ctrl+C exit confirmation state.

@@ -83,12 +83,13 @@ func Run(ctx context.Context, opts Options) error {
 		store.StartOnboarding(opts.Workspace, *status, false)
 	} else {
 		store.InitSession(ctx, opts.Client, store.InitSessionOptions{
-			SessionID:   opts.SessionID,
-			Agent:       opts.Agent,
-			Model:       opts.Model,
-			Title:       opts.Title,
-			Sandbox:     opts.Sandbox,
-			StartDaemon: opts.StartDaemon,
+			WorkspaceStatus: status,
+			SessionID:       opts.SessionID,
+			Agent:           opts.Agent,
+			Model:           opts.Model,
+			Title:           opts.Title,
+			Sandbox:         opts.Sandbox,
+			StartDaemon:     opts.StartDaemon,
 		})
 	}
 

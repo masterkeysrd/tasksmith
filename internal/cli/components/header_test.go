@@ -100,6 +100,14 @@ func TestHeaderWorkspaceLine(t *testing.T) {
 	}
 }
 
+func TestHeaderRestricted(t *testing.T) {
+	data := store.HeaderData{Workspace: "repo", SandboxMode: api.SandboxNative, IsRestricted: true}
+	out := testutils.Render(t, Header(HeaderProps{HeaderData: data}), 80, 12)
+	if !strings.Contains(out, "native sandbox · restricted (read-only)") {
+		t.Fatal(out)
+	}
+}
+
 func TestHeaderResolvedProvider(t *testing.T) {
 	store.ResetSession()
 	t.Cleanup(store.ResetSession)

@@ -162,10 +162,8 @@ func (p *sandboxProc) prepareExecCmd(cmd Command) (*exec.Cmd, error) {
 	if p.s.isClosed() {
 		return nil, ErrSandboxClosed
 	}
-	if cmd.Unsandboxed {
-		if cmd.ReadOnly || p.s.readOnly.Load() {
-			return nil, fmt.Errorf("%w: unsandboxed execution of a read-only command is not allowed", ErrReadOnly)
-		}
+	if cmd.Unsandboxed && (cmd.ReadOnly || p.s.readOnly.Load()) {
+		return nil, fmt.Errorf("%w: unsandboxed execution is not allowed when the command or session is read-only", ErrReadOnly)
 	}
 
 	targetDir, err := p.resolveWorkDir(cmd.Dir)

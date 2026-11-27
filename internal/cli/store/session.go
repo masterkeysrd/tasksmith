@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -204,10 +205,11 @@ func cancelModeDebounceLocked() {
 
 // InitSessionOptions specifies options for initializing or connecting to a session.
 type InitSessionOptions struct {
-	SessionID string
-	Agent     string
-	Model     string
-	Title     string
+	WorkspaceStatus *api.WorkspaceStatus
+	SessionID       string
+	Agent           string
+	Model           string
+	Title           string
 
 	// Sandbox is the requested sandbox isolation backend ("native" or
 	// "local") for sessions this REPL creates; empty lets the daemon
@@ -287,6 +289,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	var ws *api.Workspace
 	if loaded, err := c.GetWorkspace(subCtx); err == nil {
 		ws = loaded
+		updateRestriction(subCtx, c, lc, ws.IsRestricted, sess != nil, opts.WorkspaceStatus)
 		SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
 		sessMu.Lock()
 		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
@@ -531,6 +534,9 @@ func startSessionsWatcher(lc *sessionLifecycle) {
 							sess := p.Session
 							SetSession(&sess)
 							showSessionDiagnostics(&sess, false)
+							if ws, err := c.GetWorkspace(ctx); err == nil {
+								updateRestriction(ctx, c, lc, ws.IsRestricted, true, nil)
+							}
 						} else if p.Session.ParentID != "" && p.Session.ParentID == curr.ID {
 							UpsertSubagent(p.Session)
 							refreshSubagentState()
@@ -1673,6 +1679,7 @@ func resyncDaemonState(ctx context.Context, c *client.Client, lc *sessionLifecyc
 		if ctx.Err() != nil || !isActiveLifecycle(lc) {
 			return
 		}
+		updateRestriction(ctx, c, lc, ws.IsRestricted, true, nil)
 		SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
 		sessMu.Lock()
 		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
@@ -2455,16 +2462,90 @@ func updateDraftModel(ctx context.Context, c *client.Client, cfg api.SessionConf
 	}
 }
 
+const workspaceTrustSlot = "workspace-trust"
+
+func updateRestriction(ctx context.Context, c *client.Client, lc *sessionLifecycle, restricted, prompt bool, status *api.WorkspaceStatus) {
+	if ctx.Err() != nil || !isActiveLifecycle(lc) {
+		return
+	}
+	if !restricted {
+		RemoveSlot(workspaceTrustSlot)
+	}
+	if !SetWorkspaceRestricted(restricted) || !restricted || !prompt || GetOnboarding().Active {
+		return
+	}
+	if status == nil {
+		var err error
+		status, err = c.GetWorkspaceStatus(ctx)
+		if err != nil {
+			AppendWarning("Could not load workspace trust details: " + err.Error())
+			return
+		}
+	}
+	if ctx.Err() == nil && isActiveLifecycle(lc) && GetApp().IsRestricted && !GetOnboarding().Active {
+		EnqueueSlot(SlotItem{ID: workspaceTrustSlot, Kind: SlotKindTrust, Data: *status})
+	}
+}
+
+func DismissWorkspaceTrust() {
+	RemoveSlot(workspaceTrustSlot)
+}
+
+func TrustWorkspace(ctx context.Context, c *client.Client, scope api.TrustScope, reviewed api.WorkspaceStatus) error {
+	target := c
+	if scope == api.TrustScopeParent {
+		base := strings.TrimSpace(reviewed.Path)
+		if base == "" {
+			base = filepath.Clean(c.CWD())
+		}
+		target = c.WithCWD(filepath.Dir(base))
+	}
+	if err := target.TrustWorkspace(ctx, scope); err != nil {
+		return err
+	}
+	if scope == api.TrustScopeParent && reviewed.FingerprintChanged {
+		current, err := c.GetWorkspaceStatus(ctx)
+		if err != nil {
+			return err
+		}
+		if current.IsTrusted && current.FingerprintChanged && current.Path == reviewed.Path &&
+			reflect.DeepEqual(current.Executables, reviewed.Executables) {
+			if err := c.TrustWorkspace(ctx, api.TrustScopeFolder); err != nil {
+				return fmt.Errorf("parent trusted, but could not renew the reviewed folder grant: %w", err)
+			}
+		}
+	}
+	if err := refreshWorkspace(ctx, c); err != nil {
+		return err
+	}
+	if GetApp().IsRestricted {
+		return errors.New("workspace is still restricted; review the folder's executable configuration before trusting this folder")
+	}
+	return nil
+}
+
+func RevokeTrust(ctx context.Context) error {
+	c := Client()
+	if err := c.RevokeTrust(ctx); err != nil {
+		return err
+	}
+	return refreshWorkspace(ctx, c)
+}
+
 // ReloadWorkspace instructs the daemon to reload workspace resources from disk
 // and refreshes AppState with updated skills and commands.
 func ReloadWorkspace(ctx context.Context) error {
-	sessMu.Lock()
-	c := activeClient
-	lc := ensureLifecycleLocked()
-	sessMu.Unlock()
+	c := Client()
 	if err := c.ReloadWorkspace(ctx); err != nil {
 		return err
 	}
+	return refreshWorkspace(ctx, c)
+}
+
+func refreshWorkspace(ctx context.Context, c *client.Client) error {
+	sessMu.Lock()
+	lc := ensureLifecycleLocked()
+	sessMu.Unlock()
 	if sks, err := c.ListSkills(ctx); err == nil {
 		SetWorkspaceSkills(sks)
 	}
@@ -2477,13 +2558,16 @@ func ReloadWorkspace(ctx context.Context) error {
 	if cmds, err := c.ListCommands(ctx); err == nil {
 		SetWorkspaceCommands(cmds)
 	}
-	if ws, err := c.GetWorkspace(ctx); err == nil {
-		SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
-		sessMu.Lock()
-		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
-		sessMu.Unlock()
-		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
+	ws, err := c.GetWorkspace(ctx)
+	if err != nil {
+		return fmt.Errorf("refresh workspace: %w", err)
 	}
+	updateRestriction(ctx, c, lc, ws.IsRestricted, true, nil)
+	SetWorkspaceWarnings(ws.Warnings, ws.SandboxWarnings...)
+	sessMu.Lock()
+	workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
+	sessMu.Unlock()
+	SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
 	// A reload re-syncs MCP connections, so health captured before it is stale.
 	if servers, err := c.ListMCPs(ctx); err == nil {
 		SetWorkspaceMCPServers(servers)

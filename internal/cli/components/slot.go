@@ -21,6 +21,10 @@ var Slot = trail.SimpleFC("Slot", func() trail.Node {
 
 	var child trail.Node
 	switch active.Kind {
+	case store.SlotKindTrust:
+		if status, ok := active.Data.(api.WorkspaceStatus); ok {
+			child = inlineTrustPrompt(status)
+		}
 	case store.SlotKindPermission:
 		if p, ok := active.Data.(PermissionPromptProps); ok {
 			child = PermissionPrompt(p)

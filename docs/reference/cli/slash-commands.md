@@ -355,6 +355,8 @@ When TaskSmith is launched for the first time in an unconfigured directory, or w
 
 For the **Claude Code** and **GitHub Copilot** presets, install `claude` or `copilot` on the daemon host before setup and complete the vendor's sign-in in the browser there. See [Provider Sign-In](#provider-sign-in-login).
 
+A resumed session in a restricted workspace shows only the trust prompt. Choose **Restricted mode** to dismiss it and keep the read-only indicator, or run `/setup` later to reconsider.
+
 Both `/setup` and [Add Provider](#adding-a-provider) install all preset models and keep unclaimed aliases. An alias assigned to another model, including through an inherited provider or a `WORKSPACE.md` override, is omitted from the new manifest. The result names each skipped alias and its owner. Use `F2` to move a provider alias intentionally, or edit `spec.modelAliases` for a workspace override.
 
 [Keyboard shortcuts](./keybindings.md#onboarding--setup-wizard-setup).

@@ -172,7 +172,19 @@ func openTestSQLite(t *testing.T) *sql.DB {
 	return db
 }
 
-func newTestToolsRegistry(t *testing.T) (string, tools.Container, permissions.SessionManager) {
+func TestRestrictedWriteToolMessage(t *testing.T) {
+	_, registry, perm := newTestToolsRegistry(t, workspace.WithRestrictedMode(true))
+	node := ToolsNode{tools: registry, permissions: perm, logger: log.Default()}
+	call := &message.ToolCall{ID: "blocked", Name: "write", Args: map[string]any{"path": "blocked.txt", "content": "x"}}
+	msg, req, _, err := node.evaluateSingleCall(t.Context(), call, nil, "", nil)
+	if err != nil || req != nil || msg == nil || !msg.IsError ||
+		!strings.Contains(msg.Content.Text(), "restricted (read-only)") ||
+		!strings.Contains(msg.Content.Text(), "approve workspace trust") {
+		t.Fatalf("tool message = %+v, request = %+v, err = %v", msg, req, err)
+	}
+}
+
+func newTestToolsRegistry(t *testing.T, options ...workspace.Option) (string, tools.Container, permissions.SessionManager) {
 	t.Helper()
 	testutils.SetupXDG(t, "tasksmith-harness-test")
 
@@ -181,7 +193,8 @@ func newTestToolsRegistry(t *testing.T) (string, tools.Container, permissions.Se
 		dir = realDir
 	}
 
-	ws, err := workspace.Open(context.Background(), dir, workspace.WithBuiltinFS(builtin.FS()))
+	options = append(options, workspace.WithBuiltinFS(builtin.FS()))
+	ws, err := workspace.Open(context.Background(), dir, options...)
 	if err != nil {
 		t.Fatalf("workspace.Open: %v", err)
 	}

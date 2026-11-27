@@ -97,7 +97,8 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 	// unsandboxed path can never cross, so skip both bypass and exclusion.
 	if t.sandbox.ReadOnly() {
 		if in.BypassSandbox {
-			return nil, fmt.Errorf("%w: bypass_sandbox is not allowed while the session is read-only", std.ErrInvalidArgument)
+			return nil, fmt.Errorf("%w: bypass_sandbox is not allowed while the session is read-only; "+
+				"if the workspace is restricted, approve workspace trust before requesting writes", std.ErrInvalidArgument)
 		}
 		return plan, nil
 	}

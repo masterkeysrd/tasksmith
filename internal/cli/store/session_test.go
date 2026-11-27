@@ -17,6 +17,85 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 )
 
+func TestRestrictedSessionTrustTransitions(t *testing.T) {
+	ResetSession()
+	ResetApp()
+	CloseOnboarding()
+	ClearSlot()
+	t.Cleanup(ResetApp)
+	t.Cleanup(ClearSlot)
+	t.Cleanup(ResetSession)
+	var restricted atomic.Bool
+	restricted.Store(true)
+	var lastParentTrustPath atomic.Value
+	rt := &mockSessionRoundTripper{handler: func(req *http.Request) (*http.Response, error) {
+		body := `{}`
+		switch req.URL.Path {
+		case "/v1/workspace":
+			if restricted.Load() {
+				body = `{"is_restricted":true}`
+			}
+		case "/v1/workspace/status":
+			body = `{"path":"/canonical/parent/repo","is_trusted":true,"fingerprint_changed":true}`
+		case "/v1/sessions/resumed":
+			body = `{"id":"resumed"}`
+		case "/v1/workspace/trust":
+			if req.Method == http.MethodDelete {
+				restricted.Store(true)
+			} else {
+				var grant api.TrustFolderRequest
+				if err := json.NewDecoder(req.Body).Decode(&grant); err != nil {
+					return nil, err
+				}
+				if grant.Scope == api.TrustScopeParent {
+					lastParentTrustPath.Store(grant.Path)
+				}
+				restricted.Store(grant.Scope != api.TrustScopeFolder)
+			}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}}
+	c, err := client.New("daemon.sock", client.WithCWD(t.TempDir()+"/"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	InitSession(ctx, c, InitSessionOptions{SessionID: "resumed"})
+	check := func(restricted, prompt bool) {
+		t.Helper()
+		active := GetSlot().Active
+		if GetApp().IsRestricted != restricted || (active != nil && active.Kind == SlotKindTrust) != prompt {
+			t.Fatalf("restricted = %t, slot = %+v", GetApp().IsRestricted, active)
+		}
+	}
+	check(true, true)
+	DismissWorkspaceTrust()
+	resyncDaemonState(ctx, c, activeLifecycle)
+	check(true, false)
+	restricted.Store(false)
+	resyncDaemonState(ctx, c, activeLifecycle)
+	check(false, false)
+	restricted.Store(true)
+	resyncDaemonState(ctx, c, activeLifecycle)
+	check(true, true)
+	if err := TrustWorkspace(ctx, c, api.TrustScopeFolder, api.WorkspaceStatus{}); err != nil {
+		t.Fatal(err)
+	}
+	check(false, false)
+	if err := RevokeTrust(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check(true, true)
+	reviewed := GetSlot().Active.Data.(api.WorkspaceStatus)
+	if err := TrustWorkspace(ctx, c, api.TrustScopeParent, reviewed); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := lastParentTrustPath.Load().(string); got != "/canonical/parent" {
+		t.Fatalf("parent trust path = %q, want /canonical/parent", got)
+	}
+	check(false, false)
+}
+
 func TestDiagnosticNotices(t *testing.T) {
 	ResetSession()
 	ClearTranscript()

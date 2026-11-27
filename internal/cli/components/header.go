@@ -96,6 +96,12 @@ var Header = trail.FC("Header", func(props HeaderProps) trail.Node {
 		line3 = append(line3, trail.Span(trail.SpanProps{Style: sandboxStyle}, trail.Text(sandboxLabel)))
 	}
 
+	if props.IsRestricted {
+		line3 = append(line3, trail.Span(trail.SpanProps{
+			Style: style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Warning),
+		}, trail.Text(" · restricted (read-only)")))
+	}
+
 	mascot := mascotMark(mascotReady)
 	if props.AnimateMascot {
 		mascot = animatedMascot(mascotIdleWait)

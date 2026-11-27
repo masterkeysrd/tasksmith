@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,7 +56,7 @@ func TestRestrictedWorkspaceStartsDefaultAndAllowsSessionPlansDir(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Prepare repo write: %v", err)
 	}
-	if dec, _, err := sess.PermManager.Evaluate(repoPrep); err != nil || dec != tools.AccessDeny {
+	if dec, _, err := sess.PermManager.Evaluate(repoPrep); !errors.Is(err, tools.ErrPermissionDenied) || dec != tools.AccessDeny {
 		t.Fatalf("Evaluate repo write in restricted workspace = (%v, %v), want AccessDeny", dec, err)
 	}
 }

@@ -26,13 +26,14 @@ type ContextUsageData struct {
 
 // HeaderData holds the data for the startup banner.
 type HeaderData struct {
-	Version     string
-	Model       string
-	Thinking    string
-	Workspace   string
-	Branch      string
-	SandboxMode api.SandboxMode
-	Warnings    []string
+	Version      string
+	Model        string
+	Thinking     string
+	Workspace    string
+	Branch       string
+	SandboxMode  api.SandboxMode
+	IsRestricted bool
+	Warnings     []string
 }
 
 type NoticeSeverity string
@@ -84,13 +85,14 @@ func CurrentHeaderData() HeaderData {
 		copy(warnings, *appState.SandboxWarnings)
 	}
 	return HeaderData{
-		Version:     appState.Version,
-		Workspace:   appState.Workspace,
-		Branch:      appState.Branch,
-		Model:       sess.ModelLabels().Full,
-		Thinking:    sess.Thinking,
-		SandboxMode: sess.SandboxMode,
-		Warnings:    warnings,
+		Version:      appState.Version,
+		Workspace:    appState.Workspace,
+		IsRestricted: appState.IsRestricted,
+		Branch:       appState.Branch,
+		Model:        sess.ModelLabels().Full,
+		Thinking:     sess.Thinking,
+		SandboxMode:  sess.SandboxMode,
+		Warnings:     warnings,
 	}
 }
 
@@ -133,13 +135,14 @@ func UseHeaderData() HeaderData {
 	}
 
 	return HeaderData{
-		Version:     appMeta.version,
-		Workspace:   appMeta.workspace,
-		Branch:      appMeta.branch,
-		Model:       sessionInfo.model,
-		Thinking:    sessionInfo.thinking,
-		SandboxMode: sessionInfo.sandboxMode,
-		Warnings:    warnings,
+		Version:      appMeta.version,
+		Workspace:    appMeta.workspace,
+		IsRestricted: UseApp(func(s AppState) bool { return s.IsRestricted }),
+		Branch:       appMeta.branch,
+		Model:        sessionInfo.model,
+		Thinking:     sessionInfo.thinking,
+		SandboxMode:  sessionInfo.sandboxMode,
+		Warnings:     warnings,
 	}
 }
 

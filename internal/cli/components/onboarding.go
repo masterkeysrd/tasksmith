@@ -165,7 +165,7 @@ func renderTrustStep(props OnboardingWizardProps, state store.OnboardingState, s
 				if decision == TrustDecisionParent {
 					scope = api.TrustScopeParent
 				}
-				if err := props.Client.TrustWorkspace(ctx, scope); err != nil {
+				if err := store.TrustWorkspace(ctx, props.Client, scope, state.Status); err != nil {
 					setError("Could not trust workspace: " + err.Error())
 					return
 				}

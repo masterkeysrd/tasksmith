@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permreview"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -117,6 +118,9 @@ func (s *Session) requestHostApproval(ctx context.Context, host string, port int
 
 	access, req, err := perm.Evaluate(plan)
 	if err != nil {
+		if access == tools.AccessDeny && errors.Is(err, tools.ErrPermissionDenied) {
+			return false, fmt.Errorf("%w: %v", sandbox.ErrHostBlocked, err)
+		}
 		return false, fmt.Errorf("session: evaluate host approval for %s: %w", host, err)
 	}
 	switch access {

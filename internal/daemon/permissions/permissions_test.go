@@ -1487,8 +1487,9 @@ func TestPlansDirAutoAllowAndRestrictedWorkspace(t *testing.T) {
 	if dec, _, _ := restrictedSess.Evaluate(safeRead); dec != tools.AccessAllow {
 		t.Fatalf("restricted safe read: expected AccessAllow, got %s", dec)
 	}
-	if dec, _, _ := restrictedSess.Evaluate(repoWrite); dec != tools.AccessDeny {
-		t.Fatalf("restricted repo write: expected AccessDeny, got %s", dec)
+	if dec, _, err := restrictedSess.Evaluate(repoWrite); dec != tools.AccessDeny ||
+		!errors.Is(err, tools.ErrPermissionDenied) || !strings.Contains(err.Error(), "approve workspace trust") {
+		t.Fatalf("restricted repo write: got %s, %v", dec, err)
 	}
 	if dec, _, _ := restrictedSess.Evaluate(repoRemove); dec != tools.AccessDeny {
 		t.Fatalf("restricted repo remove: expected AccessDeny, got %s", dec)
