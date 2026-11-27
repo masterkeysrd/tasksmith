@@ -2,6 +2,12 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +16,19 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/version"
 )
+
+func TestRelativeWorkspace(t *testing.T) {
+	for _, path := range []string{".", "./child", "../repo"} {
+		want, err := filepath.Abs(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := (&rootOptions{workspace: " " + path + " "}).resolveWorkspace()
+		if err != nil || got != want {
+			t.Fatalf("resolveWorkspace(%q) = %q, %v; want %q", path, got, err, want)
+		}
+	}
+}
 
 func TestRootVersionFlag(t *testing.T) {
 	out, _, err := execCLI(t, "", "--version")
@@ -87,6 +106,99 @@ func TestDaemonVersionSkewed(t *testing.T) {
 
 	if daemonVersionSkewed(nil) {
 		t.Error("daemonVersionSkewed(nil) = true, want false")
+	}
+}
+
+func TestConnectOrStartSkew(t *testing.T) {
+	const helperEnv = "TASKSMITH_TEST_REPLACEMENT_SOCKET"
+	if socket := os.Getenv(helperEnv); socket != "" {
+		ln, err := net.Listen("unix", socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := &http.Server{}
+		srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == "/v1/shutdown" {
+				go func() { _ = srv.Shutdown(context.Background()) }()
+				return
+			}
+			_ = json.NewEncoder(w).Encode(api.HealthResponse{Version: version.Get(), PID: os.Getpid()})
+		})
+		timer := time.AfterFunc(10*time.Second, func() { _ = srv.Close() })
+		defer timer.Stop()
+		if err := srv.Serve(ln); err != http.ErrServerClosed {
+			t.Fatal(err)
+		}
+		return
+	}
+	for _, tc := range []struct {
+		name       string
+		workspaces []string
+		active     bool
+	}{
+		{name: "empty"}, {name: "idle", workspaces: []string{"/a", "/b"}}, {name: "active second workspace", workspaces: []string{"/a", "/b"}, active: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, err := os.MkdirTemp("", "ts-skew-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.RemoveAll(dir) }()
+			socket := filepath.Join(dir, "s")
+			t.Setenv(helperEnv, socket)
+			ln, err := net.Listen("unix", socket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := make(chan string, 4)
+			srv := &http.Server{}
+			srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				switch req.URL.Path {
+				case "/v1/health":
+					_ = json.NewEncoder(w).Encode(api.HealthResponse{Version: "old", Workspaces: tc.workspaces})
+				case "/v1/sessions":
+					ws := req.Header.Get(api.HeaderCWD)
+					seen <- ws
+					status := api.StatusIdle
+					if tc.active && ws == "/b" {
+						status = api.StatusExecuting
+					}
+					_ = json.NewEncoder(w).Encode([]api.Session{{Status: status}})
+				case "/v1/shutdown":
+					go func() { _ = srv.Shutdown(context.Background()) }()
+				default:
+					http.NotFound(w, req)
+				}
+			})
+			go func() { _ = srv.Serve(ln) }()
+			defer func() { _ = srv.Close() }()
+			ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+			defer cancel()
+			c, notices, err := ConnectOrStart(ctx, socket, "-test.run=^TestConnectOrStartSkew$")
+			if err != nil {
+				t.Fatal(err)
+			}
+			h, err := c.Health(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.active {
+				if err := c.Shutdown(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if (h.Version == "old") != tc.active || len(notices) != 1 || strings.Contains(notices[0], "restarting") == tc.active {
+				t.Fatalf("health=%+v notices=%v", h, notices)
+			}
+			close(seen)
+			var checked []string
+			for ws := range seen {
+				checked = append(checked, ws)
+			}
+			if !slices.Equal(checked, tc.workspaces) {
+				t.Fatalf("checked %v; want %v", checked, tc.workspaces)
+			}
+		})
 	}
 }
 

@@ -135,7 +135,7 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 		if sess.Model != nil && sess.Model.QuotaBilled {
 			quota = cli.ActiveQuota()
 			qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-			if fresh, err := c.GetModelQuota(qctx, sess.Model.ID); err == nil && fresh != nil {
+			if fresh, err := c.WithCWD(wsDir).GetModelQuota(qctx, sess.Model.ID); err == nil && fresh != nil {
 				quota = fresh
 			}
 			cancel()

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -78,6 +79,12 @@ func SpawnDetachedWithLog(socketPath, stderrPath string, spawnArgs ...string) (*
 
 	args := spawnArgs
 	if len(args) == 0 {
+		if !isTaskSmithCLIExecutable(exe) {
+			exe, err = exec.LookPath("tasksmith")
+			if err != nil {
+				return nil, fmt.Errorf("locate tasksmith daemon executable: %w", err)
+			}
+		}
 		args = []string{"daemon", "serve", "--socket", socketPath}
 	}
 
@@ -105,6 +112,13 @@ func SpawnDetachedWithLog(socketPath, stderrPath string, spawnArgs ...string) (*
 		close(done)
 	}()
 	return &SpawnedDaemon{PID: pid, Done: done}, nil
+}
+
+func isTaskSmithCLIExecutable(exe string) bool {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Path != "" {
+		return info.Path == "github.com/masterkeysrd/tasksmith/cmd/tasksmith"
+	}
+	return filepath.Base(exe) == "tasksmith"
 }
 
 // spawnLogMaxBytes bounds daemon-spawn.log; when a new spawn finds the file
@@ -257,8 +271,11 @@ func ConnectOrStart(ctx context.Context, socketPath string, spawnArgs ...string)
 		if !DaemonVersionSkewed(h) {
 			return c, notices, nil
 		}
-		sessions, err := c.ListSessions(ctx)
-		if err != nil || HasActiveSessions(sessions) {
+		for _, ws := range h.Workspaces {
+			sessions, err := c.WithCWD(ws).ListSessions(ctx)
+			if err == nil && !HasActiveSessions(sessions) {
+				continue
+			}
 			notices = append(notices, fmt.Sprintf(
 				"Daemon version %s differs from TaskSmith %s. Restart the daemon when it is safe to update it: run `tasksmith daemon stop` or press r in /daemon.",
 				daemonVersionLabel(h), version.Get()))
@@ -297,7 +314,7 @@ func DaemonVersionSkewed(h *api.HealthResponse) bool {
 // that a restart would interrupt.
 func HasActiveSessions(sessions []api.Session) bool {
 	for _, s := range sessions {
-		if s.Status != api.StatusIdle {
+		if s.Status != api.StatusIdle || len(s.Queue) != 0 || HasActiveSessions(s.Subagents) {
 			return true
 		}
 	}

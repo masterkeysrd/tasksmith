@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,7 +21,7 @@ type rootOptions struct {
 
 func (o *rootOptions) resolveWorkspace() (string, error) {
 	if ws := strings.TrimSpace(o.workspace); ws != "" {
-		return ws, nil
+		return filepath.Abs(ws)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
