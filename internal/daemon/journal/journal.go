@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/hash"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
@@ -270,6 +271,10 @@ func (j *sqliteJournal) RecordRead(ctx context.Context, path, hash string) error
 // RecordChange persists file change metadata in SQLite and content snapshots
 // in blobsDir, propagating scope metadata when source is agent.
 func (j *sqliteJournal) RecordChange(ctx context.Context, change *std.FileChange) error {
+	return j.recordChange(ctx, change, false)
+}
+
+func (j *sqliteJournal) recordChange(ctx context.Context, change *std.FileChange, reverted bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -351,6 +356,16 @@ VALUES (?, ?, ?, ?);
 `
 	if _, err := tx.ExecContext(ctx, insertFileQuery, j.sessionID, normPath, baselineHash, isBin); err != nil {
 		return fmt.Errorf("journal: insert journal_files for %q: %w", normPath, err)
+	}
+
+	if reverted {
+		if _, err := tx.ExecContext(ctx, "UPDATE journal_files SET agent_base = NULL WHERE session_id = ? AND path = ?", j.sessionID, normPath); err != nil {
+			return fmt.Errorf("journal: clear pending edits: %w", err)
+		}
+	} else if change.Source == api.SourceAgent {
+		if _, err := tx.ExecContext(ctx, "UPDATE journal_files SET agent_base = COALESCE(agent_base, ?) WHERE session_id = ? AND path = ?", change.BeforeHash, j.sessionID, normPath); err != nil {
+			return fmt.Errorf("journal: track pending edits: %w", err)
+		}
 	}
 
 	const insertEntryQuery = `
@@ -565,7 +580,7 @@ func (j *sqliteJournal) RecoverAt(ctx context.Context, fsys sandbox.FS, path, en
 		targetHash = beforeHash
 	}
 
-	return j.applyTargetHash(ctx, fsys, normPath, targetHash, isBinary)
+	return j.applyTargetHash(ctx, fsys, normPath, targetHash, isBinary, false)
 }
 
 // RevertToBaseline reverts agent changes to path back to its session baseline,
@@ -583,8 +598,17 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 	}
 
 	if force {
-		return j.applyTargetHash(ctx, fsys, normPath, baseline, isBinary)
+		return j.applyTargetHash(ctx, fsys, normPath, baseline, isBinary, true)
 	}
+
+	var pending sql.NullString
+	if err := j.db.QueryRowContext(ctx, "SELECT agent_base FROM journal_files WHERE session_id = ? AND path = ?", j.sessionID, normPath).Scan(&pending); err != nil {
+		return fmt.Errorf("journal: read pending baseline: %w", err)
+	}
+	if !pending.Valid {
+		return nil
+	}
+	baseline = pending.String
 
 	currentBytes, currentExists, err := readSandboxFile(ctx, fsys, normPath)
 	if err != nil {
@@ -596,32 +620,20 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 	}
 
 	// Determine the last state produced by the agent
-	lastAgentHash := baseline
-	rows, err := j.db.QueryContext(ctx, "SELECT after_hash FROM journal_entries WHERE session_id = ? AND path = ? AND source = ? ORDER BY id ASC", j.sessionID, normPath, string(api.SourceAgent))
-	if err != nil {
-		return fmt.Errorf("journal: query agent entries: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var ah string
-		if err := rows.Scan(&ah); err != nil {
-			return fmt.Errorf("journal: scan agent entry: %w", err)
-		}
-		lastAgentHash = ah
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("journal: iterate agent entries: %w", err)
+	var lastAgentHash string
+	const latestAgent = `SELECT after_hash FROM journal_entries WHERE session_id = ? AND path = ? AND source = ? ORDER BY id DESC LIMIT 1`
+	if err := j.db.QueryRowContext(ctx, latestAgent, j.sessionID, normPath, api.SourceAgent).Scan(&lastAgentHash); err != nil {
+		return fmt.Errorf("journal: query last agent entry: %w", err)
 	}
 
 	// Fast path: if on-disk matches last agent state, restore directly to baseline
 	if currentHash == lastAgentHash {
-		return j.applyTargetHash(ctx, fsys, normPath, baseline, isBinary)
+		return j.applyTargetHash(ctx, fsys, normPath, baseline, isBinary, true)
 	}
 
 	// External deletion cases
 	if !currentExists && baseline == "" {
-		return nil
+		return j.clearPending(ctx, normPath)
 	}
 	if !currentExists {
 		return ErrRevertConflict
@@ -646,7 +658,7 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 	}
 
 	if baseline == "" && len(mergedLines) == 0 {
-		return j.applyTargetHash(ctx, fsys, normPath, "", isBinary)
+		return j.applyTargetHash(ctx, fsys, normPath, "", isBinary, true)
 	}
 
 	mergedText := strings.Join(mergedLines, "\n")
@@ -661,7 +673,7 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 	}
 
 	add, del := diff.Stats(string(currentBytes), mergedText)
-	return j.RecordChange(ctx, &std.FileChange{
+	return j.recordChange(ctx, &std.FileChange{
 		FileChange: api.FileChange{
 			Path:       normPath,
 			Source:     api.SourceAgent,
@@ -676,7 +688,7 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 		BeforeContent: currentBytes,
 		AfterContent:  mergedBytes,
 		IsBinary:      isBinary,
-	})
+	}, true)
 }
 
 // RevertSession reverts all tracked files in the session back to baseline.
@@ -692,7 +704,12 @@ func (j *sqliteJournal) RevertSession(ctx context.Context, fsys sandbox.FS, forc
 	return nil
 }
 
-func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, normPath, targetHash string, isBinary bool) error {
+func (j *sqliteJournal) clearPending(ctx context.Context, path string) error {
+	_, err := j.db.ExecContext(ctx, "UPDATE journal_files SET agent_base = NULL WHERE session_id = ? AND path = ?", j.sessionID, path)
+	return err
+}
+
+func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, normPath, targetHash string, isBinary, reverted bool) error {
 	currentBytes, currentExists, err := readSandboxFile(ctx, fsys, normPath)
 	if err != nil {
 		return err
@@ -704,13 +721,16 @@ func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, no
 
 	if targetHash == "" {
 		if !currentExists {
+			if reverted {
+				return j.clearPending(ctx, normPath)
+			}
 			return nil
 		}
 		if err := fsys.Remove(ctx, normPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("journal: remove file %q during revert: %w", normPath, err)
 		}
 		_, del := diff.Stats(string(currentBytes), "")
-		return j.RecordChange(ctx, &std.FileChange{
+		return j.recordChange(ctx, &std.FileChange{
 			FileChange: api.FileChange{
 				Path:       normPath,
 				Source:     api.SourceAgent,
@@ -723,7 +743,7 @@ func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, no
 			},
 			BeforeContent: currentBytes,
 			IsBinary:      isBinary,
-		})
+		}, reverted)
 	}
 
 	targetBytes, err := j.readBlob(targetHash)
@@ -732,6 +752,9 @@ func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, no
 	}
 
 	if currentExists && currentHash == targetHash {
+		if reverted {
+			return j.clearPending(ctx, normPath)
+		}
 		return nil
 	}
 
@@ -745,7 +768,7 @@ func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, no
 	}
 	add, del := diff.Stats(string(currentBytes), string(targetBytes))
 
-	return j.RecordChange(ctx, &std.FileChange{
+	return j.recordChange(ctx, &std.FileChange{
 		FileChange: api.FileChange{
 			Path:       normPath,
 			Source:     api.SourceAgent,
@@ -760,22 +783,25 @@ func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, no
 		BeforeContent: currentBytes,
 		AfterContent:  targetBytes,
 		IsBinary:      isBinary,
-	})
+	}, reverted)
 }
 
-func (j *sqliteJournal) readBlob(hash string) ([]byte, error) {
-	hash = strings.TrimSpace(hash)
-	if hash == "" {
+func (j *sqliteJournal) readBlob(digest string) ([]byte, error) {
+	digest = strings.TrimSpace(digest)
+	if digest == "" {
 		return nil, nil
 	}
 
-	blobPath := filepath.Join(j.blobsDir, filepath.Base(hash))
+	blobPath := filepath.Join(j.blobsDir, filepath.Base(digest))
 	data, err := os.ReadFile(blobPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%w: %s", ErrBlobNotFound, hash)
+			return nil, fmt.Errorf("%w: %s", ErrBlobNotFound, digest)
 		}
-		return nil, fmt.Errorf("journal: read blob %q: %w", hash, err)
+		return nil, fmt.Errorf("journal: read blob %q: %w", digest, err)
+	}
+	if got := hash.SHA256Hex(data); got != digest {
+		return nil, fmt.Errorf("journal: corrupt blob %q: SHA-256 mismatch (got %s)", digest, got)
 	}
 	return data, nil
 }
@@ -792,7 +818,7 @@ func (j *sqliteJournal) writeBlob(hash string, content []byte) error {
 	if err := os.MkdirAll(j.blobsDir, 0o700); err != nil {
 		return fmt.Errorf("journal: create blobs directory %q: %w", j.blobsDir, err)
 	}
-	if err := os.WriteFile(blobPath, content, 0o600); err != nil {
+	if err := fsutils.WriteFileAtomic(blobPath, content, 0o600); err != nil {
 		return fmt.Errorf("journal: write blob %q: %w", hash, err)
 	}
 	return nil

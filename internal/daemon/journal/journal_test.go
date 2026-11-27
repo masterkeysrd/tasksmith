@@ -350,6 +350,31 @@ func TestJournalRevertToBaselineThreeWayMerge(t *testing.T) {
 		t.Errorf("merged = %q, want %q", string(merged), wantMerged)
 	}
 
+	j, err = journal.New(ctx, db, "session-revert", blobsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, edit := range []bool{false, true} {
+		if edit {
+			next := []byte("agent\n" + wantMerged)
+			if err := fsys.WriteFile(ctx, "file.txt", next, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := j.RecordChange(ctx, &std.FileChange{
+				FileChange:    api.FileChange{Path: "file.txt", Source: api.SourceAgent, Kind: api.KindModified},
+				BeforeContent: merged, AfterContent: next,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := j.RevertToBaseline(ctx, fsys, "file.txt", false); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := fsys.ReadFile(ctx, "file.txt"); err != nil || string(got) != wantMerged {
+			t.Fatalf("revert after edit=%t: %q, %v", edit, got, err)
+		}
+	}
+
 	// External overlapping edit: modifying line1 externally
 	overlappingExternal := "line1_conflict\nline2\nline3\nline4\nline5_external\n"
 	if err := fsys.WriteFile(ctx, "file.txt", []byte(overlappingExternal), 0o644); err != nil {
@@ -391,6 +416,31 @@ func TestJournalRevertToBaselineThreeWayMerge(t *testing.T) {
 	// RevertSession on all tracked files
 	if err := j.RevertSession(ctx, fsys, true); err != nil {
 		t.Fatalf("RevertSession: %v", err)
+	}
+}
+
+func TestRevertRejectsCorruptBlob(t *testing.T) {
+	ctx := t.Context()
+	db, dir, fsys := setupTestJournal(t)
+	j, err := journal.New(ctx, db, "corrupt", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := &std.FileChange{FileChange: api.FileChange{Path: "doc", Source: api.SourceAgent, Kind: api.KindModified}, BeforeContent: []byte("before"), AfterContent: []byte("after")}
+	if err := j.RecordChange(ctx, change); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsys.WriteFile(ctx, "doc", change.AfterContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, change.BeforeHash), []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.RevertToBaseline(ctx, fsys, "doc", false); err == nil || !strings.Contains(err.Error(), "corrupt blob") {
+		t.Fatalf("revert returned %v", err)
+	}
+	if data, err := fsys.ReadFile(ctx, "doc"); err != nil || string(data) != "after" {
+		t.Fatalf("unexpected workspace contents: %q, %v", data, err)
 	}
 }
 

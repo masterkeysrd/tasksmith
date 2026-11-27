@@ -32,4 +32,14 @@ CREATE INDEX IF NOT EXISTS idx_journal_entries_session
 CREATE INDEX IF NOT EXISTS idx_journal_entries_session_path
     ON journal_entries(session_id, path, id ASC);
 `,
+	`ALTER TABLE journal_files ADD COLUMN agent_base TEXT;
+UPDATE journal_files AS f SET agent_base = (
+    SELECT e.before_hash FROM journal_entries e
+    WHERE e.session_id = f.session_id AND e.path = f.path AND e.source = 'agent'
+      AND e.id > COALESCE((SELECT MAX(r.id) FROM journal_entries r
+          WHERE r.session_id = f.session_id AND r.path = f.path
+            AND r.source = 'agent' AND r.tool = 'revert'), '')
+    ORDER BY e.id LIMIT 1
+);
+`,
 }
