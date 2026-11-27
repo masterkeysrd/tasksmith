@@ -2,6 +2,8 @@
 
 These endpoints serve CLI views over the daemon’s Unix socket. Workspace-scoped requests identify the workspace with `X-TaskSmith-CWD`.
 
+SSE event types are extensible. TUI, exec, and ACP advance their replay cursor past unrecognized events without applying a state change. Exec also preserves unknown session-stream payloads in JSONL output.
+
 ## Usage HTTP Endpoints
 
 All usage endpoints are read-only.

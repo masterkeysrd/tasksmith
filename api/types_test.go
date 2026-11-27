@@ -955,10 +955,15 @@ func TestEventNullAndUnknownPayload(t *testing.T) {
 	// Unknown event type
 	rawUnknown := `{"type":"future_type","topic":"future","payload":{"foo":"bar"}}`
 	var evUnknown Event
-	if err := json.Unmarshal([]byte(rawUnknown), &evUnknown); err == nil {
-		t.Fatalf("expected error for unknown event type, got nil")
-	} else if !strings.Contains(err.Error(), `unknown event type "future_type"`) {
-		t.Fatalf("expected unknown event type error, got %v", err)
+	if err := json.Unmarshal([]byte(rawUnknown), &evUnknown); err != nil {
+		t.Fatal(err)
+	}
+	p, ok := evUnknown.Payload.(UnknownEvent)
+	if !ok || p.EventType() != "future_type" || string(p.Raw) != `{"foo":"bar"}` {
+		t.Fatalf("unknown payload: %#v", evUnknown.Payload)
+	}
+	if got, err := json.Marshal(evUnknown); err != nil || string(got) != rawUnknown {
+		t.Fatalf("round trip: %s, %v", got, err)
 	}
 }
 

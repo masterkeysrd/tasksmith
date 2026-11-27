@@ -73,16 +73,25 @@ func (w *eventWatcher) tryDeliver(res eventResult) bool {
 	}
 }
 
+type connectResult struct {
+	subID string
+	err   error
+}
+
+var errOverlappingReplay = errors.New("replay requires a separate subscriber")
+
+const subscriptionTimeout = 5 * time.Second
+
 type eventMux struct {
-	mu           sync.Mutex
-	running      bool
-	gen          uint64
-	subID        string
-	streamCancel context.CancelFunc
-	topicRefs    map[string]int
-	watchers     []*eventWatcher
-	connectWait  chan struct{}
-	connectErr   error
+	mu            sync.Mutex
+	running       bool
+	gen           uint64
+	subID         string
+	streamCancel  context.CancelFunc
+	topicRefs     map[string]int
+	watchers      []*eventWatcher
+	connectWait   chan struct{}
+	connectResult *connectResult
 }
 
 func newEventMux() *eventMux {
@@ -112,13 +121,18 @@ func (c *Client) Watch(ctx context.Context, since string, topics ...string) iter
 			ctx:    ctx,
 		}
 
-		subID, err := c.mux.attach(ctx, c, watcher, since, cleanTopics)
+		mux := c.mux
+		_, err := mux.attach(ctx, c, watcher, since, cleanTopics)
+		if errors.Is(err, errOverlappingReplay) {
+			mux = newEventMux()
+			_, err = mux.attach(ctx, c, watcher, since, cleanTopics)
+		}
 		if err != nil {
 			yield(api.Event{}, err)
 			return
 		}
 
-		defer c.mux.detach(c, watcher, subID)
+		defer mux.detach(c, watcher)
 
 		for {
 			select {
@@ -152,7 +166,8 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 			m.gen++
 			gen := m.gen
 			m.connectWait = make(chan struct{})
-			m.connectErr = nil
+			result := &connectResult{}
+			m.connectResult = result
 			m.subID = ""
 			m.topicRefs = make(map[string]int)
 			for _, t := range topics {
@@ -170,30 +185,13 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 
 			select {
 			case <-ctx.Done():
-				m.mu.Lock()
-				watcher.reaped = true
-				m.removeWatcherLocked(watcher)
-				if len(m.watchers) == 0 {
-					m.closeStreamLocked()
-				}
-				m.mu.Unlock()
+				m.detach(c, watcher)
 				return "", ctx.Err()
 			case <-connectWait:
-				m.mu.Lock()
-				if m.connectErr != nil {
-					err := m.connectErr
-					watcher.reaped = true
-					m.removeWatcherLocked(watcher)
-					if len(m.watchers) == 0 {
-						m.closeStreamLocked()
-					}
-					m.mu.Unlock()
-					return "", err
+				if result.err != nil {
+					m.detach(c, watcher)
 				}
-				subID := m.subID
-				m.mu.Unlock()
-
-				return subID, nil
+				return result.subID, result.err
 			}
 		}
 
@@ -206,15 +204,15 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 				return "", ctx.Err()
 			case <-connectWait:
 				m.mu.Lock()
-				if m.connectErr != nil {
-					m.mu.Unlock()
-					return "", m.connectErr
-				}
 				continue
 			}
 		}
 
 		subID := m.subID
+		if since != "" && slices.ContainsFunc(topics, func(t string) bool { return m.topicRefs[t] > 0 }) {
+			m.mu.Unlock()
+			return "", errOverlappingReplay
+		}
 		var needed []string
 		for _, t := range topics {
 			m.topicRefs[t]++
@@ -223,11 +221,12 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 			}
 		}
 		m.watchers = append(m.watchers, watcher)
-		m.mu.Unlock()
 
 		if len(needed) > 0 {
-			if _, err := c.Subscribe(ctx, subID, since, needed...); err != nil {
-				m.mu.Lock()
+			mutationCtx, cancel := context.WithTimeout(ctx, subscriptionTimeout)
+			_, err := c.Subscribe(mutationCtx, subID, since, needed...)
+			cancel()
+			if err != nil {
 				watcher.reaped = true
 				m.removeWatcherLocked(watcher)
 				for _, t := range topics {
@@ -248,6 +247,7 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 			}
 		}
 
+		m.mu.Unlock()
 		return subID, nil
 	}
 }
@@ -262,7 +262,8 @@ func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, since s
 		}
 		if !notifiedConnect {
 			notifiedConnect = true
-			m.connectErr = err
+			m.connectResult.err = err
+			m.connectResult.subID = m.subID
 			m.connectWait = nil
 			close(connectWait)
 		}
@@ -332,9 +333,12 @@ func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, since s
 					}
 				}
 			}
-			subID := m.subID
 			if len(m.watchers) == 0 {
-				m.closeStreamLocked()
+				if m.gen == gen {
+					m.closeStreamLocked()
+				}
+			} else if m.gen == gen {
+				m.unsubscribeLocked(c, toUnsub)
 			}
 			m.mu.Unlock()
 			for _, w := range reaped {
@@ -347,11 +351,6 @@ func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, since s
 					w.closeErr = fmt.Errorf("%w: consumer stalled", ErrNeedSync)
 				}
 				close(w.ch)
-			}
-			if len(toUnsub) > 0 && subID != "" {
-				go func() {
-					_, _ = c.Unsubscribe(context.Background(), subID, toUnsub...)
-				}()
 			}
 		}
 	}
@@ -400,7 +399,7 @@ func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, since s
 	}
 }
 
-func (m *eventMux) detach(c *Client, watcher *eventWatcher, subID string) {
+func (m *eventMux) detach(c *Client, watcher *eventWatcher) {
 	m.mu.Lock()
 	if watcher.reaped {
 		m.mu.Unlock()
@@ -423,12 +422,18 @@ func (m *eventMux) detach(c *Client, watcher *eventWatcher, subID string) {
 		m.mu.Unlock()
 		return
 	}
+	m.unsubscribeLocked(c, toUnsub)
 	m.mu.Unlock()
+}
 
-	if len(toUnsub) > 0 && subID != "" {
-		go func() {
-			_, _ = c.Unsubscribe(context.Background(), subID, toUnsub...)
-		}()
+func (m *eventMux) unsubscribeLocked(c *Client, topics []string) {
+	if len(topics) == 0 || m.subID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), subscriptionTimeout)
+	defer cancel()
+	if _, err := c.Unsubscribe(ctx, m.subID, topics...); err != nil {
+		m.streamCancel()
 	}
 }
 
@@ -446,6 +451,9 @@ func (m *eventMux) closeStreamLocked() {
 	m.gen++
 	m.running = false
 	m.subID = ""
-	m.connectWait = nil
+	if m.connectWait != nil {
+		close(m.connectWait)
+		m.connectWait = nil
+	}
 	m.topicRefs = make(map[string]int)
 }

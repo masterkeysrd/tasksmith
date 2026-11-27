@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -674,6 +676,108 @@ func TestStreamSSEParsing(t *testing.T) {
 	if !ok || events[1].Type != api.EventCompleted || comp.SessionID != "s1" {
 		t.Errorf("unexpected events[1]: %+v", events[1])
 	}
+}
+
+type streamTransport func(*http.Request) (*http.Response, error)
+
+func (f streamTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestWatchConcurrentTransitions(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		gate := make(chan struct{})
+		live, feed := io.Pipe()
+		defer func() { _ = feed.Close() }()
+		connections, subscriptions := 0, 0
+		rt := streamTransport(func(req *http.Request) (*http.Response, error) {
+			resp := &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}
+			switch req.URL.Path {
+			case "/v1/events":
+				connections++
+				resp.Header.Set(api.HeaderSubscriberID, fmt.Sprint(connections))
+				switch connections {
+				case 1:
+					<-req.Context().Done()
+					return nil, req.Context().Err()
+				case 2:
+					resp.Body = live
+				default:
+					if req.URL.Query().Get("since") != "earlier" {
+						t.Errorf("unexpected replay query: %v", req.URL.Query())
+					}
+					resp.Body = io.NopCloser(strings.NewReader(`data: {"id":"past","topic":"shared","type":"future","payload":{"ok":true}}` + "\n\n"))
+				}
+			case "/v1/events/subscribe":
+				subscriptions++
+			case "/v1/events/unsubscribe":
+				<-gate
+			}
+			return resp, nil
+		})
+		c, err := New("dummy.sock", WithHTTPClient(&http.Client{Transport: rt}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		watch := func(wctx context.Context, since, topic string) chan api.Event {
+			out := make(chan api.Event, 4)
+			go func() {
+				defer close(out)
+				for ev, err := range c.Watch(wctx, since, topic) {
+					if err != nil {
+						return
+					}
+					out <- ev
+				}
+			}()
+			return out
+		}
+		first, stopFirst := context.WithCancel(ctx)
+		watch(first, "", "shared")
+		synctest.Wait()
+		active := watch(ctx, "", "shared")
+		synctest.Wait()
+		stopFirst()
+		synctest.Wait()
+		if connections != 2 {
+			t.Fatalf("waiting watcher did not reconnect: %d streams", connections)
+		}
+		replay := watch(ctx, "earlier", "shared")
+		if ev := <-replay; ev.ID != "past" {
+			t.Fatal(ev)
+		}
+		_, err = fmt.Fprint(feed, `data: {"id":"next","topic":"shared","type":"completed"}`+"\n\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev := <-active; ev.ID != "next" {
+			t.Fatalf("duplicate replay: %+v", ev)
+		}
+		temporary, stop := context.WithCancel(ctx)
+		watch(temporary, "", "other")
+		synctest.Wait()
+		stop()
+		synctest.Wait()
+		replacement := watch(ctx, "", "other")
+		close(gate)
+		synctest.Wait()
+		if subscriptions != 2 {
+			t.Fatalf("subscription not restored: %d", subscriptions)
+		}
+		for _, id := range []string{"future", "known"} {
+			kind := id
+			if id == "known" {
+				kind = "completed"
+			}
+			_, err := fmt.Fprintf(feed, "data: {\"id\":%q,\"topic\":\"other\",\"type\":%q,\"payload\":{}}\n\n", id, kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ev := <-replacement; ev.ID != id {
+				t.Fatalf("lost cursor %q: %+v", id, ev)
+			}
+		}
+	})
 }
 
 func TestSharedSSEMultiplexer(t *testing.T) {

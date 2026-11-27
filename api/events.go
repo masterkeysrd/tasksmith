@@ -223,6 +223,15 @@ type ContextUpdatedEvent struct {
 
 func (ContextUpdatedEvent) EventType() string { return string(EventContextUpdated) }
 
+type UnknownEvent struct {
+	Type EventType
+	Raw  json.RawMessage
+}
+
+func (p UnknownEvent) EventType() string { return string(p.Type) }
+
+func (p UnknownEvent) MarshalJSON() ([]byte, error) { return p.Raw.MarshalJSON() }
+
 // Event is the real-time notification payload streamed over SSE.
 type Event struct {
 	ID      string       `json:"id,omitempty"`
@@ -251,7 +260,7 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	e.Payload = nil
 
 	raw := bytes.TrimSpace(w.Payload)
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+	if len(raw) == 0 {
 		return nil
 	}
 
@@ -377,7 +386,11 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		}
 		e.Payload = p
 	default:
-		return fmt.Errorf("api: unknown event type %q", w.Type)
+		e.Payload = UnknownEvent{Type: w.Type, Raw: raw}
+		return nil
+	}
+	if bytes.Equal(raw, []byte("null")) {
+		e.Payload = nil
 	}
 
 	return nil
